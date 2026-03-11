@@ -37,7 +37,7 @@ PodGist/
 ### 1. 克隆项目与安装基础依赖
 
 ```bash
-git clone [https://github.com/你的用户名/PodGist.git](https://github.com/你的用户名/PodGist.git)
+git clone https://github.com/TobyKSKGD/PodGist.git
 cd PodGist
 pip install -r requirements.txt
 ```
