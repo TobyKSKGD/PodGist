@@ -32,25 +32,47 @@ PodGist/
 └── requirements.txt      # 跨平台核心依赖清单
 ```
 
-## 🚀 快速开始
+## 🚀 快速开始 (Quick Start)
 
-### 1. 克隆项目与安装基础依赖
+### 1. 克隆项目与建立虚拟环境 (极度重要)
+为了防止依赖冲突，请务必使用虚拟环境（沙盒）来运行本项目。
 
 ```bash
+# 1. 克隆代码到本地
 git clone https://github.com/TobyKSKGD/PodGist.git
 cd PodGist
+
+# 2. 创建名为 env 的虚拟环境
+python -m venv env
+
+# 3. 激活虚拟环境 (请根据你的操作系统选择命令)
+# [Mac/Linux 用户]:
+source env/bin/activate
+# [Windows 用户]:
+env\Scripts\activate
+```
+
+### 2. 安装基础依赖
+
+在激活的虚拟环境中，安装跨平台的通用核心库：
+
+```bash
 pip install -r requirements.txt
 ```
 
-### 2. 配置硬件加速环境 (极度重要)
+### 3. 配置硬件加速环境 (极度重要)
 
 为了获得飞一般的转录速度，请务必安装对应你电脑硬件的 PyTorch 版本：
 
 - **Mac (Apple Silicon)**: 通常普通的 `pip install torch` 即可原生支持 MPS。
 - **Windows (NVIDIA GPU)**: 请前往 [PyTorch 官网](https://pytorch.org/) 获取带 CUDA 支持的安装命令。
 - **全局环境要求**: 必须在电脑上安装 `FFmpeg`，否则 Whisper 无法解析音频流。
+  - Whisper 的底层音频解码依赖于系统级的 `FFmpeg` 工具。
+    - **Mac 用户**: `brew install ffmpeg`
+    - **Windows 用户**: 推荐使用包管理器安装，如 `winget install ffmpeg`，或者前往官网下载并手动配置系统环境变量。
 
-### 3. 运行项目
+
+### 4. 运行项目
 
 Bash
 
