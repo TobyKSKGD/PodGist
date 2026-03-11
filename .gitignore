@@ -1,0 +1,32 @@
+# ================= 1. 密钥与配置文件 =================
+# ⚠️ 绝对不能上传！包含 DeepSeek API Key
+.env
+.streamlit/secrets.toml
+
+# ================= 2. 用户产生的多媒体与归档数据 =================
+# 音频原文件和临时垃圾文件
+temp_audio/
+*.mp3
+*.m4a
+*.wav
+
+# 用户的私人归档记录
+archives/
+
+# ================= 3. Python 运行缓存与虚拟环境 =================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+env.bak/
+venv.bak/
+
+# ================= 4. 操作系统产生的垃圾文件 =================
+# Mac 专属垃圾文件
+.DS_Store
+# Windows 专属垃圾文件
+Thumbs.db
