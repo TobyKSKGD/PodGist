@@ -7,7 +7,7 @@ import re
 from backend.transcriber import get_available_devices, get_whisper_model, transcribe_audio_to_timestamped_text
 from backend.llm_agent import get_podcast_summary, search_in_podcast
 
-# ================= 1. 页面基础配置 =================
+# ================= 1. 页面配置 =================
 st.set_page_config(page_title="PodGist | 播客提炼器", page_icon="🎙️", layout="wide")
 
 hide_st_style = """
@@ -22,7 +22,7 @@ hide_st_style = """
             """
 st.markdown(hide_st_style, unsafe_allow_html=True)
 
-# ================= 2. 本地持久化与归档逻辑 =================
+# ================= 2. 持久化存储 =================
 API_KEY_FILE = ".env"
 ARCHIVE_DIR = "archives"
 TEMP_DIR = "temp_audio"
@@ -30,34 +30,71 @@ os.makedirs(ARCHIVE_DIR, exist_ok=True)
 os.makedirs(TEMP_DIR, exist_ok=True)
 
 def load_api_key():
+    """
+    从本地文件加载 API 密钥。
+
+    返回:
+        str: API 密钥字符串，若文件不存在则返回空字符串
+    """
     if os.path.exists(API_KEY_FILE):
         with open(API_KEY_FILE, "r", encoding="utf-8") as f: return f.read().strip()
     return ""
 
 def save_api_key(key):
+    """
+    将 API 密钥保存到本地文件。
+
+    参数:
+        key (str): API 密钥字符串
+    """
     with open(API_KEY_FILE, "w", encoding="utf-8") as f: f.write(key.strip())
 
 def sanitize_filename(name):
+    """
+    清理文件名，移除无效字符。
+
+    参数:
+        name (str): 原始文件名
+
+    返回:
+        str: 清理后的安全文件名
+    """
     return re.sub(r'[\\/*?:"<>|]', "", name).strip()
 
 def archive_task(podcast_text, summary):
+    """
+    将播客转录文本和摘要归档到本地目录。
+
+    参数:
+        podcast_text (str): 带时间戳的播客转录文本
+        summary (str): AI 生成的播客摘要
+
+    说明:
+        创建按时间戳命名的归档目录，保存原始文本和 Markdown 格式摘要。
+    """
     lines = summary.strip().split('\n')
     ai_title = sanitize_filename(lines[0])
     if not ai_title: ai_title = "未命名播客摘要"
-    
+
     timestamp = time.strftime("%Y%m%d_%H%M")
     folder_name = f"{timestamp}_{ai_title}"
     folder_path = os.path.join(ARCHIVE_DIR, folder_name)
-    
+
     os.makedirs(folder_path, exist_ok=True)
     clean_summary = "\n".join(lines[1:]).strip()
-    
+
     with open(os.path.join(folder_path, "raw.txt"), "w", encoding="utf-8") as f:
         f.write(podcast_text)
     with open(os.path.join(folder_path, "summary.md"), "w", encoding="utf-8") as f:
         f.write(f"# 🎙️ {ai_title}\n\n{clean_summary}")
 
 def cleanup_temp_files(keep_files=None):
+    """
+    清理临时音频文件目录，保留指定文件。
+
+    参数:
+        keep_files (list, optional): 需要保留的文件名列表，默认为空列表
+    """
     if keep_files is None:
         keep_files = []
     for filename in os.listdir(TEMP_DIR):
@@ -70,11 +107,11 @@ def cleanup_temp_files(keep_files=None):
         except Exception:
             pass 
 
-# ================= 3. 初始化全局状态 =================
+# ================= 3. 会话状态管理 =================
 if "podcast_text" not in st.session_state: st.session_state.podcast_text = ""
 if "summary" not in st.session_state: st.session_state.summary = ""
 
-# ================= 4. 侧边栏与历史记录 UI =================
+# ================= 4. 侧边栏界面 =================
 st.title("🎙️ PodGist 播客知识库")
 st.markdown("上传播客提取精华，或从左侧历史归档中唤醒记忆，支持 AI 精准定位。")
 st.divider()
@@ -95,6 +132,11 @@ with st.sidebar:
     archive_list = ["-- 新建提炼任务 --"] + sorted(os.listdir(ARCHIVE_DIR), reverse=True)
     
     def on_history_change():
+        """
+        历史归档选择变更回调函数。
+
+        根据用户选择的归档目录，加载对应的播客转录文本和摘要到会话状态。
+        """
         selected = st.session_state.history_selector
         if selected != "-- 新建提炼任务 --":
             folder_path = os.path.join(ARCHIVE_DIR, selected)
@@ -134,7 +176,7 @@ with st.sidebar:
     selected_device_name = st.selectbox("2. 算力硬件", device_options, index=best_device_index)
     selected_device_key = device_keys[device_options.index(selected_device_name)]
 
-# ================= 5. 核心交互区 =================
+# ================= 5. 文件处理逻辑 =================
 if selected_archive == "-- 新建提炼任务 --":
     uploaded_file = st.file_uploader("📂 请拖拽一个 .mp3 播客文件", type=['mp3'])
 
@@ -162,7 +204,18 @@ if selected_archive == "-- 新建提炼任务 --":
             else:
                 status_text.warning(f"🤖 正在准备 Whisper [{selected_model}] 模型...")
                 @st.cache_resource
-                def load_model_cached(model_name, device): return get_whisper_model(model_name, device)
+                def load_model_cached(model_name, device):
+                    """
+                    缓存 Whisper 模型加载结果，避免重复加载。
+
+                    参数:
+                        model_name (str): Whisper 模型规模
+                        device (str): 计算设备标识符
+
+                    返回:
+                        whisper.Whisper: 加载的 Whisper 模型实例
+                    """
+                    return get_whisper_model(model_name, device)
                 
                 try:
                     model = load_model_cached(selected_model, selected_device_key)
@@ -218,11 +271,11 @@ if selected_archive == "-- 新建提炼任务 --":
 else:
     st.info(f"📂 正在查看历史归档：**{selected_archive}**")
 
-# ================= 6. 展示结果与 RAG 模糊搜索 =================
+# ================= 6. 结果展示与搜索 =================
 if st.session_state.summary:
     st.divider()
     
-    # 🌟 魔法降临：用正则表达式，瞬间将 [MM:SS] 替换为带有绿色背景的精美前端组件
+    # 使用正则表达式将 [MM:SS] 格式时间戳替换为带样式的 HTML 元素
     styled_summary = re.sub(
         r'(\[\d{2}:\d{2}\])', 
         r'<span style="color: #2e7d32; background-color: #e8f5e9; font-weight: 700; padding: 2px 6px; border-radius: 5px; margin-right: 5px; box-shadow: 0px 1px 2px rgba(0,0,0,0.1);">\1</span>', 
@@ -233,7 +286,7 @@ if st.session_state.summary:
     
     st.download_button(
         label="⬇️ 下载当前 Markdown 报告",
-        data=st.session_state.summary,  # 注意：下载的文件依然是没有任何 HTML 污染的纯净 Markdown！
+        data=st.session_state.summary,  # 注：下载的文件为原始 Markdown 内容，不含 HTML 样式
         file_name="PodGist_Report.md",
         mime="text/markdown",
         use_container_width=True

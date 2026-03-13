@@ -1,7 +1,16 @@
 from openai import OpenAI
 
 def get_podcast_summary(api_key, podcast_text):
-    """请求大模型生成极其细致的播客大纲和时间轴"""
+    """
+    使用大语言模型生成播客结构化摘要和时间轴。
+
+    参数:
+        api_key (str): 大语言模型 API 密钥
+        podcast_text (str): 带时间戳的播客转录文本
+
+    返回:
+        str: 结构化的 Markdown 格式摘要，包含短标题、关键词、节目概述和详细时间轴
+    """
     client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
     prompt_text = f"""
     请阅读以下【带有时间戳】的播客逐字稿，严格按照以下Markdown格式输出你的分析。
@@ -36,6 +45,17 @@ def get_podcast_summary(api_key, podcast_text):
     return response.choices[0].message.content
 
 def search_in_podcast(api_key, search_query, podcast_text):
+    """
+    在播客转录文本中搜索相关内容，返回匹配的时间段和描述。
+
+    参数:
+        api_key (str): 大语言模型 API 密钥
+        search_query (str): 用户搜索查询
+        podcast_text (str): 带时间戳的播客转录文本
+
+    返回:
+        str: 搜索结果描述，包含匹配的时间段和内容简述
+    """
     client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
     search_prompt = f"""
     用户想在这期播客中寻找关于“{search_query}”的内容。
