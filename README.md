@@ -65,7 +65,7 @@ PodGist/
 └── requirements.txt            # Python 依赖清单
 ```
 
-## 快速开始
+## 🚀 快速开始
 
 ### 前置要求
 
