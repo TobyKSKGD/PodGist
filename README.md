@@ -1,87 +1,171 @@
-# 🎙️ PodGist | 本地算力驱动的 AI 播客知识库
+# 🎙️ PodGist
 
-PodGist 是一个现代化的个人播客与音视频提炼工具。它利用本地底层算力（支持 Apple Silicon 与 NVIDIA GPU）进行高效的语音转录，并结合大语言模型（如 DeepSeek）生成带有精确时间戳的结构化总结，最终构建出一个支持 RAG 模糊搜索的个人数字归档知识库。
+> 本地算力驱动的 AI 播客知识库 | 让音频内容可搜索、可定位、可复用
 
-## ✨ 核心特性与已实现功能
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
-- **🚀 跨平台硬件加速转录**：底层集成 Whisper 模型，自动嗅探并调用本机最强算力（Apple M 系芯片 MPS 加速 / Windows N卡 CUDA 加速 / CPU 保底）。
-- **⏱️ 精确到秒的高光时间轴**：不仅提取纯文本，还能自动生成 `[MM:SS]` 格式的严谨时间轴，打破 AI 总结音视频的“黑盒”。
-- **🧠 智能结构化提炼**：利用 DeepSeek 大模型，一键生成核心关键词、全局概述，并自动提取 15 字以内的神仙标题。
-- **🔍 档案级 RAG 模糊搜索**：基于生成的精确时间戳文本，允许用户像聊天一样，直接向某期历史播客提问并精准定位播放节点。
-- **🗂️ 全自动生命周期管理**：
-  - **战前防残留**：自动清理因异常中断导致的僵尸文件。
-  - **战后倒垃圾**：提炼完成后，自动销毁体积庞大的音频文件，释放磁盘空间。
-  - **智能归档库**：按时间戳与 AI 标题自动生成精美 Markdown 归档，支持在前端随时查阅和一键删除。
-- **🔐 密钥本地持久化**：API Key 本地隐藏保存，无需反复输入，告别繁琐。
+## 简介
 
-## 📂 项目结构说明
+**PodGist** 是一个基于本地算力与 AI 技术的播客内容结构化工具。它通过语音转录和大语言模型分析，将纯音频播客转化为带精确时间轴的结构化摘要，解决音频内容难以快速定位、检索和预览的核心痛点，构建个人播客知识库。
 
-```text
+## 核心功能
+
+- **硬件加速转录**：基于 Whisper 模型，自动检测并利用本机最强算力（Apple Silicon MPS / NVIDIA CUDA / CPU）进行高效语音识别
+- **精确时间轴**：生成带 `[MM:SS]` 格式时间戳的逐字稿，实现音频内容到文本位置的精确映射
+- **结构化摘要生成**：通过大语言模型提取节目短标题、核心关键词、详细概述和密集高光时间轴
+- **语义搜索与定位**：基于 RAG 技术实现自然语言查询，直接向播客提问并精确定位相关时间段
+- **自动化归档**：处理完成后自动清理临时文件，将原始文本和结构化摘要以 Markdown 格式持久化保存
+
+## 技术架构
+
+### 1. 语音转录层
+
+采用 [OpenAI Whisper](https://github.com/openai/whisper) 模型进行高精度语音识别：
+
+```
+音频文件 → Whisper 模型 → 带时间戳的文本段落
+```
+
+- **硬件自适应** (`backend/transcriber.py`)：动态检测可用计算设备（MPS / CUDA / CPU），选择最优加速方案
+- **时间戳对齐**：解析 Whisper 输出的 `segments`，将每段文本与起始时间精确关联，格式化为 `[MM:SS]` 标记
+
+### 2. 内容理解层
+
+通过大语言模型对转录文本进行深度分析和结构化提炼：
+
+```
+带时间戳文本 → LLM API → 结构化 Markdown 摘要
+```
+
+- **摘要生成** (`backend/llm_agent.py`)：定制化 Prompt 引导模型输出短标题、关键词、节目概述和详细时间轴
+- **语义搜索**：将用户查询与原始文本一同送入 LLM，实现基于上下文的精确定位回答
+
+### 3. 交互展示层
+
+基于 [Streamlit](https://streamlit.io/) 构建的 Web 交互界面：
+
+- **文件上传与处理状态管理**
+- **实时进度展示与转录动画**
+- **时间轴高亮渲染**（通过正则替换将 `[MM:SS]` 格式化为视觉突出的前端组件）
+- **历史归档查看与删除**
+
+## 项目结构
+
+```
 PodGist/
-├── app.py                # [前端] Streamlit 交互界面、状态管理与归档文件生命周期控制
-├── backend/              # [后端] 核心能力解耦包
-│   ├── __init__.py
-│   ├── transcriber.py    # 负责硬件嗅探、Whisper 模型加载与时间戳文本提取
-│   ├── llm_agent.py      # 负责封装与 DeepSeek API 的交互、总结生成与 RAG 检索
-│   └── downloader.py     # (🚧 施工中) 负责从 B站/播客 URL 解析并提取 MP3 流
-├── archives/             # [数据] 自动生成的个人知识库归档（由程序自动管理）
-├── temp_audio/           # [缓冲] 处理过程中的音频暂存区（用完即焚）
-├── assets/               # [资源] 存放前端 UI 所需的静态文件 (如 dino.gif)
-├── .env                  # [私密] 本地保存 API Key 的配置文件 (已加入 gitignore)
-├── .gitignore            # Git 忽略配置
-└── requirements.txt      # 跨平台核心依赖清单
+├── app.py                      # Streamlit 前端主程序
+├── backend/
+│   ├── transcriber.py          # Whisper 转录与硬件检测
+│   ├── llm_agent.py            # LLM API 封装与 RAG 搜索
+│   └── downloader.py           # (规划中) 在线音频链接解析
+├── archives/                   # 生成的 Markdown 归档目录
+├── temp_audio/                 # 临时音频文件缓存
+├── assets/                     # 前端静态资源
+├── .env                        # API Key 本地存储文件
+└── requirements.txt            # Python 依赖清单
 ```
 
-## 🚀 快速开始 (Quick Start)
+## 快速开始
 
-### 1. 克隆项目与建立虚拟环境 (极度重要)
-为了防止依赖冲突，请务必使用虚拟环境（沙盒）来运行本项目。
+### 前置要求
 
-```bash
-# 1. 克隆代码到本地
-git clone https://github.com/TobyKSKGD/PodGist.git
-cd PodGist
+- **Python 3.10+**
+- **FFmpeg**（系统级依赖，Whisper 需要其进行音频解码）
+- 支持的计算硬件：
+  - Apple Silicon（MPS 加速）
+  - NVIDIA GPU（CUDA 加速）
+  - 或普通 CPU（速度较慢）
 
-# 2. 创建名为 env 的虚拟环境
-python -m venv env
+### 安装步骤
 
-# 3. 激活虚拟环境 (请根据你的操作系统选择命令)
-# [Mac/Linux 用户]:
-source env/bin/activate
-# [Windows 用户]:
-env\Scripts\activate
-```
+1. **克隆仓库**
+   ```bash
+   git clone https://github.com/TobyKSKGD/PodGist.git
+   cd PodGist
+   ```
 
-### 2. 安装基础依赖
+2. **创建并激活虚拟环境**
+   ```bash
+   python -m venv env
+   # macOS / Linux
+   source env/bin/activate
+   # Windows
+   # env\Scripts\activate
+   ```
 
-在激活的虚拟环境中，安装跨平台的通用核心库：
+3. **安装基础依赖**
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-```bash
-pip install -r requirements.txt
-```
+4. **安装 PyTorch（根据硬件平台选择）**
 
-### 3. 配置硬件加速环境 (极度重要)
+   **macOS (Apple Silicon) / Linux**:
+   
+   ```bash
+   pip install torch torchvision torchaudio
+   ```
+   
+   **Windows (NVIDIA GPU)**:
+   ```bash
+   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
+   ```
+   
+   > 若安装遇到问题，请参考 [PyTorch 官方安装指南](https://pytorch.org/get-started/locally/) 选择适合你硬件的命令。
+   
+5. **安装 FFmpeg**
 
-为了获得飞一般的转录速度，请务必安装对应你电脑硬件的 PyTorch 版本：
+   **macOS**:
+   ```bash
+   brew install ffmpeg
+   ```
 
-- **Mac (Apple Silicon)**: 通常普通的 `pip install torch` 即可原生支持 MPS。
-- **Windows (NVIDIA GPU)**: 请前往 [PyTorch 官网](https://pytorch.org/) 获取带 CUDA 支持的安装命令。
-- **全局环境要求**: 必须在电脑上安装 `FFmpeg`，否则 Whisper 无法解析音频流。
-  - Whisper 的底层音频解码依赖于系统级的 `FFmpeg` 工具。
-    - **Mac 用户**: `brew install ffmpeg`
-    - **Windows 用户**: 推荐使用包管理器安装，如 `winget install ffmpeg`，或者前往官网下载并手动配置系统环境变量。
+   **Windows**:
+   ```bash
+   winget install ffmpeg
+   ```
+   或从 [FFmpeg 官网](https://ffmpeg.org/download.html) 下载安装。
 
+   **Linux** (Ubuntu/Debian):
+   ```bash
+   sudo apt install ffmpeg
+   ```
 
-### 4. 运行项目
+6. **启动应用**
+   
+   ```bash
+   streamlit run app.py
+   ```
+   首次运行会自动下载 Whisper 模型（根据所选模型大小，约 70MB ~ 3GB）。
 
-Bash
+### 使用流程
 
-```
-streamlit run app.py
-```
+1. 启动应用 `streamlit run app.py`，自动开启浏览器 Web 版本。
+2. 在侧边栏输入你的大模型 API Key 并保存（当前默认使用 DeepSeek API）
+3. 上传 MP3 格式的播客文件
+4. 选择转录模型规模（如 small、medium）和计算设备
+5. 点击"开始提炼并打上时间戳"启动处理流程
+6. 等待转录和摘要生成完成
+7. 查看生成的节目摘要、核心关键词和详细时间轴
+8. 通过"AI 模糊定位器"输入自然语言问题，精确定位相关内容时间段
+9. 可下载完整 Markdown 报告或查看历史归档
 
-## 🛠️ 待开发功能列表 (To-Do List)
+## 未来规划
 
-- [ ] **在线视频/播客链接解析 (`downloader.py`)**：接入 `yt-dlp`，实现输入 B 站或播客 URL，自动在后台剥离音频并传入处理管线，彻底告别手动下载。
-- [ ] **进程级优雅中断**：重构转录逻辑，引入 `multiprocessing`，让前端的 Stop 按钮能够强杀底层的 C++ 算力线程，杜绝“隐形狂奔”。
-- [ ] **多文件批量处理排队机制**：允许一次性拖拽多期播客，后台自动排队榨干算力。
+- [ ] **多模型支持**：扩展支持更多大语言模型 API
+- [ ] **在线音频源解析**：集成 yt-dlp，支持直接输入播客平台或视频网站 URL 自动下载音频
+- [ ] **处理流程优化**：引入异步任务队列和进度中断功能，提升长时间处理的用户体验
+- [ ] **批量处理支持**：一次性上传多期节目，后台自动排队处理
+- [ ] **跨播客语义搜索**：在全部历史归档中实现全局语义搜索，查找相关话题在不同节目中的讨论
+- [ ] **导出格式扩展**：支持导出为 JSON、PDF、Notion 等多种格式
+
+## 依赖
+
+- [Streamlit](https://streamlit.io/) - 交互式 Web 应用框架
+- [OpenAI Whisper](https://github.com/openai/whisper) - 语音识别模型
+- [OpenAI Python SDK](https://github.com/openai/openai-python) - 大语言模型 API 调用
+- [PyTorch](https://pytorch.org/) - 深度学习框架与硬件加速支持
+
+## 许可证
+
+MIT License
