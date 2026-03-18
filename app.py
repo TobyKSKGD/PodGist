@@ -277,16 +277,16 @@ with st.sidebar:
             st.rerun()
 
     st.divider()
-    
+
     st.subheader("🛠️ 转录引擎设置")
     available_devices = get_available_devices()
-    device_options = list(available_devices.values()) 
-    device_keys = list(available_devices.keys())      
-    
+    device_options = list(available_devices.values())
+    device_keys = list(available_devices.keys())
+
     best_device_index = 0
     if "cuda" in device_keys: best_device_index = device_keys.index("cuda")
     elif "mps" in device_keys: best_device_index = device_keys.index("mps")
-    
+
     selected_model = st.selectbox("1. 模型规模", ["tiny", "base", "small", "medium", "large-v3"], index=2)
     selected_device_name = st.selectbox("2. 算力硬件", device_options, index=best_device_index)
     selected_device_key = device_keys[device_options.index(selected_device_name)]
