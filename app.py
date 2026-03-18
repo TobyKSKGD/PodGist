@@ -158,7 +158,7 @@ def get_archive_list():
         return []
 
 
-def process_audio_file(audio_file_path, raw_text_file, api_key, selected_model, selected_device_key, selected_device_name, progress_start=0, cleanup_after=False, original_name=""):
+def process_audio_file(audio_file_path, raw_text_file, api_key, selected_model, selected_device_key, selected_device_name, progress_start=0, cleanup_after=False, original_name="", use_sensevoice=False):
     """
     统一的音频文件处理函数。
 
@@ -172,6 +172,7 @@ def process_audio_file(audio_file_path, raw_text_file, api_key, selected_model, 
         progress_start: 进度条起始值
         cleanup_after: 处理完成后是否删除音频文件
         original_name: 原始文件名或视频标题
+        use_sensevoice: 是否使用 SenseVoice
     """
     status_text = st.empty()
     progress_bar = st.progress(progress_start)
@@ -183,18 +184,11 @@ def process_audio_file(audio_file_path, raw_text_file, api_key, selected_model, 
         with open(raw_text_file, "r", encoding="utf-8") as f:
             st.session_state.podcast_text = f.read()
     else:
-        status_text.warning(f"🤖 正在准备 Whisper [{selected_model}] 模型...")
-        @st.cache_resource
-        def load_model_cached(model_name, device):
-            """
-            缓存 Whisper 模型加载结果，避免重复加载。
-            """
-            return get_whisper_model(model_name, device)
+        if use_sensevoice:
+            # SenseVoice 转录模式
+            status_text.warning(f"⚡ 正在加载 SenseVoice 模型...")
 
-        try:
-            model = load_model_cached(selected_model, selected_device_key)
-            progress_bar.progress(20 + progress_start)
-            status_text.warning(f"👂 转录引擎轰鸣中！算力节点: 【{selected_device_name}】")
+            from backend.transcriber import get_sensevoice_model, transcribe_with_sensevoice
 
             loading_gif = st.empty()
             gif_path = os.path.join("assets", "dino.gif")
@@ -203,22 +197,61 @@ def process_audio_file(audio_file_path, raw_text_file, api_key, selected_model, 
                 loading_gif.markdown(
                     f"""<div style="display: flex; flex-direction: column; align-items: center; justify-content: center; margin: 20px 0;">
                         <img src="data:image/gif;base64,{gif_base64}" width="200" style="border-radius: 10px;">
-                        <p style="text-align: center; color: #888; font-size: 14px; margin-top: 10px;">底层狂奔转录中，请先喝杯水...</p>
+                        <p style="text-align: center; color: #888; font-size: 14px; margin-top: 10px;">SenseVoice 转录中，极速处理中...</p>
                     </div>""", unsafe_allow_html=True)
             else:
-                loading_gif.info("🦖 引擎轰鸣转录中...")
+                loading_gif.info("⚡ SenseVoice 转录中...")
 
-            st.session_state.podcast_text = transcribe_audio_to_timestamped_text(
-                model, audio_file_path, selected_device_key
-            )
-            loading_gif.empty()
+            try:
+                st.session_state.podcast_text = transcribe_with_sensevoice(
+                    audio_file_path, selected_device_key
+                )
+                loading_gif.empty()
 
-            with open(raw_text_file, "w", encoding="utf-8") as f:
-                f.write(st.session_state.podcast_text)
-            progress_bar.progress(50 + progress_start)
-        except Exception as e:
-            status_text.error(f"❌ 转录失败！报错: {e}")
-            st.stop()
+                with open(raw_text_file, "w", encoding="utf-8") as f:
+                    f.write(st.session_state.podcast_text)
+                progress_bar.progress(50 + progress_start)
+            except Exception as e:
+                status_text.error(f"❌ SenseVoice 转录失败！报错: {e}")
+                st.stop()
+        else:
+            # Whisper 转录模式
+            status_text.warning(f"🤖 正在准备 Whisper [{selected_model}] 模型...")
+            @st.cache_resource
+            def load_model_cached(model_name, device):
+                """
+                缓存 Whisper 模型加载结果，避免重复加载。
+                """
+                return get_whisper_model(model_name, device)
+
+            try:
+                model = load_model_cached(selected_model, selected_device_key)
+                progress_bar.progress(20 + progress_start)
+                status_text.warning(f"👂 转录引擎轰鸣中！算力节点: 【{selected_device_name}】")
+
+                loading_gif = st.empty()
+                gif_path = os.path.join("assets", "dino.gif")
+                if os.path.exists(gif_path):
+                    with open(gif_path, "rb") as f: gif_base64 = base64.b64encode(f.read()).decode("utf-8")
+                    loading_gif.markdown(
+                        f"""<div style="display: flex; flex-direction: column; align-items: center; justify-content: center; margin: 20px 0;">
+                            <img src="data:image/gif;base64,{gif_base64}" width="200" style="border-radius: 10px;">
+                            <p style="text-align: center; color: #888; font-size: 14px; margin-top: 10px;">底层狂奔转录中，请先喝杯水...</p>
+                        </div>""", unsafe_allow_html=True)
+                else:
+                    loading_gif.info("🦖 引擎轰鸣转录中...")
+
+                st.session_state.podcast_text = transcribe_audio_to_timestamped_text(
+                    model, audio_file_path, selected_device_key
+                )
+                loading_gif.empty()
+
+                with open(raw_text_file, "w", encoding="utf-8") as f:
+                    f.write(st.session_state.podcast_text)
+                progress_bar.progress(50 + progress_start)
+            except Exception as e:
+                status_text.error(f"❌ 转录失败！报错: {e}")
+                st.stop()
 
     status_text.info("🧠 正在呼叫 DeepSeek 提炼高光时间轴并智能命名...")
     progress_bar.progress(70)
@@ -312,6 +345,17 @@ with st.sidebar:
     st.divider()
 
     st.subheader("🛠️ 转录引擎设置")
+
+    # 选择转录引擎
+    transcription_engine = st.radio(
+        "选择转录引擎",
+        ["⚡ SenseVoice (极速模式)", "🐢 Whisper (高精度时间戳)"],
+        horizontal=True,
+        index=0
+    )
+
+    use_sensevoice = "SenseVoice" in transcription_engine
+
     available_devices = get_available_devices()
     device_options = list(available_devices.values())
     device_keys = list(available_devices.keys())
@@ -320,7 +364,13 @@ with st.sidebar:
     if "cuda" in device_keys: best_device_index = device_keys.index("cuda")
     elif "mps" in device_keys: best_device_index = device_keys.index("mps")
 
-    selected_model = st.selectbox("1. 模型规模", ["tiny", "base", "small", "medium", "large-v3"], index=2)
+    # Whisper 模式：显示模型规模选择；SenseVoice 模式：隐藏
+    if use_sensevoice:
+        st.caption("SenseVoice 使用 Small 版本，无需选择模型规模")
+        selected_model = "sensevoice-small"
+    else:
+        selected_model = st.selectbox("1. 模型规模", ["tiny", "base", "small", "medium", "large-v3"], index=2)
+
     selected_device_name = st.selectbox("2. 算力硬件", device_options, index=best_device_index)
     selected_device_key = device_keys[device_options.index(selected_device_name)]
 
@@ -354,7 +404,8 @@ if selected_archive == "-- 新建提炼任务 --":
                     selected_device_key=selected_device_key,
                     selected_device_name=selected_device_name,
                     progress_start=0,
-                    original_name=uploaded_file.name
+                    original_name=uploaded_file.name,
+                    use_sensevoice=use_sensevoice
                 )
         elif uploaded_file is None:
             st.info("请拖拽上传音频文件")
@@ -395,7 +446,8 @@ if selected_archive == "-- 新建提炼任务 --":
                                 selected_device_name=selected_device_name,
                                 progress_start=0,
                                 cleanup_after=True,
-                                original_name=video_title
+                                original_name=video_title,
+                                use_sensevoice=use_sensevoice
                             )
                         else:
                             st.error(f"❌ 下载失败: {download_result['error']}")

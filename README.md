@@ -10,10 +10,11 @@
 
 ## 核心功能
 
-- **硬件加速转录**：基于 Whisper 模型，自动检测并利用本机最强算力（Apple Silicon MPS / NVIDIA CUDA / CPU）进行高效语音识别
+- **双引擎转录**：支持 SenseVoice（极速）和 Whisper（高精度）两种转录引擎
+- **SenseVoice 极速模式**：基于阿里开源 FunAudioLLM/SenseVoiceSmall，极速转录（比 Whisper 快 10 倍以上），支持中文、英文、粤语等 50+ 语言
 - **精确时间轴**：生成带 `[MM:SS]` 格式时间戳的逐字稿，实现音频内容到文本位置的精确映射
 - **结构化摘要生成**：通过大语言模型提取节目短标题、核心关键词、详细概述和密集高光时间轴
-- **语义搜索与定位**：基于 RAG 技术实现自然语言查询，直接向播客提问并精确定位相关时间段
+- **语义搜索与定位**：基于 RAG 技术实现自然语言查询，直接向音频提问并精确定位相关时间段
 - **自动化归档**：处理完成后自动清理临时文件，将原始文本和结构化摘要以 Markdown 格式持久化保存
 - **在线视频音频提取**：支持直接输入 Bilibili 视频链接，自动提取音频并生成摘要
 
@@ -21,14 +22,18 @@
 
 ### 1. 语音转录层
 
-采用 [OpenAI Whisper](https://github.com/openai/whisper) 模型进行高精度语音识别：
+支持两种转录引擎：
+
+- **SenseVoice** (默认)：基于阿里开源 [FunAudioLLM/SenseVoiceSmall](https://www.modelscope.cn/models/iic/SenseVoiceSmall) 模型，极速转录，支持 50+ 语言
+- **Whisper**：基于 [OpenAI Whisper](https://github.com/openai/whisper) 模型，高精度语音识别
 
 ```
-音频文件 → Whisper 模型 → 带时间戳的文本段落
+音频文件 → SenseVoice/Whisper 模型 → 带时间戳的文本段落
 ```
 
+- **引擎切换**：在侧边栏可选择 SenseVoice（极速模式）或 Whisper（高精度模式）
 - **硬件自适应** (`backend/transcriber.py`)：动态检测可用计算设备（MPS / CUDA / CPU），选择最优加速方案
-- **时间戳对齐**：解析 Whisper 输出的 `segments`，将每段文本与起始时间精确关联，格式化为 `[MM:SS]` 标记
+- **时间戳对齐**：通过分片处理实现时间戳对齐，每30秒一个时间戳标记
 
 ### 2. 内容理解层
 
@@ -56,7 +61,7 @@
 PodGist/
 ├── app.py                      # Streamlit 前端主程序
 ├── backend/
-│   ├── transcriber.py          # Whisper 转录与硬件检测
+│   ├── transcriber.py          # Whisper/SenseVoice 转录与硬件检测
 │   ├── llm_agent.py            # LLM API 封装与 RAG 搜索
 │   └── downloader.py           # 在线音频链接解析（支持 Bilibili）
 ├── archives/                   # 生成的 Markdown 归档目录
@@ -96,6 +101,13 @@ PodGist/
 
 3. **安装基础依赖**
    ```bash
+   pip install -r requirements.txt
+   ```
+
+4. **安装 SenseVoice 额外依赖**（如果使用 SenseVoice 模式）
+   ```bash
+   pip install modelscope pydub
+   # 或使用 requirements.txt 中的完整依赖
    pip install -r requirements.txt
    ```
 
@@ -165,6 +177,7 @@ PodGist/
 
 - [Streamlit](https://streamlit.io/) - 交互式 Web 应用框架
 - [OpenAI Whisper](https://github.com/openai/whisper) - 语音识别模型
+- [ModelScope](https://modelscope.cn/) - SenseVoice 模型及 AI 模型服务
 - [OpenAI Python SDK](https://github.com/openai/openai-python) - 大语言模型 API 调用
 - [PyTorch](https://pytorch.org/) - 深度学习框架与硬件加速支持
 

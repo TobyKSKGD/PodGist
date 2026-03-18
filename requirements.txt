@@ -4,5 +4,16 @@ openai>=1.10.0
 openai-whisper>=20231117
 yt-dlp>=2024.1.0
 
+# SenseVoice 转录引擎依赖
+modelscope>=1.35.0
+pydub>=0.25.0
+
+# modelscope 的额外依赖
+addict>=2.4.0
+datasets>=2.14.0
+oss2>=2.18.0
+simplejson>=3.17.0
+sortedcontainers>=2.4.0
+
 # 注意：Torch 故意未在此处锁死版本。
 # Windows (N卡) 和 Mac (M芯片) 需要分别使用不同的命令安装对应的 Torch 硬件加速版。
