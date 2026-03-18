@@ -34,5 +34,20 @@ CLAUDE.md
 # ================= 6. 操作系统产生的垃圾文件 =================
 # Mac 专属垃圾文件
 .DS_Store
+.AppleDouble
+.LSOverride
+._*
+.com.apple.timemachine.donotpresent
+
 # Windows 专属垃圾文件
 Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+desktop.ini
+$RECYCLE.BIN/
+
+# Linux 专属垃圾文件
+.fuse_hidden*
+.directory
+.Trash-*
