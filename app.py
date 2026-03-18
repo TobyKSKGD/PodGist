@@ -109,6 +109,32 @@ def cleanup_temp_files(keep_files=None):
             pass
 
 
+def get_archive_list():
+    """
+    获取归档目录列表，自动过滤系统垃圾文件。
+
+    返回:
+        list: 过滤后的归档目录列表（按时间倒序）
+    """
+    # 系统垃圾文件过滤列表
+    system_junk_files = {
+        '.DS_Store',      # macOS
+        'Thumbs.db',      # Windows
+        'desktop.ini',    # Windows
+        '.Trash',         # Linux/macOS
+        '.localized',     # macOS
+        '._.DS_Store',    # macOS 额外
+    }
+
+    try:
+        folders = os.listdir(ARCHIVE_DIR)
+        # 过滤掉系统垃圾文件和目录
+        folders = [f for f in folders if f not in system_junk_files and not f.startswith('.')]
+        return sorted(folders, reverse=True)
+    except Exception:
+        return []
+
+
 def process_audio_file(audio_file_path, raw_text_file, api_key, selected_model, selected_device_key, selected_device_name, progress_start=0, cleanup_after=False):
     """
     统一的音频文件处理函数。
@@ -177,7 +203,7 @@ def process_audio_file(audio_file_path, raw_text_file, api_key, selected_model, 
         raw_summary = get_podcast_summary(api_key, st.session_state.podcast_text)
         archive_task(st.session_state.podcast_text, raw_summary)
 
-        archive_folders = sorted(os.listdir(ARCHIVE_DIR), reverse=True)
+        archive_folders = get_archive_list()
         latest_archive_path = os.path.join(ARCHIVE_DIR, archive_folders[0])
         with open(os.path.join(latest_archive_path, "summary.md"), "r", encoding="utf-8") as f:
             st.session_state.summary = f.read()
@@ -218,7 +244,7 @@ with st.sidebar:
     st.divider()
     
     st.header("🗂️ 历史归档")
-    archive_list = ["-- 新建提炼任务 --"] + sorted(os.listdir(ARCHIVE_DIR), reverse=True)
+    archive_list = ["-- 新建提炼任务 --"] + get_archive_list()
     
     def on_history_change():
         """
