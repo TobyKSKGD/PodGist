@@ -274,10 +274,11 @@ if selected_archive == "-- 新建提炼任务 --":
         uploaded_file = st.file_uploader("请拖拽一个 .mp3 播客文件", type=['mp3'], key="local_uploader")
 
         if uploaded_file is not None and api_key:
+            # 先清理 temp_audio 目录
+            cleanup_temp_files()
+
             current_audio_name = f"temp_{uploaded_file.name}"
             current_raw_name = current_audio_name.replace(".mp3", f"_{selected_model}_raw.txt")
-
-            cleanup_temp_files(keep_files=[current_audio_name, current_raw_name])
 
             audio_file_path = os.path.join(TEMP_DIR, current_audio_name)
             raw_text_file = os.path.join(TEMP_DIR, current_raw_name)
@@ -304,6 +305,9 @@ if selected_archive == "-- 新建提炼任务 --":
 
         if bilibili_url and api_key:
             if st.button("⚡ 解析并提取音频", use_container_width=True, key="bilibili_process"):
+                # 先清理 temp_audio 目录
+                cleanup_temp_files()
+
                 with st.spinner("🔗 正在连接 B 站服务器提取音频..."):
                     try:
                         # 初始化下载器
