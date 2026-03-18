@@ -300,16 +300,14 @@ with st.sidebar:
             st.session_state.podcast_text = ""
             st.session_state.summary = ""
 
-    col1, col2 = st.columns([4, 1])
-    with col1:
-        selected_archive = st.selectbox("选择往期播客查看", archive_list, key="history_selector", on_change=on_history_change)
-    with col2:
-        if selected_archive != "-- 新建提炼任务 --":
-            if st.button("🗑️", key="del_btn", help="删除此归档"):
-                shutil.rmtree(os.path.join(ARCHIVE_DIR, selected_archive))
-                st.session_state.podcast_text = ""
-                st.session_state.summary = ""
-                st.rerun()
+    selected_archive = st.selectbox("选择往期播客查看", archive_list, key="history_selector", on_change=on_history_change)
+
+    if selected_archive != "-- 新建提炼任务 --":
+        if st.button("🗑️ 删除此归档", type="primary", use_container_width=True):
+            shutil.rmtree(os.path.join(ARCHIVE_DIR, selected_archive))
+            st.session_state.podcast_text = ""
+            st.session_state.summary = ""
+            st.rerun()
 
     st.divider()
 
