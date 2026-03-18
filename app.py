@@ -232,15 +232,24 @@ def process_audio_file(audio_file_path, raw_text_file, api_key, selected_model, 
         with open(os.path.join(latest_archive_path, "summary.md"), "r", encoding="utf-8") as f:
             st.session_state.summary = f.read()
 
-        # 如果是下载的音频，处理完成后删除
-        if cleanup_after and os.path.exists(audio_file_path):
+        # 清理临时文件
+        if os.path.exists(audio_file_path):
             try:
                 os.remove(audio_file_path)
+            except Exception:
+                pass
+        # 同时清理缓存的 raw.txt 文件
+        if os.path.exists(raw_text_file):
+            try:
+                os.remove(raw_text_file)
             except Exception:
                 pass
 
         progress_bar.progress(100)
         status_text.success("🎉 处理完成！数据已智能命名并安全归档。")
+
+        # 刷新页面以显示新归档
+        st.rerun()
 
     except Exception as e:
         status_text.error(f"❌ 大模型调用失败: {e}")
