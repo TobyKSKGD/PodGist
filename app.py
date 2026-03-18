@@ -278,7 +278,7 @@ with st.sidebar:
     
     st.header("🗂️ 历史归档")
     archive_list = ["-- 新建提炼任务 --"] + get_archive_list()
-    
+
     def on_history_change():
         """
         历史归档选择变更回调函数。
@@ -301,13 +301,28 @@ with st.sidebar:
             st.session_state.summary = ""
 
     selected_archive = st.selectbox("选择往期播客查看", archive_list, key="history_selector", on_change=on_history_change)
-    
+
     if selected_archive != "-- 新建提炼任务 --":
         if st.button("🗑️ 删除此归档", type="primary", use_container_width=True):
             shutil.rmtree(os.path.join(ARCHIVE_DIR, selected_archive))
             st.session_state.podcast_text = ""
             st.session_state.summary = ""
             st.rerun()
+
+    # 显示快速删除列表
+    all_archives = get_archive_list()
+    if all_archives:
+        st.caption("快速删除：")
+        cols_per_row = 3
+        cols = st.columns(cols_per_row)
+        for idx, archive_name in enumerate(all_archives):
+            col = cols[idx % cols_per_row]
+            with col:
+                if st.button(f"🗑️ {archive_name[:15]}...", key=f"del_{archive_name}", use_container_width=True):
+                    shutil.rmtree(os.path.join(ARCHIVE_DIR, archive_name))
+                    st.session_state.podcast_text = ""
+                    st.session_state.summary = ""
+                    st.rerun()
 
     st.divider()
 
