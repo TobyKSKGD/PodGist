@@ -50,25 +50,44 @@ def save_api_key(key):
     """
     with open(API_KEY_FILE, "w", encoding="utf-8") as f: f.write(key.strip())
 
-def sanitize_filename(name):
+def sanitize_filename(name, max_length=50):
     """
-    清理文件名，移除无效字符。
+    清理文件名，移除无效字符，并限制长度。
 
     参数:
         name (str): 原始文件名
+        max_length (int): 最大长度限制，默认为50
 
     返回:
         str: 清理后的安全文件名
     """
-    return re.sub(r'[\\/*?:"<>|]', "", name).strip()
+    # 移除无效字符
+    name = re.sub(r'[\\/*?:"<>|]', "", name).strip()
 
-def archive_task(podcast_text, summary):
+    # 分离文件名和扩展名
+    if '.' in name:
+        # 找到最后一个点（扩展名分隔符）
+        last_dot = name.rfind('.')
+        base_name = name[:last_dot]
+        extension = name[last_dot:]  # 包含点
+    else:
+        base_name = name
+        extension = ""
+
+    # 限制长度，保留扩展名
+    if len(base_name) > max_length - len(extension):
+        base_name = base_name[:max_length - len(extension)]
+
+    return base_name + extension
+
+def archive_task(podcast_text, summary, original_name):
     """
     将播客转录文本和摘要归档到本地目录。
 
     参数:
         podcast_text (str): 带时间戳的播客转录文本
         summary (str): AI 生成的播客摘要
+        original_name (str): 原始文件名或视频标题
 
     说明:
         创建按时间戳命名的归档目录，保存原始文本和 Markdown 格式摘要。
@@ -77,8 +96,12 @@ def archive_task(podcast_text, summary):
     ai_title = sanitize_filename(lines[0])
     if not ai_title: ai_title = "未命名播客摘要"
 
+    # 使用原始文件名
+    safe_original_name = sanitize_filename(original_name)
+    if not safe_original_name: safe_original_name = "未命名音频"
+
     timestamp = time.strftime("%Y%m%d_%H%M")
-    folder_name = f"{timestamp}_{ai_title}"
+    folder_name = f"{timestamp}_{safe_original_name}"
     folder_path = os.path.join(ARCHIVE_DIR, folder_name)
 
     os.makedirs(folder_path, exist_ok=True)
@@ -135,7 +158,7 @@ def get_archive_list():
         return []
 
 
-def process_audio_file(audio_file_path, raw_text_file, api_key, selected_model, selected_device_key, selected_device_name, progress_start=0, cleanup_after=False):
+def process_audio_file(audio_file_path, raw_text_file, api_key, selected_model, selected_device_key, selected_device_name, progress_start=0, cleanup_after=False, original_name=""):
     """
     统一的音频文件处理函数。
 
@@ -148,6 +171,7 @@ def process_audio_file(audio_file_path, raw_text_file, api_key, selected_model, 
         selected_device_name: 设备名称
         progress_start: 进度条起始值
         cleanup_after: 处理完成后是否删除音频文件
+        original_name: 原始文件名或视频标题
     """
     status_text = st.empty()
     progress_bar = st.progress(progress_start)
@@ -201,7 +225,7 @@ def process_audio_file(audio_file_path, raw_text_file, api_key, selected_model, 
 
     try:
         raw_summary = get_podcast_summary(api_key, st.session_state.podcast_text)
-        archive_task(st.session_state.podcast_text, raw_summary)
+        archive_task(st.session_state.podcast_text, raw_summary, original_name)
 
         archive_folders = get_archive_list()
         latest_archive_path = os.path.join(ARCHIVE_DIR, archive_folders[0])
@@ -320,7 +344,8 @@ if selected_archive == "-- 新建提炼任务 --":
                     selected_model=selected_model,
                     selected_device_key=selected_device_key,
                     selected_device_name=selected_device_name,
-                    progress_start=0
+                    progress_start=0,
+                    original_name=uploaded_file.name
                 )
         elif uploaded_file is None:
             st.info("请拖拽上传音频文件")
@@ -360,7 +385,8 @@ if selected_archive == "-- 新建提炼任务 --":
                                 selected_device_key=selected_device_key,
                                 selected_device_name=selected_device_name,
                                 progress_start=0,
-                                cleanup_after=True
+                                cleanup_after=True,
+                                original_name=video_title
                             )
                         else:
                             st.error(f"❌ 下载失败: {download_result['error']}")
