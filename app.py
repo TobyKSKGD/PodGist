@@ -227,8 +227,8 @@ if "podcast_text" not in st.session_state: st.session_state.podcast_text = ""
 if "summary" not in st.session_state: st.session_state.summary = ""
 
 # ================= 4. 侧边栏界面 =================
-st.title("🎙️ PodGist 播客知识库")
-st.markdown("上传播客提取精华，或从左侧历史归档中唤醒记忆，支持 AI 精准定位。")
+st.markdown("<h1 style='text-align: center;'>🎙️ PodGist 播客知识库</h1>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center;'>上传播客提取精华，或从左侧历史归档中唤醒记忆，支持 AI 精准定位。</p>", unsafe_allow_html=True)
 st.divider()
 
 with st.sidebar:
