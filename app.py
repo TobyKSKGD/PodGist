@@ -10,7 +10,7 @@ from backend.diagnostics import run_all_diagnostics
 from backend.downloader import AudioDownloader
 
 # ================= 1. 页面配置 =================
-st.set_page_config(page_title="PodGist | 播客提炼器", page_icon="🎙️", layout="wide")
+st.set_page_config(page_title="PodGist | 音频提炼器", page_icon="🎙️", layout="wide")
 
 hide_st_style = """
             <style>
@@ -83,11 +83,11 @@ def sanitize_filename(name, max_length=50):
 
 def archive_task(podcast_text, summary, original_name):
     """
-    将播客转录文本和摘要归档到本地目录。
+    将音频转录文本和摘要归档到本地目录。
 
     参数:
-        podcast_text (str): 带时间戳的播客转录文本
-        summary (str): AI 生成的播客摘要
+        podcast_text (str): 带时间戳的音频转录文本
+        summary (str): AI 生成的音频摘要
         original_name (str): 原始文件名或视频标题
 
     说明:
@@ -95,7 +95,7 @@ def archive_task(podcast_text, summary, original_name):
     """
     lines = summary.strip().split('\n')
     ai_title = sanitize_filename(lines[0])
-    if not ai_title: ai_title = "未命名播客摘要"
+    if not ai_title: ai_title = "未命名音频摘要"
 
     # 使用原始文件名
     safe_original_name = sanitize_filename(original_name)
@@ -294,8 +294,8 @@ if "podcast_text" not in st.session_state: st.session_state.podcast_text = ""
 if "summary" not in st.session_state: st.session_state.summary = ""
 
 # ================= 4. 侧边栏界面 =================
-st.markdown("<h1 style='text-align: center;'>🎙️ PodGist 播客知识库</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align: center;'>上传播客提取精华，或从左侧历史归档中唤醒记忆，支持 AI 精准定位。</p>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align: center;'>🎙️ PodGist</h1>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center;'>上传音频提取精华，或从左侧历史归档中唤醒记忆，支持 AI 精准定位。</p>", unsafe_allow_html=True)
 st.divider()
 
 with st.sidebar:
@@ -317,7 +317,7 @@ with st.sidebar:
         """
         历史归档选择变更回调函数。
 
-        根据用户选择的归档目录，加载对应的播客转录文本和摘要到会话状态。
+        根据用户选择的归档目录，加载对应的音频转录文本和摘要到会话状态。
         """
         selected = st.session_state.history_selector
         if selected != "-- 新建提炼任务 --":
@@ -334,7 +334,7 @@ with st.sidebar:
             st.session_state.podcast_text = ""
             st.session_state.summary = ""
 
-    selected_archive = st.selectbox("选择往期播客查看", archive_list, key="history_selector", on_change=on_history_change)
+    selected_archive = st.selectbox("选择往期音频查看", archive_list, key="history_selector", on_change=on_history_change)
 
     if selected_archive != "-- 新建提炼任务 --":
         if st.button("🗑️ 删除此归档", type="primary", use_container_width=True):
@@ -420,7 +420,7 @@ if selected_archive == "-- 新建提炼任务 --":
     tab_local, tab_online = st.tabs(["📂 本地文件上传", "🌐 在线链接解析（Bilibili）"])
 
     with tab_local:
-        uploaded_file = st.file_uploader("请拖拽一个 .mp3 播客文件", type=['mp3'], key="local_uploader")
+        uploaded_file = st.file_uploader("请拖拽一个 .mp3 音频文件", type=['mp3'], key="local_uploader")
 
         if uploaded_file is not None and api_key:
             # 先清理 temp_audio 目录
@@ -529,8 +529,8 @@ if st.session_state.summary:
     )
     
     st.divider()
-    st.subheader("🔍 AI 模糊定位器 (当前播客)")
-    search_query = st.text_input("向本期播客提问：")
+    st.subheader("🔍 AI 模糊定位器 (当前音频)")
+    search_query = st.text_input("向本期音频提问：")
     
     if st.button("精准搜索"):
         if search_query and api_key:

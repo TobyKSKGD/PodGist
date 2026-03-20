@@ -59,7 +59,7 @@ def transcribe_audio_to_timestamped_text(model, audio_file_path, device_key):
     transcribe_result = model.transcribe(
         audio_file_path,
         language="zh",
-        initial_prompt="以下是一段精彩的中文播客内容，请输出简体中文。",
+        initial_prompt="以下是一段精彩的音频内容，请输出简体中文。",
         fp16=use_fp16
     )
 
