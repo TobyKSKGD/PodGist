@@ -6,6 +6,7 @@ import shutil
 import re
 from backend.transcriber import get_available_devices, get_whisper_model, transcribe_audio_to_timestamped_text
 from backend.llm_agent import get_podcast_summary, search_in_podcast
+from backend.diagnostics import run_all_diagnostics
 from backend.downloader import AudioDownloader
 
 # ================= 1. 页面配置 =================
@@ -308,7 +309,7 @@ with st.sidebar:
             st.warning("⚠️ 请输入 Key")
     
     st.divider()
-    
+
     st.header("🗂️ 历史归档")
     archive_list = ["-- 新建提炼任务 --"] + get_archive_list()
 
@@ -373,6 +374,45 @@ with st.sidebar:
 
     selected_device_name = st.selectbox("2. 算力硬件", device_options, index=best_device_index)
     selected_device_key = device_keys[device_options.index(selected_device_name)]
+
+    # ================= 诊断区域（侧边栏底部） =================
+    st.divider()
+    st.header("🩺 系统诊断")
+
+    # 初始化诊断结果存储
+    if "diagnostic_results" not in st.session_state:
+        st.session_state.diagnostic_results = None
+
+    # 诊断按钮
+    if st.button("🔍 一键诊断所有组件", use_container_width=True):
+        with st.spinner("正在诊断..."):
+            api_key = load_api_key()
+            results = run_all_diagnostics(api_key)
+            st.session_state.diagnostic_results = results
+
+    # 显示诊断结果
+    if st.session_state.diagnostic_results is not None:
+        results = st.session_state.diagnostic_results
+
+        all_passed = all(r[1] for r in results)
+
+        if all_passed:
+            st.success("✅ 全部通过！可以开始处理音频。")
+        else:
+            st.error("⚠️ 部分组件存在问题，请检查以下项目：")
+
+        for name, success, msg in results:
+            if success:
+                st.write(f"✅ **{name}**: {msg}")
+            else:
+                st.write(f"❌ **{name}**: {msg}")
+
+        # 添加重新诊断按钮
+        if st.button("🔄 重新诊断", use_container_width=True):
+            st.session_state.diagnostic_results = None
+            st.rerun()
+    else:
+        st.caption("点击上方按钮测试所有组件是否正常")
 
 # ================= 5. 文件处理逻辑 =================
 if selected_archive == "-- 新建提炼任务 --":
@@ -502,3 +542,4 @@ if st.session_state.summary:
                     st.error(f"搜索失败: {e}")
         else:
             st.warning("请确保输入了问题，并且已填写 API Key！")
+
