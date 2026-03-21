@@ -2,6 +2,8 @@ import os
 import subprocess
 import yt_dlp
 import re
+import requests
+from urllib.parse import urlparse
 
 
 class AudioDownloader:
@@ -196,3 +198,209 @@ def download_and_convert(url, save_dir="temp_audio", cookies_path=None):
     """
     downloader = AudioDownloader(save_dir=save_dir)
     return downloader.download_bilibili_audio(url, cookies_path=cookies_path)
+
+
+# ================= 小宇宙播客抓取器 =================
+
+def detect_platform(url):
+    """
+    根据 URL 识别播客平台。
+
+    参数:
+        url (str): 播客链接
+
+    返回:
+        str: 平台标识符，如 "xiaoyuzhou", "bilibili", "unknown"
+    """
+    url = url.lower()
+    if "xiaoyuzhoufm.com" in url:
+        return "xiaoyuzhou"
+    elif "bilibili.com" in url:
+        return "bilibili"
+    else:
+        return "unknown"
+
+
+def download_xiaoyuzhou_audio(url, save_dir="temp_audio"):
+    """
+    从小宇宙播客单集链接下载音频。
+
+    参数:
+        url (str): 小宇宙分享链接（如 https://xiaoyuzhoufm.com/episode/xxx）
+        save_dir (str): 保存目录
+
+    返回:
+        dict: 包含以下键的字典:
+            - success (bool): 是否成功
+            - file_path (str): 下载的音频文件路径（成功时）
+            - title (str): 播客标题（成功时）
+            - error (str): 错误信息（失败时）
+    """
+    os.makedirs(save_dir, exist_ok=True)
+
+    # 检查 URL 格式
+    if detect_platform(url) != "xiaoyuzhou":
+        return {
+            'success': False,
+            'error': "非有效的小宇宙分享链接，请检查链接是否正确"
+        }
+
+    # 伪装浏览器 User-Agent
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+    }
+
+    try:
+        # 请求网页
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code != 200:
+            return {
+                'success': False,
+                'error': f"请求失败，状态码: {response.status_code}"
+            }
+
+        html_content = response.text
+
+        # 提取音频直链 - 查找 <meta property="og:audio" content="...">
+        audio_url = None
+        title = "未知标题"
+
+        import re
+
+        # 匹配 og:audio
+        audio_match = re.search(r'<meta\s+(?:property|name)="og:audio"\s+content="([^"]+)"', html_content)
+        if audio_match:
+            audio_url = audio_match.group(1)
+        else:
+            # 备选：查找 data-src 属性
+            audio_match = re.search(r'data-src="([^"]+\.mp3)"', html_content)
+            if audio_match:
+                audio_url = audio_match.group(1)
+
+        # 提取标题 - 查找 <meta property="og:title" content="...">
+        title_match = re.search(r'<meta\s+(?:property|name)="og:title"\s+content="([^"]+)"', html_content)
+        if title_match:
+            title = title_match.group(1)
+        else:
+            # 备选：查找 <title>
+            title_match = re.search(r'<title>([^<]+)</title>', html_content)
+            if title_match:
+                title = title_match.group(1)
+
+        if not audio_url:
+            return {
+                'success': False,
+                'error': "页面结构已变更，无法解析音频链接，请等待开发者更新"
+            }
+
+        # 清理标题
+        title = re.sub(r'[\\/*?:"<>|]', "", title).strip()
+        if len(title) > 200:
+            title = title[:200]
+
+        # 下载音频文件
+        print(f"正在下载音频: {title}")
+        print(f"音频链接: {audio_url}")
+
+        # 流式下载
+        audio_response = requests.get(audio_url, headers=headers, timeout=60, stream=True)
+        if audio_response.status_code != 200:
+            return {
+                'success': False,
+                'error': f"音频下载失败，状态码: {audio_response.status_code}"
+            }
+
+        # 根据 Content-Type 确定文件扩展名
+        content_type = audio_response.headers.get('Content-Type', '').lower()
+        if 'mpeg' in content_type or 'mp3' in content_type:
+            ext = '.mp3'
+        elif 'm4a' in content_type or 'mp4' in content_type:
+            ext = '.m4a'
+        elif 'audio/aac' in content_type:
+            ext = '.aac'
+        else:
+            # 默认先保存为 .m4a，后续可以转换
+            ext = '.m4a'
+
+        # 保存文件
+        file_path = os.path.join(save_dir, f"{title}{ext}")
+        temp_path = file_path  # 初始保存路径
+
+        with open(file_path, 'wb') as f:
+            for chunk in audio_response.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+
+        # 如果是 m4a/aac 格式，转换为 mp3
+        if ext in ['.m4a', '.aac'] and os.path.exists(file_path):
+            try:
+                import subprocess
+                mp3_path = file_path.replace(ext, '.mp3')
+                subprocess.run([
+                    'ffmpeg', '-i', file_path,
+                    '-codec:a', 'libmp3lame',
+                    '-q:a', '2', mp3_path,
+                    '-y'
+                ], capture_output=True, check=True)
+                os.remove(file_path)  # 删除原文件
+                file_path = mp3_path  # 使用转换后的文件
+            except Exception as e:
+                print(f"格式转换失败，保持原格式: {e}")
+
+        # 验证文件
+        if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+            return {
+                'success': True,
+                'file_path': file_path,
+                'title': title
+            }
+        else:
+            return {
+                'success': False,
+                'error': "音频文件保存失败"
+            }
+
+    except requests.exceptions.Timeout:
+        return {
+            'success': False,
+            'error': "网络连接超时，请检查网络或稍后再试"
+        }
+    except requests.exceptions.ConnectionError:
+        return {
+            'success': False,
+            'error': "网络连接失败，请检查网络"
+        }
+    except Exception as e:
+        return {
+            'success': False,
+            'error': f"下载过程出错: {str(e)}"
+        }
+
+
+def route_and_download(url, save_dir="temp_dir", cookies_path=None):
+    """
+    根据 URL 类型智能路由并下载音频。
+
+    参数:
+        url (str): 在线链接
+        save_dir (str): 保存目录
+        cookies_path (str, optional): cookies 文件路径
+
+    返回:
+        dict: 下载结果
+    """
+    platform = detect_platform(url)
+
+    if platform == "xiaoyuzhou":
+        return download_xiaoyuzhou_audio(url, save_dir)
+    elif platform == "bilibili":
+        downloader = AudioDownloader(save_dir=save_dir)
+        return downloader.download_bilibili_audio(url, cookies_path)
+    else:
+        return {
+            'success': False,
+            'error': f"不支持的平台，当前仅支持小宇宙和 Bilibili"
+        }
+

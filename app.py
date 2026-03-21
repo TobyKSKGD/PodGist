@@ -5,7 +5,7 @@ import time
 import shutil
 import re
 from backend.transcriber import get_available_devices, get_whisper_model, transcribe_audio_to_timestamped_text
-from backend.llm_agent import get_podcast_summary, search_in_podcast
+from backend.llm_agent import get_podcast_summary_robust, get_podcast_summary, search_in_podcast
 from backend.diagnostics import run_all_diagnostics
 from backend.downloader import AudioDownloader
 
@@ -129,6 +129,48 @@ def cleanup_temp_files(keep_files=None):
         try:
             if os.path.isfile(file_path):
                 os.remove(file_path)
+        except Exception:
+            pass
+
+
+# ================= 大模型失败状态持久化 =================
+import json
+
+LLM_FAILED_STATE_FILE = os.path.join(TEMP_DIR, ".llm_failed_state.json")
+
+def save_llm_failed_state(original_name, raw_file_path):
+    """保存大模型调用失败状态到文件"""
+    import time
+    state = {
+        "original_name": original_name,
+        "raw_file_path": raw_file_path,
+        "timestamp": time.time()
+    }
+    with open(LLM_FAILED_STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False)
+
+def load_llm_failed_state():
+    """从文件加载大模型调用失败状态，返回 None 如果不存在或已过期"""
+    import time
+    if not os.path.exists(LLM_FAILED_STATE_FILE):
+        return None
+    try:
+        with open(LLM_FAILED_STATE_FILE, "r", encoding="utf-8") as f:
+            state = json.load(f)
+        # 检查是否在 24 小时内
+        if time.time() - state.get("timestamp", 0) > 24 * 60 * 60:
+            # 超过 24 小时，删除文件
+            os.remove(LLM_FAILED_STATE_FILE)
+            return None
+        return state
+    except Exception:
+        return None
+
+def clear_llm_failed_state():
+    """清除大模型调用失败状态"""
+    if os.path.exists(LLM_FAILED_STATE_FILE):
+        try:
+            os.remove(LLM_FAILED_STATE_FILE)
         except Exception:
             pass
 
@@ -258,7 +300,7 @@ def process_audio_file(audio_file_path, raw_text_file, api_key, selected_model, 
     progress_bar.progress(70)
 
     try:
-        raw_summary = get_podcast_summary(api_key, st.session_state.podcast_text)
+        raw_summary = get_podcast_summary_robust(api_key, st.session_state.podcast_text, max_timeline_items)
         archive_task(st.session_state.podcast_text, raw_summary, original_name)
 
         archive_folders = get_archive_list()
@@ -282,16 +324,41 @@ def process_audio_file(audio_file_path, raw_text_file, api_key, selected_model, 
         progress_bar.progress(100)
         status_text.success("🎉 处理完成！数据已智能命名并安全归档。")
 
+        # 自动选中刚生成的归档
+        if archive_folders:
+            st.session_state.history_selector = archive_folders[0]
+
         # 刷新页面以显示新归档
         st.rerun()
 
     except Exception as e:
         status_text.error(f"❌ 大模型调用失败: {e}")
+        # 保存到 session_state
+        st.session_state.llm_failed = True
+        st.session_state.llm_failed_original_name = original_name
+        raw_file_for_state = ""
+        if 'raw_text_file' in locals():
+            st.session_state.llm_failed_raw_file = raw_text_file
+            raw_file_for_state = raw_text_file
+        # 保存当前转录文本
+        st.session_state.llm_failed_podcast_text = st.session_state.podcast_text
+        # 持久化保存到文件（防止刷新页面丢失）
+        save_llm_failed_state(original_name, raw_file_for_state)
 
 
 # ================= 3. 会话状态管理 =================
 if "podcast_text" not in st.session_state: st.session_state.podcast_text = ""
 if "summary" not in st.session_state: st.session_state.summary = ""
+if "history_selector" not in st.session_state: st.session_state.history_selector = "-- 新建提炼任务 --"
+if "llm_failed" not in st.session_state: st.session_state.llm_failed = False
+
+# ================= 大模型重试处理（会话状态初始化后立即检查） =================
+# 检查是否有持久化的失败状态（页面刷新后也能恢复）
+saved_state = load_llm_failed_state()
+if saved_state:
+    st.session_state.llm_failed = True
+    st.session_state.llm_failed_original_name = saved_state.get("original_name", "未命名")
+    st.session_state.llm_failed_raw_file = saved_state.get("raw_file_path", "")
 
 # ================= 4. 侧边栏界面 =================
 st.markdown("<h1 style='text-align: center;'>🎙️ PodGist</h1>", unsafe_allow_html=True)
@@ -300,7 +367,12 @@ st.divider()
 
 with st.sidebar:
     st.header("⚙️ 核心设置")
-    api_key = st.text_input("DeepSeek API Key", value=load_api_key(), type="password")
+    api_key = st.text_input(
+        "DeepSeek API Key",
+        value=load_api_key(),
+        type="password",
+        help="DeepSeek API Key，用于调用大模型生成摘要。可在 https://platform.deepseek.com 获取。"
+    )
     if st.button("💾 保存 Key", use_container_width=True):
         if api_key:
             save_api_key(api_key)
@@ -334,7 +406,13 @@ with st.sidebar:
             st.session_state.podcast_text = ""
             st.session_state.summary = ""
 
-    selected_archive = st.selectbox("选择往期音频查看", archive_list, key="history_selector", on_change=on_history_change)
+    selected_archive = st.selectbox(
+        "选择往期音频查看",
+        archive_list,
+        key="history_selector",
+        on_change=on_history_change,
+        help="选择已保存的音频归档查看，或选择「新建提炼任务」开始处理新音频。"
+    )
 
     if selected_archive != "-- 新建提炼任务 --":
         if st.button("🗑️ 删除此归档", type="primary", use_container_width=True):
@@ -352,7 +430,8 @@ with st.sidebar:
         "选择转录引擎",
         ["⚡ SenseVoice (极速模式)", "🐢 Whisper (高精度时间戳)"],
         horizontal=True,
-        index=0
+        index=0,
+        help="SenseVoice：阿里开源模型，转录速度极快，适合大多数场景。\n\nWhisper：OpenAI 模型，精度更高，但速度较慢。"
     )
 
     use_sensevoice = "SenseVoice" in transcription_engine
@@ -370,10 +449,36 @@ with st.sidebar:
         st.caption("SenseVoice 使用 Small 版本，无需选择模型规模")
         selected_model = "sensevoice-small"
     else:
-        selected_model = st.selectbox("1. 模型规模", ["tiny", "base", "small", "medium", "large-v3"], index=2)
+        selected_model = st.selectbox(
+            "1. 模型规模",
+            ["tiny", "base", "small", "medium", "large-v3"],
+            index=2,
+            help="选择 Whisper 模型规模。\n\ntiny/base：速度快，精度较低。\n\nsmall/medium：平衡选择，推荐 small。\n\nlarge-v3：精度最高，但需要更多显存。"
+        )
 
-    selected_device_name = st.selectbox("2. 算力硬件", device_options, index=best_device_index)
+    selected_device_name = st.selectbox(
+        "2. 算力硬件",
+        device_options,
+        index=best_device_index,
+        help="选择用于转录的计算设备。\n\nApple Silicon (MPS)：Mac M系列芯片专用加速，推荐 Mac 用户使用。\n\nGPU (CUDA)：NVIDIA 显卡加速。\n\nCPU：使用处理器计算，速度较慢。"
+    )
     selected_device_key = device_keys[device_options.index(selected_device_name)]
+
+    # 输出条数配置
+    timeline_options = [8, 10, 15, 20, 25]
+    default_index = 2
+    # 如果之前有设置，使用之前的设置
+    if "max_timeline_items" in st.session_state and st.session_state.max_timeline_items in timeline_options:
+        default_index = timeline_options.index(st.session_state.max_timeline_items)
+
+    max_timeline_items = st.selectbox(
+        "3. 时间轴上限",
+        timeline_options,
+        index=default_index,
+        help="AI 生成的时间轴最多不超过此条数。数量越少，生成速度越快、越稳定。"
+    )
+    # 保存用户设置到 session_state
+    st.session_state.max_timeline_items = max_timeline_items
 
     # ================= 诊断区域（侧边栏底部） =================
     st.divider()
@@ -416,8 +521,8 @@ with st.sidebar:
 
 # ================= 5. 文件处理逻辑 =================
 if selected_archive == "-- 新建提炼任务 --":
-    # 创建标签页：本地文件 vs 在线链接
-    tab_local, tab_online = st.tabs(["📂 本地文件上传", "🌐 在线链接解析（Bilibili）"])
+    # 创建标签页：本地文件 vs 播客直连 vs 视频剥离
+    tab_local, tab_podcast, tab_video = st.tabs(["📂 本地提炼", "🎧 播客直连", "📺 视频剥离"])
 
     with tab_local:
         uploaded_file = st.file_uploader("请拖拽一个 .mp3 音频文件", type=['mp3'], key="local_uploader")
@@ -450,9 +555,74 @@ if selected_archive == "-- 新建提炼任务 --":
         elif uploaded_file is None:
             st.info("请拖拽上传音频文件")
 
-    with tab_online:
+    with tab_podcast:
+        # 平台支持状态
+        st.markdown("**平台支持状态：**")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.success("✅ 已支持：小宇宙")
+        with col2:
+            st.info("⏳ 规划中：苹果播客、网易云音乐、喜马拉雅")
+
+        # 操作引导
+        with st.expander("💡 如何获取小宇宙链接？", expanded=False):
+            st.markdown("""
+            1. 打开手机【小宇宙 App】
+            2. 选择要下载的播客单集
+            3. 点击右上角或底部的【分享】按钮
+            4. 选择【复制链接】
+            5. 发送到电脑并粘贴到下方输入框
+
+            链接格式通常包含：`xiaoyuzhoufm.com/episode/...`
+            """)
+
+        # 输入框
+        podcast_url = st.text_input("🔗 请粘贴播客单集链接", placeholder="https://xiaoyuzhoufm.com/episode/xxx", key="podcast_url")
+
+        if podcast_url and api_key:
+            if st.button("⚡ 解析并提取音频", use_container_width=True, key="podcast_process"):
+                # 先清理 temp_audio 目录
+                cleanup_temp_files()
+
+                with st.spinner("🔗 正在连接小宇宙服务器提取音频..."):
+                    try:
+                        from backend.downloader import download_xiaoyuzhou_audio
+                        download_result = download_xiaoyuzhou_audio(podcast_url, TEMP_DIR)
+
+                        if download_result['success']:
+                            audio_file_path = download_result['file_path']
+                            podcast_title = download_result['title']
+                            st.success(f"✅ 音频提取成功: {podcast_title}")
+
+                            # 使用标题创建临时文件名
+                            current_audio_name = f"temp_{podcast_title}.mp3"
+                            current_raw_name = current_audio_name.replace(".mp3", f"_{selected_model}_raw.txt")
+
+                            # 继续转录流程
+                            process_audio_file(
+                                audio_file_path=audio_file_path,
+                                raw_text_file=os.path.join(TEMP_DIR, current_raw_name),
+                                api_key=api_key,
+                                selected_model=selected_model,
+                                selected_device_key=selected_device_key,
+                                selected_device_name=selected_device_name,
+                                progress_start=0,
+                                cleanup_after=True,
+                                original_name=podcast_title,
+                                use_sensevoice=use_sensevoice
+                            )
+                        else:
+                            st.error(f"❌ 下载失败: {download_result['error']}")
+                    except Exception as e:
+                        st.error(f"❌ 解析失败: {str(e)}")
+        elif podcast_url and not api_key:
+            st.warning("请先在左侧填写 API Key")
+        else:
+            st.info("请粘贴小宇宙播客单集链接")
+
+    with tab_video:
         st.markdown("支持 Bilibili 视频链接，自动提取音频并生成摘要")
-        bilibili_url = st.text_input("粘贴 Bilibili 视频链接", placeholder="https://www.bilibili.com/video/BV...", key="bilibili_url")
+        bilibili_url = st.text_input("🔗 请粘贴 B站视频链接", placeholder="https://www.bilibili.com/video/BV...", key="bilibili_url")
 
         if bilibili_url and api_key:
             if st.button("⚡ 解析并提取音频", use_container_width=True, key="bilibili_process"):
@@ -501,6 +671,94 @@ if selected_archive == "-- 新建提炼任务 --":
     # 如果用户没有填写 API Key，给出提示
     if not api_key:
         st.warning("👈 请在左侧填写 DeepSeek API Key 后再操作")
+
+if "llm_failed" in st.session_state and st.session_state.get("llm_failed"):
+    st.divider()
+    st.error("⚠️ 大模型调用失败，您可以点击下方按钮重试（使用已有的转录稿，无需重新转录）")
+
+    # 从 session_state 或持久化文件中获取信息
+    raw_text_file = st.session_state.get("llm_failed_raw_file", "")
+    original_name = st.session_state.get("llm_failed_original_name", "未命名")
+
+    # 列出可用的 temp 文件供选择
+    st.caption("📁 当前可用的转录稿文件：")
+    temp_files = []
+    if os.path.exists(TEMP_DIR):
+        for f in os.listdir(TEMP_DIR):
+            if f.endswith("_raw.txt"):
+                st.write(f"  - {f}")
+                temp_files.append(f)
+
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        selected_file = st.selectbox("选择转录稿文件", temp_files if temp_files else [raw_text_file], key="retry_file_select")
+
+        if st.button("🔄 重试调用大模型", type="primary", key="retry_llm"):
+            if selected_file:
+                # 读取文字稿
+                retry_file_path = os.path.join(TEMP_DIR, selected_file)
+                if os.path.exists(retry_file_path):
+                    with open(retry_file_path, "r", encoding="utf-8") as f:
+                        podcast_text = f.read()
+
+                    with st.spinner("🔄 正在重新调用大模型..."):
+                        try:
+                            # 使用默认值15，或者从 session_state 获取之前设置的值
+                            retry_max_items = st.session_state.get("max_timeline_items", 15)
+                            raw_summary = get_podcast_summary_robust(api_key, podcast_text, retry_max_items)
+                            archive_task(podcast_text, raw_summary, original_name)
+
+                            archive_folders = get_archive_list()
+                            latest_archive_path = os.path.join(ARCHIVE_DIR, archive_folders[0])
+                            with open(os.path.join(latest_archive_path, "summary.md"), "r", encoding="utf-8") as f:
+                                st.session_state.summary = f.read()
+
+                            # 清理临时文件
+                            if os.path.exists(retry_file_path):
+                                try:
+                                    os.remove(retry_file_path)
+                                except Exception:
+                                    pass
+
+                            # 清理其他 temp 文件
+                            for f in os.listdir(TEMP_DIR):
+                                if f.startswith("temp_"):
+                                    try:
+                                        os.remove(os.path.join(TEMP_DIR, f))
+                                    except Exception:
+                                        pass
+
+                            # 清除失败状态（包括持久化文件）
+                            clear_llm_failed_state()
+                            st.session_state.llm_failed = False
+                            st.session_state.pop("llm_failed_original_name", None)
+                            st.session_state.pop("llm_failed_raw_file", None)
+                            st.session_state.pop("llm_failed_podcast_text", None)
+
+                            st.success("🎉 重试成功！")
+                            st.rerun()
+                        except Exception as retry_error:
+                            st.error(f"❌ 重试仍然失败: {retry_error}")
+                else:
+                    st.warning("文件不存在")
+            else:
+                st.warning("没有可用的转录稿文件")
+    with col2:
+        if st.button("放弃重试，重新开始", key="giveup_retry"):
+            # 清理所有临时文件
+            for f in os.listdir(TEMP_DIR):
+                if f.startswith("temp_"):
+                    try:
+                        os.remove(os.path.join(TEMP_DIR, f))
+                    except Exception:
+                        pass
+            # 清除失败状态（包括持久化文件）
+            clear_llm_failed_state()
+            st.session_state.llm_failed = False
+            st.session_state.pop("llm_failed_original_name", None)
+            st.session_state.pop("llm_failed_raw_file", None)
+            st.session_state.pop("llm_failed_podcast_text", None)
+            st.rerun()
 
 else:
     # 查看历史归档
