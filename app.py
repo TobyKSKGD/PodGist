@@ -8,9 +8,19 @@ from backend.transcriber import get_available_devices, get_whisper_model, transc
 from backend.llm_agent import get_podcast_summary_robust, get_podcast_summary, search_in_podcast
 from backend.diagnostics import run_all_diagnostics
 from backend.downloader import AudioDownloader
+from backend import task_queue
+from backend import worker
 
 # ================= 1. 页面配置 =================
 st.set_page_config(page_title="PodGist | 音频提炼器", page_icon="🎙️", layout="wide")
+
+# ================= 启动时初始化 =================
+# 初始化任务队列数据库
+task_queue.init_db()
+# 恢复僵尸任务（PROCESSING -> PENDING）
+reset_count = task_queue.reset_processing_to_pending()
+if reset_count > 0:
+    print(f"[Init] 已恢复 {reset_count} 个僵尸任务")
 
 hide_st_style = """
             <style>
@@ -30,6 +40,164 @@ ARCHIVE_DIR = "archives"
 TEMP_DIR = "temp_audio"
 os.makedirs(ARCHIVE_DIR, exist_ok=True)
 os.makedirs(TEMP_DIR, exist_ok=True)
+
+
+# ================= 任务监控大屏（自动刷新） =================
+@st.fragment(run_every=3)
+def render_task_monitor():
+    """
+    任务监控大屏 - 每3秒自动刷新
+    """
+    st.divider()
+    st.markdown("### 📊 队列监控大屏")
+    st.caption("💡 已完成任务请到侧边栏「历史归档」查看")
+
+    # 获取统计信息
+    stats = task_queue.get_queue_stats()
+
+    # 显示统计
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("⏳ 等待", stats.get("PENDING", 0))
+    with col2:
+        st.metric("🔄 处理中", stats.get("PROCESSING", 0))
+    with col3:
+        st.metric("✅ 完成", stats.get("COMPLETED", 0))
+    with col4:
+        st.metric("❌ 失败", stats.get("FAILED", 0))
+
+    # 获取所有任务
+    all_tasks = task_queue.get_all_tasks()
+
+    if not all_tasks:
+        st.info("队列为空，请先添加任务")
+        return
+
+    # 显示任务列表
+    st.markdown("#### 任务列表")
+
+    if not all_tasks:
+        st.info("队列为空")
+
+    # 按状态排序：处理中 > 等待 > 失败 > 完成
+    status_order = {"PROCESSING": 0, "PENDING": 1, "FAILED": 2, "COMPLETED": 3}
+    sorted_tasks = sorted(all_tasks, key=lambda x: (status_order.get(x["status"], 99), x["create_time"]))
+
+    for task in sorted_tasks:
+        task_id = task["id"]
+        source = task["source"]
+        task_type = task["type"]
+        status = task["status"]
+        error_msg = task.get("error_msg", "")
+        result_path = task.get("result_path", "")
+
+        # 状态图标和颜色
+        if status == "COMPLETED":
+            icon = "✅"
+            color = "green"
+        elif status == "PROCESSING":
+            icon = "🔄"
+            color = "blue"
+        elif status == "FAILED":
+            icon = "❌"
+            color = "red"
+        else:
+            icon = "⏳"
+            color = "gray"
+
+        # 任务类型图标
+        if task_type == "xiaoyuzhou":
+            type_icon = "🎧"
+        elif task_type == "bilibili":
+            type_icon = "📺"
+        elif task_type == "local":
+            type_icon = "📂"
+        else:
+            type_icon = "❓"
+
+        # 使用任务自带的名称
+        name = task.get("name") or source
+        if len(name) > 40:
+            name = name[:40] + "..."
+
+        # 获取进度状态
+        progress_status = task.get("progress_status", "")
+
+        # 显示任务行
+        with st.container():
+            col_icon, col_name, col_type, col_action = st.columns([1, 4, 1, 2])
+
+            with col_icon:
+                st.markdown(f"**{icon}**")
+
+            with col_name:
+                st.markdown(f"{name}")
+                if progress_status:
+                    st.caption(f"{progress_status}")
+                if status == "FAILED" and error_msg:
+                    st.caption(f"❌ 错误: {error_msg[:50]}...")
+
+            with col_type:
+                st.markdown(f"{type_icon} {task_type}")
+
+            with col_action:
+                if status == "COMPLETED" and result_path:
+                    # 归档名称
+                    archive_name = os.path.basename(result_path)
+                    if st.button("📖 查看报告", key=f"view_{task_id}", use_container_width=True):
+                        # 跳转到历史归档
+                        st.session_state.just_finished_archive = archive_name
+                        # 加载归档内容
+                        folder_path = os.path.join(ARCHIVE_DIR, archive_name)
+                        try:
+                            with open(os.path.join(folder_path, "raw.txt"), "r", encoding="utf-8") as f:
+                                st.session_state.podcast_text = f.read()
+                            with open(os.path.join(folder_path, "summary.md"), "r", encoding="utf-8") as f:
+                                st.session_state.summary = f.read()
+                        except:
+                            pass
+                        st.rerun()
+
+                elif status == "PENDING":
+                    if st.button("🗑️ 删除", key=f"del_{task_id}", use_container_width=True):
+                        task_queue.delete_task(task_id)
+                        st.rerun()
+
+                elif status == "FAILED":
+                    if st.button("🔄 重试", key=f"retry_{task_id}", use_container_width=True):
+                        # 重置为 PENDING
+                        task_queue.update_task_status(task_id, "PENDING")
+                        st.rerun()
+
+    # ================= 已完成任务快速查看（循环外）====================
+    completed_tasks = [t for t in task_queue.get_all_tasks() if t["status"] == "COMPLETED"]
+
+    if completed_tasks:
+        st.divider()
+        st.markdown("#### ✅ 已完成任务快速查看")
+        st.caption(f"共 {len(completed_tasks)} 个任务已完成")
+
+        # 直接显示所有已完成任务
+        for task in completed_tasks:
+            task_name = task.get('name', '未命名')
+            result_path = task.get("result_path", "")
+
+            if result_path:
+                summary_file = os.path.join(result_path, "summary.md")
+                if os.path.exists(summary_file):
+                    with open(summary_file, "r", encoding="utf-8") as f:
+                        summary_content = f.read()
+
+                    with st.expander(f"📖 {task_name} (点击展开)"):
+                        styled_summary = re.sub(
+                            r'(\[\d{2}:\d{2}\])',
+                            r'<span style="color: #2e7d32; background-color: #e8f5e9; font-weight: 700; padding: 2px 6px; border-radius: 5px; margin-right: 5px; box-shadow: 0px 1px 2px rgba(0,0,0,0.1);">\1</span>',
+                            summary_content
+                        )
+                        st.markdown(styled_summary, unsafe_allow_html=True)
+
+    st.divider()
+
 
 def load_api_key():
     """
@@ -324,9 +492,25 @@ def process_audio_file(audio_file_path, raw_text_file, api_key, selected_model, 
         progress_bar.progress(100)
         status_text.success("🎉 处理完成！数据已智能命名并安全归档。")
 
-        # 自动选中刚生成的归档
+        # 记录刚完成的归档名称，用于侧边栏自动选中
         if archive_folders:
-            st.session_state.history_selector = archive_folders[0]
+            st.session_state.just_finished_archive = archive_folders[0]
+            # 读取刚生成的摘要到 session_state（用于直接展示）
+            latest_archive_path = os.path.join(ARCHIVE_DIR, archive_folders[0])
+            with open(os.path.join(latest_archive_path, "summary.md"), "r", encoding="utf-8") as f:
+                st.session_state.summary = f.read()
+
+        # 清理临时文件
+        if os.path.exists(audio_file_path):
+            try:
+                os.remove(audio_file_path)
+            except Exception:
+                pass
+        if os.path.exists(raw_text_file):
+            try:
+                os.remove(raw_text_file)
+            except Exception:
+                pass
 
         # 刷新页面以显示新归档
         st.rerun()
@@ -351,6 +535,7 @@ if "podcast_text" not in st.session_state: st.session_state.podcast_text = ""
 if "summary" not in st.session_state: st.session_state.summary = ""
 if "history_selector" not in st.session_state: st.session_state.history_selector = "-- 新建提炼任务 --"
 if "llm_failed" not in st.session_state: st.session_state.llm_failed = False
+if "current_view_task" not in st.session_state: st.session_state.current_view_task = None
 
 # ================= 大模型重试处理（会话状态初始化后立即检查） =================
 # 检查是否有持久化的失败状态（页面刷新后也能恢复）
@@ -385,6 +570,17 @@ with st.sidebar:
     st.header("🗂️ 历史归档")
     archive_list = ["-- 新建提炼任务 --"] + get_archive_list()
 
+    # 检查是否有刚完成的归档需要自动选中
+    default_index = 0
+    if "just_finished_archive" in st.session_state:
+        just_finished = st.session_state.just_finished_archive
+        if just_finished in archive_list:
+            default_index = archive_list.index(just_finished)
+            # 直接修改 session_state 的值
+            st.session_state.history_selector = just_finished
+            # 清除标志
+            st.session_state.pop("just_finished_archive", None)
+
     def on_history_change():
         """
         历史归档选择变更回调函数。
@@ -409,6 +605,7 @@ with st.sidebar:
     selected_archive = st.selectbox(
         "选择往期音频查看",
         archive_list,
+        index=default_index,
         key="history_selector",
         on_change=on_history_change,
         help="选择已保存的音频归档查看，或选择「新建提炼任务」开始处理新音频。"
@@ -520,9 +717,12 @@ with st.sidebar:
         st.caption("点击上方按钮测试所有组件是否正常")
 
 # ================= 5. 文件处理逻辑 =================
-if selected_archive == "-- 新建提炼任务 --":
+# 如果有摘要内容（刚完成的任务），显示归档查看而不是新建任务
+show_new_task = (selected_archive == "-- 新建提炼任务 --") and not st.session_state.summary
+
+if show_new_task:
     # 创建标签页：本地文件 vs 播客直连 vs 视频剥离
-    tab_local, tab_podcast, tab_video = st.tabs(["📂 本地提炼", "🎧 播客直连", "📺 视频剥离"])
+    tab_local, tab_podcast, tab_video, tab_batch = st.tabs(["📂 本地提炼", "🎧 播客直连", "📺 视频剥离", "📥 批量处理"])
 
     with tab_local:
         uploaded_file = st.file_uploader("请拖拽一个 .mp3 音频文件", type=['mp3'], key="local_uploader")
@@ -554,6 +754,277 @@ if selected_archive == "-- 新建提炼任务 --":
                 )
         elif uploaded_file is None:
             st.info("请拖拽上传音频文件")
+
+    # ================= 批量处理 Tab =================
+    with tab_batch:
+        st.markdown("### 📥 批量任务输入区")
+
+        # 初始化 session state
+        if "batch_input" not in st.session_state:
+            st.session_state.batch_input = ""
+
+        # 批量输入文本域 - 使用 key 来控制
+        batch_input = st.text_area(
+            "批量粘贴链接（每行一个）",
+            key="batch_input_key",
+            height=200,
+            placeholder="示例：\nhttps://xiaoyuzhoufm.com/episode/xxx\nhttps://www.bilibili.com/video/xxx"
+        )
+
+        # 本地文件上传
+        st.markdown("**或上传本地音频文件：**")
+        uploaded_files = st.file_uploader(
+            "拖拽音频文件到此处（支持多选）",
+            type=['mp3', 'm4a', 'wav', 'flac', 'aac'],
+            accept_multiple_files=True,
+            key="batch_file_uploader"
+        )
+
+        # 转录引擎设置
+        col_engine, col_timeline = st.columns(2)
+        with col_engine:
+            batch_engine = st.selectbox(
+                "转录引擎",
+                ["sensevoice", "whisper"],
+                index=0,
+                key="batch_engine",
+                help="选择转录引擎：SenseVoice 更快，Whisper 更准确"
+            )
+        with col_timeline:
+            batch_timeline = st.select_slider(
+                "时间轴上限",
+                options=[8, 10, 15, 20, 25],
+                value=15,
+                key="batch_timeline",
+                help="AI 生成的时间轴最多不超过此条数"
+            )
+
+        # 按钮说明
+        with st.expander("❓ 批量处理按钮说明"):
+            st.markdown("""
+            - **🚀 一键开始批处理**：将输入的链接/文件加入队列，并开始处理
+            - **📥 加入队列**：将新的链接/文件加入到当前队列（队列必须有任务）
+            - **⏸️ 暂停/继续批处理**：暂停或继续当前队列的处理（不删除任务）
+            - **🗑️ 删除当前队列**：清空队列中的所有任务记录
+            """)
+
+        # 按钮行 - 三个按钮
+        col_start, col_add, col_stop = st.columns(3)
+
+        # 检查队列中是否有任务
+        all_tasks = task_queue.get_all_tasks()
+        has_tasks = len(all_tasks) > 0
+
+        with col_start:
+            # 一键开始批处理：有任务时禁用
+            if has_tasks:
+                st.button("🚀 一键开始批处理", disabled=True, use_container_width=True)
+            else:
+                # 一键开始批处理：入队并开始
+                def start_batch_and_clear():
+                    """一键开始批处理的回调函数"""
+                    # 读取 text_area 的内容
+                    current_input = st.session_state.get("batch_input_key", "")
+                    added_count = 0
+
+                    # 处理文本域中的链接
+                    if current_input.strip():
+                        lines = current_input.strip().split("\n")
+                        for line in lines:
+                            line = line.strip()
+                            if line:
+                                if line.lower().startswith("http"):
+                                    if "xiaoyuzhoufm.com" in line.lower():
+                                        task_type = "xiaoyuzhou"
+                                    elif "bilibili.com" in line.lower():
+                                        task_type = "bilibili"
+                                    else:
+                                        task_type = "unknown"
+                                else:
+                                    task_type = "local"
+
+                                if task_type != "unknown":
+                                    task_queue.add_task(
+                                        source=line,
+                                        task_type=task_type,
+                                        engine=st.session_state.batch_engine,
+                                        max_timeline_items=st.session_state.batch_timeline
+                                    )
+                                    added_count += 1
+
+                    # 处理上传的本地文件
+                    files = st.session_state.get("batch_file_uploader", [])
+                    if files:
+                        for uploaded_file in files:
+                            file_path = os.path.join(TEMP_DIR, f"batch_{uploaded_file.name}")
+                            with open(file_path, "wb") as f:
+                                f.write(uploaded_file.getbuffer())
+
+                            task_queue.add_task(
+                                source=file_path,
+                                task_type="local",
+                                engine=st.session_state.batch_engine,
+                                max_timeline_items=st.session_state.batch_timeline
+                            )
+                            added_count += 1
+
+                    # 清空输入框
+                    st.session_state.batch_input_key = ""
+
+                    # 启动 Worker
+                    if added_count > 0:
+                        try:
+                            worker.start_worker()
+                        except:
+                            pass
+                        # 设置刷新标志
+                        st.session_state.batch_need_rerun = True
+                        # 记录添加的数量
+                        st.session_state.batch_added_count = added_count
+
+                # 使用 on_click 回调
+                st.button(
+                    "🚀 一键开始批处理",
+                    type="primary",
+                    use_container_width=True,
+                    key="start_batch",
+                    on_click=start_batch_and_clear
+                )
+
+                # 显示添加结果（Toast 会在几秒后自动消失）
+                if "batch_added_count" in st.session_state:
+                    count = st.session_state.batch_added_count
+                    if count > 0:
+                        st.toast(f"✅ 已添加 {count} 个任务并开始处理", icon="📥")
+                    else:
+                        st.toast("请输入链接或上传音频文件", icon="⚠️")
+                    del st.session_state.batch_added_count
+
+        with col_add:
+            # 加入队列：队列有任务时才可用
+            if has_tasks:
+                # 加入队列的回调函数
+                def add_to_queue():
+                    current_input = st.session_state.get("batch_input_key", "")
+                    added_count = 0
+
+                    # 处理文本域中的链接
+                    if current_input.strip():
+                        lines = current_input.strip().split("\n")
+                        for line in lines:
+                            line = line.strip()
+                            if line:
+                                if line.lower().startswith("http"):
+                                    if "xiaoyuzhoufm.com" in line.lower():
+                                        task_type = "xiaoyuzhou"
+                                    elif "bilibili.com" in line.lower():
+                                        task_type = "bilibili"
+                                    else:
+                                        task_type = "unknown"
+                                else:
+                                    task_type = "local"
+
+                                if task_type != "unknown":
+                                    task_queue.add_task(
+                                        source=line,
+                                        task_type=task_type,
+                                        engine=st.session_state.batch_engine,
+                                        max_timeline_items=st.session_state.batch_timeline
+                                    )
+                                    added_count += 1
+
+                    # 处理上传的本地文件
+                    files = st.session_state.get("batch_file_uploader", [])
+                    if files:
+                        for uploaded_file in files:
+                            file_path = os.path.join(TEMP_DIR, f"batch_{uploaded_file.name}")
+                            with open(file_path, "wb") as f:
+                                f.write(uploaded_file.getbuffer())
+
+                            task_queue.add_task(
+                                source=file_path,
+                                task_type="local",
+                                engine=st.session_state.batch_engine,
+                                max_timeline_items=st.session_state.batch_timeline
+                            )
+                            added_count += 1
+
+                    # 清空输入框
+                    st.session_state.batch_input_key = ""
+
+                    return added_count
+
+                # 使用 on_click 回调
+                def on_add_click():
+                    result = add_to_queue()
+                    if result > 0:
+                        # 检查 Worker 是否在运行，如果没有则启动
+                        if not worker.is_worker_running():
+                            try:
+                                worker.start_worker()
+                            except Exception as e:
+                                print(f"启动 Worker 失败: {e}")
+                        # 设置刷新标志
+                        st.session_state.batch_need_rerun = True
+                        st.session_state.batch_show_msg = f"✅ 已添加 {result} 个任务到队列"
+                    else:
+                        st.session_state.batch_show_msg = "请输入链接或上传音频文件"
+
+                st.button("📥 加入队列", use_container_width=True, key="add_to_queue", on_click=on_add_click)
+
+                # 点击后自动刷新页面
+                if st.session_state.get("batch_need_rerun", False):
+                    st.session_state.batch_need_rerun = False
+                    st.rerun()
+
+                # 显示消息（Toast 会在几秒后自动消失）
+                if "batch_show_msg" in st.session_state:
+                    msg = st.session_state.batch_show_msg
+                    del st.session_state.batch_show_msg
+                    if "请输入" in msg:
+                        st.toast(msg, icon="⚠️")
+                    else:
+                        st.toast(msg, icon="📥")
+            else:
+                st.button("📥 加入队列", disabled=True, use_container_width=True)
+
+        with col_stop:
+            # 暂停/继续批处理：有任务时可以按下
+            if has_tasks:
+                # 检查是否暂停
+                is_paused = worker.is_paused()
+                if is_paused:
+                    # 显示继续按钮
+                    if st.button("▶️ 继续批处理", type="secondary", use_container_width=True, key="resume_batch"):
+                        worker.resume_worker()
+                        st.toast("▶️ 批处理已继续", icon="▶️")
+                        st.rerun()
+                else:
+                    # 显示暂停按钮
+                    if st.button("⏸️ 暂停批处理", type="secondary", use_container_width=True, key="pause_batch"):
+                        worker.pause_worker()
+                        st.warning("⏸️ 批处理已暂停")
+                        st.rerun()
+            else:
+                st.button("⏸️ 暂停批处理", disabled=True, use_container_width=True)
+
+        # 删除队列按钮（在 fragment 外面）
+        if st.button("🗑️ 删除当前队列", key="clear_queue_button", use_container_width=True):
+            # 删除所有任务（不包括归档）
+            all_tasks = task_queue.get_all_tasks()
+            for task in all_tasks:
+                task_queue.delete_task(task["id"])
+            st.success("✅ 队列已清空")
+            st.rerun()
+
+        # 任务监控大屏（包含已完成任务查看器）
+        render_task_monitor()
+
+        # 刷新按钮（放在 fragment 外面）
+        if st.button("🔄 刷新任务状态", key="refresh_task_status"):
+            st.rerun()
+
+        st.divider()
 
     with tab_podcast:
         # 平台支持状态
@@ -689,11 +1160,11 @@ if "llm_failed" in st.session_state and st.session_state.get("llm_failed"):
                 st.write(f"  - {f}")
                 temp_files.append(f)
 
-    col1, col2 = st.columns([1, 3])
-    with col1:
-        selected_file = st.selectbox("选择转录稿文件", temp_files if temp_files else [raw_text_file], key="retry_file_select")
+    selected_file = st.selectbox("选择转录稿文件", temp_files if temp_files else [raw_text_file], key="retry_file_select")
 
-        if st.button("🔄 重试调用大模型", type="primary", key="retry_llm"):
+    col_retry1, col_retry2 = st.columns(2)
+    with col_retry1:
+        if st.button("🔄 重试调用大模型", type="primary", key="retry_llm", use_container_width=True):
             if selected_file:
                 # 读取文字稿
                 retry_file_path = os.path.join(TEMP_DIR, selected_file)
@@ -743,8 +1214,9 @@ if "llm_failed" in st.session_state and st.session_state.get("llm_failed"):
                     st.warning("文件不存在")
             else:
                 st.warning("没有可用的转录稿文件")
-    with col2:
-        if st.button("放弃重试，重新开始", key="giveup_retry"):
+
+    with col_retry2:
+        if st.button("放弃重试，重新开始", key="giveup_retry", use_container_width=True):
             # 清理所有临时文件
             for f in os.listdir(TEMP_DIR):
                 if f.startswith("temp_"):
@@ -761,23 +1233,38 @@ if "llm_failed" in st.session_state and st.session_state.get("llm_failed"):
             st.rerun()
 
 else:
-    # 查看历史归档
-    st.info(f"📂 正在查看历史归档：**{selected_archive}**")
+    # 查看历史归档或刚完成的任务（有 summary 时自动显示最新归档）
+    if st.session_state.summary:
+        # 获取最新归档名称
+        archive_folders = get_archive_list()
+        if archive_folders:
+            display_name = archive_folders[0]
+        else:
+            display_name = "最新任务"
+    else:
+        display_name = selected_archive
+
+    # 如果在批量处理 Tab 且有完成的任务，不显示"正在查看"
+    in_batch_tab = (selected_archive == "-- 新建提炼任务 --")
+    has_completed = len(task_queue.get_all_tasks(status="COMPLETED")) > 0 if in_batch_tab else False
+
+    if not (in_batch_tab and has_completed):
+        st.info(f"📂 正在查看：**{display_name}**")
 
 
 # ================= 6. 结果展示与搜索 =================
 if st.session_state.summary:
     st.divider()
-    
+
     # 使用正则表达式将 [MM:SS] 格式时间戳替换为带样式的 HTML 元素
     styled_summary = re.sub(
-        r'(\[\d{2}:\d{2}\])', 
-        r'<span style="color: #2e7d32; background-color: #e8f5e9; font-weight: 700; padding: 2px 6px; border-radius: 5px; margin-right: 5px; box-shadow: 0px 1px 2px rgba(0,0,0,0.1);">\1</span>', 
+        r'(\[\d{2}:\d{2}\])',
+        r'<span style="color: #2e7d32; background-color: #e8f5e9; font-weight: 700; padding: 2px 6px; border-radius: 5px; margin-right: 5px; box-shadow: 0px 1px 2px rgba(0,0,0,0.1);">\1</span>',
         st.session_state.summary
     )
-    
+
     st.markdown(styled_summary, unsafe_allow_html=True)
-    
+
     st.download_button(
         label="⬇️ 下载当前 Markdown 报告",
         data=st.session_state.summary,  # 注：下载的文件为原始 Markdown 内容，不含 HTML 样式
