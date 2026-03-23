@@ -207,18 +207,90 @@ def detect_platform(url):
     根据 URL 识别播客平台。
 
     参数:
-        url (str): 播客链接
+        url (str): 播客链接（可能包含分享文案）
 
     返回:
-        str: 平台标识符，如 "xiaoyuzhou", "bilibili", "unknown"
+        str: 平台标识符，如 "xiaoyuzhou", "bilibili", "netease", "unknown"
     """
     url = url.lower()
     if "xiaoyuzhoufm.com" in url:
         return "xiaoyuzhou"
     elif "bilibili.com" in url:
         return "bilibili"
+    elif "163cn.tv" in url or "music.163.com" in url:
+        return "netease"
     else:
         return "unknown"
+
+
+def parse_netease_url(raw_text):
+    """
+    智能嗅探并净化网易云播客链接（终极版：支持动态解包短链）
+
+    参数:
+        raw_text (str): 用户分享的原始文本（可能包含分享文案）
+
+    返回:
+        str or None: 净化后的标准播客 URL，失败返回 None
+    """
+    # 场景 1: 嗅探并解包手机端短链 (如 https://163cn.tv/3Kc5VwN)
+    short_match = re.search(r'(https?://163cn\.tv/[a-zA-Z0-9]+)', raw_text)
+    if short_match:
+        short_url = short_match.group(1)
+        try:
+            # 伪装浏览器请求，防止被网易云基础风控拦截
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            }
+            # 发起请求，requests 默认会跟随重定向 (allow_redirects=True)
+            response = requests.get(short_url, headers=headers, timeout=10)
+
+            # response.url 就是重定向后极其冗长的真实 URL
+            real_url = response.url
+
+            # 从冗长的 URL 中精准提取 id
+            # 兼容形如 ?app_version=xxx&id=12345 或 ?id=12345 的情况
+            id_match = re.search(r'[?&]id=(\d+)', real_url)
+            if id_match:
+                podcast_id = id_match.group(1)
+                # 重新组装成 yt-dlp 绝对能认出来的纯净格式！
+                return f"https://music.163.com/program?id={podcast_id}"
+
+        except Exception as e:
+            print(f"⚠️ 短链解包失败: {e}")
+            return None  # 如果网络炸了，优雅退出
+
+    # 场景 2: 嗅探 PC/网页端长链 (直接正则切除盲肠参数)
+    long_match = re.search(r'https?://music\.163\.com/(?:#/)?(?:program|dj)\?id=(\d+)', raw_text)
+    if long_match:
+        podcast_id = long_match.group(1)
+        return f"https://music.163.com/program?id={podcast_id}"
+
+    # 如果什么都没匹配到，返回 None
+    return None
+
+
+def fetch_netease_title(podcast_url):
+    """
+    获取网易云播客标题。
+
+    参数:
+        podcast_url (str): 净化后的播客 URL
+
+    返回:
+        str: 播客标题，失败返回 None
+    """
+    ydl_opts = {
+        'quiet': True,
+        'no_warnings': True,
+    }
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(podcast_url, download=False)
+            return info.get('title', None)
+    except Exception as e:
+        print(f"获取标题失败: {e}")
+        return None
 
 
 def download_xiaoyuzhou_audio(url, save_dir="temp_audio"):
@@ -379,12 +451,113 @@ def download_xiaoyuzhou_audio(url, save_dir="temp_audio"):
         }
 
 
-def route_and_download(url, save_dir="temp_dir", cookies_path=None):
+def download_netease_audio(raw_text, save_dir="temp_audio"):
+    """
+    从网易云播客链接下载音频。
+
+    参数:
+        raw_text (str): 用户分享的原始文本（可能包含分享文案）
+        save_dir (str): 保存目录
+
+    返回:
+        dict: 包含以下键的字典:
+            - success (bool): 是否成功
+            - file_path (str): 下载的音频文件路径（成功时）
+            - title (str): 播客标题（成功时）
+            - error (str): 错误信息（失败时）
+    """
+    os.makedirs(save_dir, exist_ok=True)
+
+    # 先解析并净化 URL
+    podcast_url = parse_netease_url(raw_text)
+    if not podcast_url:
+        return {
+            'success': False,
+            'error': "无法解析网易云播客链接，请检查链接是否正确"
+        }
+
+    print(f"净化后的播客链接: {podcast_url}")
+
+    # 先获取标题
+    title = fetch_netease_title(podcast_url)
+    if not title:
+        title = "网易云播客"
+    title = re.sub(r'[\\/*?:"<>|]', "", title).strip()
+    if len(title) > 200:
+        title = title[:200]
+
+    # 下载音频
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'outtmpl': os.path.join(save_dir, f"{title}.%(ext)s"),
+        'quiet': True,
+        'no_warnings': True,
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }],
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([podcast_url])
+
+        # 查找下载的文件
+        for ext in ['.mp3', '.m4a', '.webm', '.aac', '.flac']:
+            file_path = os.path.join(save_dir, f"{title}{ext}")
+            if os.path.exists(file_path):
+                # 如果是其他格式，转换为 mp3
+                if ext != '.mp3':
+                    mp3_path = file_path.replace(ext, '.mp3')
+                    try:
+                        subprocess.run([
+                            'ffmpeg', '-i', file_path,
+                            '-codec:a', 'libmp3lame',
+                            '-q:a', '2', mp3_path, '-y'
+                        ], capture_output=True, check=True)
+                        os.remove(file_path)
+                        file_path = mp3_path
+                    except Exception:
+                        pass
+
+                if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+                    return {
+                        'success': True,
+                        'file_path': file_path,
+                        'title': title
+                    }
+
+        return {
+            'success': False,
+            'error': "音频文件下载失败或未找到"
+        }
+
+    except yt_dlp.utils.DownloadError as e:
+        error_msg = str(e)
+        # 检测是否为 VIP/付费内容 (403 错误)
+        if "HTTP Error 403" in error_msg or "403" in error_msg:
+            return {
+                'success': False,
+                'error': "此为网易云 VIP/付费专属播客，请使用网易云客户端下载音频后，通过本地文件拖拽上传提炼"
+            }
+        return {
+            'success': False,
+            'error': f"下载失败: {error_msg}"
+        }
+    except Exception as e:
+        return {
+            'success': False,
+            'error': f"下载过程出错: {str(e)}"
+        }
+
+
+def route_and_download(url, save_dir="temp_audio", cookies_path=None):
     """
     根据 URL 类型智能路由并下载音频。
 
     参数:
-        url (str): 在线链接
+        url (str): 在线链接（可能包含分享文案）
         save_dir (str): 保存目录
         cookies_path (str, optional): cookies 文件路径
 
@@ -398,9 +571,11 @@ def route_and_download(url, save_dir="temp_dir", cookies_path=None):
     elif platform == "bilibili":
         downloader = AudioDownloader(save_dir=save_dir)
         return downloader.download_bilibili_audio(url, cookies_path)
+    elif platform == "netease":
+        return download_netease_audio(url, save_dir)
     else:
         return {
             'success': False,
-            'error': f"不支持的平台，当前仅支持小宇宙和 Bilibili"
+            'error': f"不支持的平台，当前仅支持小宇宙、网易云和 Bilibili"
         }
 

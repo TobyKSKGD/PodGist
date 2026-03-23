@@ -84,6 +84,32 @@ def is_paused():
     return os.path.exists(pause_file)
 
 
+def cleanup_temp_audio_file(audio_file_path):
+    """
+    清理临时音频文件（仅清理下载的文件，不清理本地文件）。
+
+    参数:
+        audio_file_path (str): 音频文件路径
+    """
+    if not audio_file_path:
+        return
+
+    # 检查文件是否存在
+    if not os.path.exists(audio_file_path):
+        return
+
+    # 检查文件是否在 TEMP_DIR 中（只清理 temp_audio 目录下的文件）
+    if not audio_file_path.startswith(TEMP_DIR):
+        return
+
+    try:
+        os.remove(audio_file_path)
+        print(f"[Worker] 已清理临时文件: {audio_file_path}")
+    except Exception as e:
+        print(f"[Worker] 清理临时文件失败: {e}")
+
+
+
 def get_api_key():
     """
     从 .env 文件读取 API Key。
@@ -106,23 +132,28 @@ def get_task_type(source):
         source (str): 任务来源
 
     返回:
-        str: 任务类型 (local / bilibili / xiaoyuzhou)
+        str: 任务类型 (local / bilibili / xiaoyuzhou / netease)
     """
-    source_lower = source.lower()
+    # 转为小写方便比较
+    s = source.lower()
 
-    if source_lower.startswith("http"):
-        if "xiaoyuzhoufm.com" in source_lower:
-            return "xiaoyuzhou"
-        elif "bilibili.com" in source_lower:
-            return "bilibili"
-        else:
-            return "unknown"
-    else:
-        # 本地文件
-        if os.path.exists(source):
-            return "local"
-        else:
-            return "unknown"
+    # 网易云检测 - 必须在其他检测之前
+    if "163cn.tv" in s or "music.163.com" in s:
+        return "netease"
+
+    # 小宇宙检测
+    if "xiaoyuzhoufm.com" in s:
+        return "xiaoyuzhou"
+
+    # B站检测
+    if "bilibili.com" in s:
+        return "bilibili"
+
+    # 本地文件检测
+    if os.path.exists(source):
+        return "local"
+
+    return "unknown"
 
 
 def process_single_task(task, api_key):
@@ -143,6 +174,9 @@ def process_single_task(task, api_key):
 
     print(f"[Worker] 开始处理任务: {source}")
 
+    # 初始化音频文件路径（用于后续清理）
+    audio_file_path = None
+
     try:
         # 步骤 1: 获取音频文件
         task_type = get_task_type(source)
@@ -152,7 +186,7 @@ def process_single_task(task, api_key):
             # 本地文件
             audio_file_path = source
             title = os.path.splitext(os.path.basename(source))[0]
-        elif task_type in ("xiaoyuzhou", "bilibili"):
+        elif task_type in ("xiaoyuzhou", "bilibili", "netease"):
             # 下载在线音频
             result = route_and_download(source, TEMP_DIR)
             if not result["success"]:
@@ -255,11 +289,18 @@ def process_single_task(task, api_key):
 
         print(f"[Worker] 任务完成: {title}")
 
+        # 清理临时音频文件
+        cleanup_temp_audio_file(audio_file_path)
+
         return True, archive_path, None
 
     except Exception as e:
         error_msg = f"{str(e)}\n{traceback.format_exc()}"
         print(f"[Worker] 任务失败: {error_msg}")
+
+        # 清理临时音频文件（即使失败也清理）
+        cleanup_temp_audio_file(audio_file_path)
+
         return False, None, error_msg
 
 
@@ -331,6 +372,19 @@ def worker_loop():
             # 取第一个任务
             task = pending_tasks[0]
             task_id = task["id"]
+
+            # 清理 temp_audio 中的旧临时文件（只清理音频文件，不清理标志文件）
+            try:
+                for f in os.listdir(TEMP_DIR):
+                    filepath = os.path.join(TEMP_DIR, f)
+                    # 只清理音频文件和临时文件，保留标志文件
+                    if os.path.isfile(filepath) and not f.startswith('.'):
+                        ext = os.path.splitext(f)[1].lower()
+                        if ext in ['.mp3', '.m4a', '.wav', '.flac', '.aac', '.webm', '.txt', '.json']:
+                            os.remove(filepath)
+                            print(f"[Worker] 清理旧临时文件: {f}")
+            except Exception as e:
+                print(f"[Worker] 清理临时文件失败: {e}")
 
             # 标记为处理中
             task_queue.mark_processing(task_id)

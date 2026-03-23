@@ -110,6 +110,8 @@ def render_task_monitor():
             type_icon = "🎧"
         elif task_type == "bilibili":
             type_icon = "📺"
+        elif task_type == "netease":
+            type_icon = "🎵 网易云音乐"
         elif task_type == "local":
             type_icon = "📂"
         else:
@@ -138,7 +140,7 @@ def render_task_monitor():
                     st.caption(f"❌ 错误: {error_msg[:50]}...")
 
             with col_type:
-                st.markdown(f"{type_icon} {task_type}")
+                st.markdown(f"{type_icon}")
 
             with col_action:
                 if status == "COMPLETED" and result_path:
@@ -190,7 +192,7 @@ def render_task_monitor():
 
                     with st.expander(f"📖 {task_name} (点击展开)"):
                         styled_summary = re.sub(
-                            r'(\[\d{2}:\d{2}\])',
+                            r'(\[\d+:\d{2}\])',
                             r'<span style="color: #2e7d32; background-color: #e8f5e9; font-weight: 700; padding: 2px 6px; border-radius: 5px; margin-right: 5px; box-shadow: 0px 1px 2px rgba(0,0,0,0.1);">\1</span>',
                             summary_content
                         )
@@ -571,15 +573,13 @@ with st.sidebar:
     archive_list = ["-- 新建提炼任务 --"] + get_archive_list()
 
     # 检查是否有刚完成的归档需要自动选中
-    default_index = 0
+    # 解决方案：只在 session_state 中设置值，不再同时使用 index 参数
     if "just_finished_archive" in st.session_state:
         just_finished = st.session_state.just_finished_archive
         if just_finished in archive_list:
-            default_index = archive_list.index(just_finished)
-            # 直接修改 session_state 的值
             st.session_state.history_selector = just_finished
-            # 清除标志
-            st.session_state.pop("just_finished_archive", None)
+        # 清除标志
+        st.session_state.pop("just_finished_archive", None)
 
     def on_history_change():
         """
@@ -605,7 +605,6 @@ with st.sidebar:
     selected_archive = st.selectbox(
         "选择往期音频查看",
         archive_list,
-        index=default_index,
         key="history_selector",
         on_change=on_history_change,
         help="选择已保存的音频归档查看，或选择「新建提炼任务」开始处理新音频。"
@@ -768,7 +767,7 @@ if show_new_task:
             "批量粘贴链接（每行一个）",
             key="batch_input_key",
             height=200,
-            placeholder="示例：\nhttps://xiaoyuzhoufm.com/episode/xxx\nhttps://www.bilibili.com/video/xxx"
+            placeholder="示例：\nhttps://xiaoyuzhoufm.com/episode/xxx\nhttps://www.bilibili.com/video/xxx\nhttps://163cn.tv/3Kc5VwN"
         )
 
         # 本地文件上传
@@ -833,11 +832,17 @@ if show_new_task:
                         for line in lines:
                             line = line.strip()
                             if line:
-                                if line.lower().startswith("http"):
-                                    if "xiaoyuzhoufm.com" in line.lower():
+                                # 检查文本中是否包含 URL（在任意位置，不仅仅是开头）
+                                line_lower = line.lower()
+                                has_url = "http" in line_lower
+
+                                if has_url:
+                                    if "xiaoyuzhoufm.com" in line_lower:
                                         task_type = "xiaoyuzhou"
-                                    elif "bilibili.com" in line.lower():
+                                    elif "bilibili.com" in line_lower:
                                         task_type = "bilibili"
+                                    elif "163cn.tv" in line_lower or "music.163.com" in line_lower:
+                                        task_type = "netease"
                                     else:
                                         task_type = "unknown"
                                 else:
@@ -879,8 +884,12 @@ if show_new_task:
                             pass
                         # 设置刷新标志
                         st.session_state.batch_need_rerun = True
-                        # 记录添加的数量
-                        st.session_state.batch_added_count = added_count
+                        # 设置 Toast 消息（用新变量避免冲突）
+                        st.session_state.batch_show_toast = f"✅ 已添加 {added_count} 个任务并开始处理"
+                        st.session_state.batch_toast_type = "success"
+                    else:
+                        st.session_state.batch_show_toast = "请输入链接或上传音频文件"
+                        st.session_state.batch_toast_type = "warning"
 
                 # 使用 on_click 回调
                 st.button(
@@ -892,13 +901,17 @@ if show_new_task:
                 )
 
                 # 显示添加结果（Toast 会在几秒后自动消失）
-                if "batch_added_count" in st.session_state:
-                    count = st.session_state.batch_added_count
-                    if count > 0:
-                        st.toast(f"✅ 已添加 {count} 个任务并开始处理", icon="📥")
+                # 注意：这里用 session_state 传递消息，只有在本次点击后才会有值
+                if st.session_state.get("batch_show_toast"):
+                    toast_msg = st.session_state.batch_show_toast
+                    toast_type = st.session_state.get("batch_toast_type", "info")
+                    del st.session_state.batch_show_toast
+                    if "batch_toast_type" in st.session_state:
+                        del st.session_state.batch_toast_type
+                    if toast_type == "success":
+                        st.toast(toast_msg, icon="📥")
                     else:
-                        st.toast("请输入链接或上传音频文件", icon="⚠️")
-                    del st.session_state.batch_added_count
+                        st.toast(toast_msg, icon="⚠️")
 
         with col_add:
             # 加入队列：队列有任务时才可用
@@ -914,11 +927,17 @@ if show_new_task:
                         for line in lines:
                             line = line.strip()
                             if line:
-                                if line.lower().startswith("http"):
-                                    if "xiaoyuzhoufm.com" in line.lower():
+                                # 检查文本中是否包含 URL（在任意位置，不仅仅是开头）
+                                line_lower = line.lower()
+                                has_url = "http" in line_lower
+
+                                if has_url:
+                                    if "xiaoyuzhoufm.com" in line_lower:
                                         task_type = "xiaoyuzhou"
-                                    elif "bilibili.com" in line.lower():
+                                    elif "bilibili.com" in line_lower:
                                         task_type = "bilibili"
+                                    elif "163cn.tv" in line_lower or "music.163.com" in line_lower:
+                                        task_type = "netease"
                                     else:
                                         task_type = "unknown"
                                 else:
@@ -966,9 +985,12 @@ if show_new_task:
                                 print(f"启动 Worker 失败: {e}")
                         # 设置刷新标志
                         st.session_state.batch_need_rerun = True
-                        st.session_state.batch_show_msg = f"✅ 已添加 {result} 个任务到队列"
+                        # 设置 Toast 消息
+                        st.session_state.batch_show_toast = f"✅ 已添加 {result} 个任务到队列"
+                        st.session_state.batch_toast_type = "success"
                     else:
-                        st.session_state.batch_show_msg = "请输入链接或上传音频文件"
+                        st.session_state.batch_show_toast = "请输入链接或上传音频文件"
+                        st.session_state.batch_toast_type = "warning"
 
                 st.button("📥 加入队列", use_container_width=True, key="add_to_queue", on_click=on_add_click)
 
@@ -977,14 +999,17 @@ if show_new_task:
                     st.session_state.batch_need_rerun = False
                     st.rerun()
 
-                # 显示消息（Toast 会在几秒后自动消失）
-                if "batch_show_msg" in st.session_state:
-                    msg = st.session_state.batch_show_msg
-                    del st.session_state.batch_show_msg
-                    if "请输入" in msg:
-                        st.toast(msg, icon="⚠️")
+                # 显示消息（使用统一的变量）
+                if st.session_state.get("batch_show_toast"):
+                    toast_msg = st.session_state.batch_show_toast
+                    toast_type = st.session_state.get("batch_toast_type", "info")
+                    del st.session_state.batch_show_toast
+                    if "batch_toast_type" in st.session_state:
+                        del st.session_state.batch_toast_type
+                    if toast_type == "success":
+                        st.toast(toast_msg, icon="📥")
                     else:
-                        st.toast(msg, icon="📥")
+                        st.toast(toast_msg, icon="⚠️")
             else:
                 st.button("📥 加入队列", disabled=True, use_container_width=True)
 
@@ -1014,6 +1039,10 @@ if show_new_task:
             all_tasks = task_queue.get_all_tasks()
             for task in all_tasks:
                 task_queue.delete_task(task["id"])
+            # 清除所有可能存在的消息状态
+            for key in ["batch_added_count", "batch_show_msg", "batch_show_toast", "batch_toast_type"]:
+                if key in st.session_state:
+                    del st.session_state[key]
             st.success("✅ 队列已清空")
             st.rerun()
 
@@ -1031,39 +1060,42 @@ if show_new_task:
         st.markdown("**平台支持状态：**")
         col1, col2 = st.columns(2)
         with col1:
-            st.success("✅ 已支持：小宇宙")
+            st.success("✅ 已支持：小宇宙、网易云音乐")
         with col2:
-            st.info("⏳ 规划中：苹果播客、网易云音乐、喜马拉雅")
-
-        # 操作引导
-        with st.expander("💡 如何获取小宇宙链接？", expanded=False):
-            st.markdown("""
-            1. 打开手机【小宇宙 App】
-            2. 选择要下载的播客单集
-            3. 点击右上角或底部的【分享】按钮
-            4. 选择【复制链接】
-            5. 发送到电脑并粘贴到下方输入框
-
-            链接格式通常包含：`xiaoyuzhoufm.com/episode/...`
-            """)
+            st.info("⏳ 规划中：苹果播客、喜马拉雅")
 
         # 输入框
-        podcast_url = st.text_input("🔗 请粘贴播客单集链接", placeholder="https://xiaoyuzhoufm.com/episode/xxx", key="podcast_url")
+        podcast_url = st.text_input("🔗 请粘贴播客单集链接", placeholder="https://xiaoyuzhoufm.com/episode/xxx 或 https://163cn.tv/xxx", key="podcast_url")
 
         if podcast_url and api_key:
             if st.button("⚡ 解析并提取音频", use_container_width=True, key="podcast_process"):
                 # 先清理 temp_audio 目录
                 cleanup_temp_files()
 
-                with st.spinner("🔗 正在连接小宇宙服务器提取音频..."):
+                # 检测平台
+                from backend.downloader import detect_platform
+                platform = detect_platform(podcast_url)
+
+                # 根据平台选择下载函数
+                if platform == "netease":
+                    from backend.downloader import download_netease_audio
+                    download_func = download_netease_audio
+                    spinner_text = "🔗 正在连接网易云音乐服务器提取音频..."
+                    success_msg = "✅ 音频提取成功"
+                else:
+                    from backend.downloader import download_xiaoyuzhou_audio
+                    download_func = download_xiaoyuzhou_audio
+                    spinner_text = "🔗 正在连接小宇宙服务器提取音频..."
+                    success_msg = "✅ 音频提取成功"
+
+                with st.spinner(spinner_text):
                     try:
-                        from backend.downloader import download_xiaoyuzhou_audio
-                        download_result = download_xiaoyuzhou_audio(podcast_url, TEMP_DIR)
+                        download_result = download_func(podcast_url, TEMP_DIR)
 
                         if download_result['success']:
                             audio_file_path = download_result['file_path']
                             podcast_title = download_result['title']
-                            st.success(f"✅ 音频提取成功: {podcast_title}")
+                            st.success(f"{success_msg}: {podcast_title}")
 
                             # 使用标题创建临时文件名
                             current_audio_name = f"temp_{podcast_title}.mp3"
@@ -1089,7 +1121,35 @@ if show_new_task:
         elif podcast_url and not api_key:
             st.warning("请先在左侧填写 API Key")
         else:
-            st.info("请粘贴小宇宙播客单集链接")
+            st.info("请粘贴小宇宙或网易云音乐播客链接")
+
+        # 操作引导 - 小宇宙
+        with st.expander("💡 如何获取小宇宙链接？", expanded=False):
+            st.markdown("""
+            1. 打开手机【小宇宙 App】
+            2. 选择要下载的播客单集
+            3. 点击右上角或底部的【分享】按钮
+            4. 选择【复制链接】
+            5. 发送到电脑并粘贴到下方输入框
+
+            链接格式通常包含：`xiaoyuzhoufm.com/episode/...`
+            """)
+
+        # 操作引导 - 网易云音乐
+        with st.expander("💡 如何获取网易云音乐播客链接？", expanded=False):
+            st.markdown("""
+            **手机 App 分享：**
+            1. 打开【网易云音乐 App】
+            2. 进入播客电台，找到想听的单集
+            3. 点击右上角【分享】→ 【复制链接】
+            4. 粘贴到下方（支持带文案分享，如 `分享#xxx#...https://163cn.tv/xxx`）
+
+            **网页版复制：**
+            - 复制链接如 `https://music.163.com/#/program?id=xxx`
+
+            **PC 客户端复制：**
+            - 复制链接如 `https://music.163.com/dj?id=xxx&uct2=...`
+            """)
 
     with tab_video:
         st.markdown("支持 Bilibili 视频链接，自动提取音频并生成摘要")
@@ -1257,8 +1317,9 @@ if st.session_state.summary:
     st.divider()
 
     # 使用正则表达式将 [MM:SS] 格式时间戳替换为带样式的 HTML 元素
+    # 支持任意位数分钟（如 [99:59] 或 [100:00]）
     styled_summary = re.sub(
-        r'(\[\d{2}:\d{2}\])',
+        r'(\[\d+:\d{2}\])',
         r'<span style="color: #2e7d32; background-color: #e8f5e9; font-weight: 700; padding: 2px 6px; border-radius: 5px; margin-right: 5px; box-shadow: 0px 1px 2px rgba(0,0,0,0.1);">\1</span>',
         st.session_state.summary
     )
