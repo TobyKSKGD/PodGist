@@ -1,4 +1,5 @@
 import streamlit as st
+from PIL import Image
 import os
 import base64
 import time
@@ -11,8 +12,15 @@ from backend.downloader import AudioDownloader
 from backend import task_queue
 from backend import worker
 
+# 加载 Favicon 图片
+favicon_path = os.path.join(os.path.dirname(__file__), "assets", "favicon.png")
+if os.path.exists(favicon_path):
+    fav_image = Image.open(favicon_path)
+else:
+    fav_image = "🎙️"  # 备用方案
+
 # ================= 1. 页面配置 =================
-st.set_page_config(page_title="PodGist | 音频提炼器", page_icon="🎙️", layout="wide")
+st.set_page_config(page_title="PodGist", page_icon=fav_image, layout="wide")
 
 # ================= 启动时初始化 =================
 # 初始化任务队列数据库
@@ -551,9 +559,32 @@ if saved_state:
     st.session_state.llm_failed_original_name = saved_state.get("original_name", "未命名")
     st.session_state.llm_failed_raw_file = saved_state.get("raw_file_path", "")
 
-# ================= 4. 侧边栏界面 =================
-st.markdown("<h1 style='text-align: center;'>🎙️ PodGist</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align: center;'>上传音频提取精华，或从左侧历史归档中唤醒记忆，支持 AI 精准定位。</p>", unsafe_allow_html=True)
+# ================= 主页头部与侧边栏渲染 (防 Markdown 缩进 Bug 版) =================
+
+# 1. 主页的水平并排 Logo + 标题
+hero_section = """<div style="display: flex; justify-content: center; align-items: center; gap: 15px; margin-bottom: 10px; margin-top: -10px;">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 250" width="60px">
+<defs>
+<linearGradient id="gradP3" x1="0%" y1="100%" x2="100%" y2="0%">
+<stop offset="0%" stop-color="#001A9C" />
+<stop offset="100%" stop-color="#008080" />
+</linearGradient>
+<linearGradient id="gradG3" x1="0%" y1="0%" x2="100%" y2="100%">
+<stop offset="0%" stop-color="#00E5FF" />
+<stop offset="100%" stop-color="#B2FF59" />
+</linearGradient>
+</defs>
+<g transform="translate(0, -10)">
+<path d="M 120 190 L 120 60 L 160 60 A 50 50 0 0 1 160 160 L 120 160" fill="none" stroke="url(#gradP3)" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 230 110 L 280 110 A 50 50 0 1 1 260 70" fill="none" stroke="url(#gradG3)" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="260" cy="70" r="14" fill="#FFFFFF"/>
+</g>
+</svg>
+<h1 style="margin: 0; padding: 0; font-size: 2.8rem;">PodGist</h1>
+</div>"""
+
+st.markdown(hero_section, unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: #888;'>上传音频提取精华，或从左侧历史归档中唤醒记忆，支持 AI 精准定位。</p>", unsafe_allow_html=True)
 st.divider()
 
 with st.sidebar:
@@ -1362,11 +1393,11 @@ else:
     else:
         display_name = selected_archive
 
-    # 如果在批量处理 Tab 且有完成的任务，不显示"正在查看"
+    # 如果在批量处理 Tab 且没有任务，不显示"正在查看"
     in_batch_tab = (selected_archive == "-- 新建提炼任务 --")
-    has_completed = len(task_queue.get_all_tasks(status="COMPLETED")) > 0 if in_batch_tab else False
+    has_any_tasks = len(task_queue.get_all_tasks()) > 0
 
-    if not (in_batch_tab and has_completed):
+    if not in_batch_tab or has_any_tasks:
         st.info(f"📂 正在查看：**{display_name}**")
 
 
