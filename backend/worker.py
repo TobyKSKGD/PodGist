@@ -32,6 +32,18 @@ TEMP_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "temp_audio"
 os.makedirs(ARCHIVE_DIR, exist_ok=True)
 os.makedirs(TEMP_DIR, exist_ok=True)
 
+# Worker 停止标志
+_worker_stop_flag = False
+
+
+def stop_worker():
+    """
+    停止 Worker 线程（设置停止标志）。
+    """
+    global _worker_stop_flag
+    _worker_stop_flag = True
+    print("[Worker] 已设置停止标志")
+
 
 def is_worker_running():
     """
@@ -132,10 +144,12 @@ def get_task_type(source):
         source (str): 任务来源
 
     返回:
-        str: 任务类型 (local / bilibili / xiaoyuzhou / netease)
+        str: 任务类型 (local / bilibili / xiaoyuzhou / netease / ximalaya)
     """
+    print(f"[get_task_type] source={source}")
     # 转为小写方便比较
     s = source.lower()
+    print(f"[get_task_type] s={s}")
 
     # 网易云检测 - 必须在其他检测之前
     if "163cn.tv" in s or "music.163.com" in s:
@@ -144,6 +158,11 @@ def get_task_type(source):
     # 小宇宙检测
     if "xiaoyuzhoufm.com" in s:
         return "xiaoyuzhou"
+
+    # 喜马拉雅检测
+    if "xima.tv" in s or "ximalaya.com" in s:
+        print(f"[get_task_type] matched ximalaya!")
+        return "ximalaya"
 
     # B站检测
     if "bilibili.com" in s:
@@ -180,13 +199,25 @@ def process_single_task(task, api_key):
     try:
         # 步骤 1: 获取音频文件
         task_type = get_task_type(source)
+        print(f"[Worker] source={source}, task_type={task_type}, type={type(task_type)}")
         task_queue.update_progress_status(task_id, "📥 正在获取音频...")
 
-        if task_type == "local":
+        # 强制处理 ximalaya
+        if task_type == 'ximalaya':
+            print("[Worker] 进入 ximalaya 下载分支")
+            result = route_and_download(source, TEMP_DIR)
+            if not result["success"]:
+                return False, None, f"下载失败: {result.get('error', '未知错误')}"
+            audio_file_path = result["file_path"]
+            title = result["title"]
+            task_queue.update_task_name(task_id, title)
+            task_queue.update_progress_status(task_id, "✅ 音频获取成功")
+            # 继续转录...
+        elif task_type == "local":
             # 本地文件
             audio_file_path = source
             title = os.path.splitext(os.path.basename(source))[0]
-        elif task_type in ("xiaoyuzhou", "bilibili", "netease"):
+        elif task_type in ('xiaoyuzhou', 'bilibili', 'netease', 'ximalaya'):
             # 下载在线音频
             result = route_and_download(source, TEMP_DIR)
             if not result["success"]:
@@ -311,6 +342,9 @@ def should_stop():
     返回:
         bool: 是否应该停止
     """
+    global _worker_stop_flag
+    if _worker_stop_flag:
+        return True
     stop_file = os.path.join(TEMP_DIR, ".worker_stop_flag")
     return os.path.exists(stop_file)
 
@@ -455,14 +489,28 @@ def retry_failed_tasks(api_key):
     return success_count
 
 
-def start_worker():
+def start_worker(force_restart=False):
     """
     启动 Worker 线程（如果尚未运行）。
+
+    参数:
+        force_restart (bool): 是否强制重启
     """
+    global _worker_stop_flag
+
     # 检查是否已在运行
     if is_worker_running():
-        print("[Worker] 线程已在运行中")
-        return False
+        if not force_restart:
+            print("[Worker] 线程已在运行中")
+            return False
+        # 强制停止旧线程
+        print("[Worker] 强制停止旧线程...")
+        _worker_stop_flag = True
+        import time
+        time.sleep(0.5)  # 等待线程结束
+
+    # 重置停止标志
+    _worker_stop_flag = False
 
     # 清理内存
     gc.collect()

@@ -210,7 +210,7 @@ def detect_platform(url):
         url (str): 播客链接（可能包含分享文案）
 
     返回:
-        str: 平台标识符，如 "xiaoyuzhou", "bilibili", "netease", "unknown"
+        str: 平台标识符，如 "xiaoyuzhou", "bilibili", "netease", "ximalaya", "unknown"
     """
     url = url.lower()
     if "xiaoyuzhoufm.com" in url:
@@ -219,6 +219,8 @@ def detect_platform(url):
         return "bilibili"
     elif "163cn.tv" in url or "music.163.com" in url:
         return "netease"
+    elif "xima.tv" in url or "ximalaya.com" in url:
+        return "ximalaya"
     else:
         return "unknown"
 
@@ -270,6 +272,55 @@ def parse_netease_url(raw_text):
     return None
 
 
+def parse_ximalaya_url(raw_text):
+    """
+    智能嗅探并净化喜马拉雅播客链接（支持动态解包短链）
+
+    参数:
+        raw_text (str): 用户分享的原始文本（可能包含分享文案）
+
+    返回:
+        str or None: 净化后的标准播客 URL，失败返回 None
+    """
+    # 场景 1: 短链 xima.tv/xxx
+    short_match = re.search(r'(https?://xima\.tv/[a-zA-Z0-9_]+)', raw_text)
+    if short_match:
+        short_url = short_match.group(1)
+        # 移除可能的追踪参数如 ?_sonic=0
+        short_url = re.sub(r'\?_sonic=\d+', '', short_url)
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            }
+            response = requests.get(short_url, headers=headers, timeout=10, allow_redirects=True)
+            real_url = response.url
+
+            # 从重定向 URL 中提取音频 ID
+            # 格式: https://m.ximalaya.com/gatekeeper/podcast-share/sound/964832711
+            sound_match = re.search(r'/sound/(\d+)', real_url)
+            if sound_match:
+                sound_id = sound_match.group(1)
+                return f"https://m.ximalaya.com/sound/{sound_id}"
+
+        except Exception as e:
+            print(f"⚠️ 喜马拉雅短链解包失败: {e}")
+            return None
+
+    # 场景 2: 长链 m.ximalaya.com/sound/xxx
+    long_match = re.search(r'https?://(?:[a-z]+\.)?ximalaya\.com/sound/(\d+)', raw_text)
+    if long_match:
+        sound_id = long_match.group(1)
+        return f"https://m.ximalaya.com/sound/{sound_id}"
+
+    # 场景 3: 带参数的分享链接
+    share_match = re.search(r'https?://m\.ximalaya\.com/gatekeeper/podcast-share/sound/(\d+)', raw_text)
+    if share_match:
+        sound_id = share_match.group(1)
+        return f"https://m.ximalaya.com/sound/{sound_id}"
+
+    return None
+
+
 def fetch_netease_title(podcast_url):
     """
     获取网易云播客标题。
@@ -290,6 +341,29 @@ def fetch_netease_title(podcast_url):
             return info.get('title', None)
     except Exception as e:
         print(f"获取标题失败: {e}")
+        return None
+
+
+def fetch_ximalaya_title(podcast_url):
+    """
+    获取喜马拉雅播客标题。
+
+    参数:
+        podcast_url (str): 净化后的播客 URL
+
+    返回:
+        str: 播客标题，失败返回 None
+    """
+    ydl_opts = {
+        'quiet': True,
+        'no_warnings': True,
+    }
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(podcast_url, download=False)
+            return info.get('title', None)
+    except Exception as e:
+        print(f"获取喜马拉雅标题失败: {e}")
         return None
 
 
@@ -552,6 +626,106 @@ def download_netease_audio(raw_text, save_dir="temp_audio"):
         }
 
 
+def download_ximalaya_audio(raw_text, save_dir="temp_audio"):
+    """
+    从喜马拉雅播客链接下载音频。
+
+    参数:
+        raw_text (str): 用户分享的原始文本（可能包含分享文案）
+        save_dir (str): 保存目录
+
+    返回:
+        dict: 包含以下键的字典:
+            - success (bool): 是否成功
+            - file_path (str): 下载的音频文件路径（成功时）
+            - title (str): 播客标题（成功时）
+            - error (str): 错误信息（失败时）
+    """
+    os.makedirs(save_dir, exist_ok=True)
+
+    # 先解析并净化 URL
+    podcast_url = parse_ximalaya_url(raw_text)
+    if not podcast_url:
+        return {
+            'success': False,
+            'error': "无法解析喜马拉雅播客链接，请检查链接是否正确"
+        }
+
+    print(f"净化后的喜马拉雅链接: {podcast_url}")
+
+    # 先获取标题
+    title = fetch_ximalaya_title(podcast_url)
+    if not title:
+        title = "喜马拉雅播客"
+    title = re.sub(r'[\\/*?:"<>|]', "", title).strip()
+    if len(title) > 200:
+        title = title[:200]
+
+    # 下载音频
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'outtmpl': os.path.join(save_dir, f"{title}.%(ext)s"),
+        'quiet': True,
+        'no_warnings': True,
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }],
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([podcast_url])
+
+        # 查找下载的文件
+        for ext in ['.mp3', '.m4a', '.webm', '.aac', '.flac']:
+            file_path = os.path.join(save_dir, f"{title}{ext}")
+            if os.path.exists(file_path):
+                # 如果是其他格式，转换为 mp3
+                if ext != '.mp3':
+                    mp3_path = file_path.replace(ext, '.mp3')
+                    try:
+                        subprocess.run([
+                            'ffmpeg', '-i', file_path,
+                            '-codec:a', 'libmp3lame',
+                            '-q:a', '2', mp3_path, '-y'
+                        ], capture_output=True, check=True)
+                        os.remove(file_path)
+                        file_path = mp3_path
+                    except Exception:
+                        pass
+
+                if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+                    return {
+                        'success': True,
+                        'file_path': file_path,
+                        'title': title
+                    }
+
+        return {
+            'success': False,
+            'error': "音频文件下载失败或未找到"
+        }
+
+    except yt_dlp.utils.DownloadError as e:
+        error_msg = str(e)
+        if "HTTP Error 403" in error_msg or "403" in error_msg:
+            return {
+                'success': False,
+                'error': "此为喜马拉雅 VIP/付费专属内容，请使用喜马拉雅客户端下载音频后，通过本地文件拖拽上传提炼"
+            }
+        return {
+            'success': False,
+            'error': f"下载失败: {error_msg}"
+        }
+    except Exception as e:
+        return {
+            'success': False,
+            'error': f"下载过程出错: {str(e)}"
+        }
+
+
 def route_and_download(url, save_dir="temp_audio", cookies_path=None):
     """
     根据 URL 类型智能路由并下载音频。
@@ -573,9 +747,11 @@ def route_and_download(url, save_dir="temp_audio", cookies_path=None):
         return downloader.download_bilibili_audio(url, cookies_path)
     elif platform == "netease":
         return download_netease_audio(url, save_dir)
+    elif platform == "ximalaya":
+        return download_ximalaya_audio(url, save_dir)
     else:
         return {
             'success': False,
-            'error': f"不支持的平台，当前仅支持小宇宙、网易云和 Bilibili"
+            'error': f"不支持的平台，当前仅支持小宇宙、网易云、喜马拉雅和 Bilibili"
         }
 

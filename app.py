@@ -112,6 +112,8 @@ def render_task_monitor():
             type_icon = "📺"
         elif task_type == "netease":
             type_icon = "🎵 网易云音乐"
+        elif task_type == "ximalaya":
+            type_icon = "⛰️ 喜马拉雅"
         elif task_type == "local":
             type_icon = "📂"
         else:
@@ -843,8 +845,11 @@ if show_new_task:
                                         task_type = "bilibili"
                                     elif "163cn.tv" in line_lower or "music.163.com" in line_lower:
                                         task_type = "netease"
+                                    elif "xima.tv" in line_lower or "ximalaya.com" in line_lower:
+                                        task_type = "ximalaya"
                                     else:
                                         task_type = "unknown"
+                                    print(f"[DEBUG] 添加任务: source={line}, task_type={task_type}")
                                 else:
                                     task_type = "local"
 
@@ -879,7 +884,7 @@ if show_new_task:
                     # 启动 Worker
                     if added_count > 0:
                         try:
-                            worker.start_worker()
+                            worker.start_worker(force_restart=True)
                         except:
                             pass
                         # 设置刷新标志
@@ -938,8 +943,11 @@ if show_new_task:
                                         task_type = "bilibili"
                                     elif "163cn.tv" in line_lower or "music.163.com" in line_lower:
                                         task_type = "netease"
+                                    elif "xima.tv" in line_lower or "ximalaya.com" in line_lower:
+                                        task_type = "ximalaya"
                                     else:
                                         task_type = "unknown"
+                                    print(f"[DEBUG] 添加任务: source={line}, task_type={task_type}")
                                 else:
                                     task_type = "local"
 
@@ -980,7 +988,7 @@ if show_new_task:
                         # 检查 Worker 是否在运行，如果没有则启动
                         if not worker.is_worker_running():
                             try:
-                                worker.start_worker()
+                                worker.start_worker(force_restart=True)
                             except Exception as e:
                                 print(f"启动 Worker 失败: {e}")
                         # 设置刷新标志
@@ -1060,12 +1068,12 @@ if show_new_task:
         st.markdown("**平台支持状态：**")
         col1, col2 = st.columns(2)
         with col1:
-            st.success("✅ 已支持：小宇宙、网易云音乐")
+            st.success("✅ 已支持：小宇宙、网易云音乐、喜马拉雅")
         with col2:
-            st.info("⏳ 规划中：苹果播客、喜马拉雅")
+            st.info("⏳ 规划中：苹果播客、荔枝FM、Spotify")
 
         # 输入框
-        podcast_url = st.text_input("🔗 请粘贴播客单集链接", placeholder="https://xiaoyuzhoufm.com/episode/xxx 或 https://163cn.tv/xxx", key="podcast_url")
+        podcast_url = st.text_input("🔗 请粘贴播客单集链接", placeholder="小宇宙/网易云/喜马拉雅 (手机App分享链接)", key="podcast_url")
 
         if podcast_url and api_key:
             if st.button("⚡ 解析并提取音频", use_container_width=True, key="podcast_process"):
@@ -1082,11 +1090,19 @@ if show_new_task:
                     download_func = download_netease_audio
                     spinner_text = "🔗 正在连接网易云音乐服务器提取音频..."
                     success_msg = "✅ 音频提取成功"
-                else:
+                elif platform == "ximalaya":
+                    from backend.downloader import download_ximalaya_audio
+                    download_func = download_ximalaya_audio
+                    spinner_text = "🔗 正在连接喜马拉雅服务器提取音频..."
+                    success_msg = "✅ 音频提取成功"
+                elif platform == "xiaoyuzhou":
                     from backend.downloader import download_xiaoyuzhou_audio
                     download_func = download_xiaoyuzhou_audio
                     spinner_text = "🔗 正在连接小宇宙服务器提取音频..."
                     success_msg = "✅ 音频提取成功"
+                else:
+                    st.error(f"❌ 不支持的平台: {platform}")
+                    st.stop()
 
                 with st.spinner(spinner_text):
                     try:
@@ -1149,6 +1165,23 @@ if show_new_task:
 
             **PC 客户端复制：**
             - 复制链接如 `https://music.163.com/dj?id=xxx&uct2=...`
+            """)
+
+        # 喜马拉雅获取方式说明
+        with st.expander("💡 如何获取喜马拉雅播客链接？", expanded=False):
+            st.markdown("""
+            **手机 App 分享（推荐）：**
+            1. 打开【喜马拉雅 App】
+            2. 进入播客单集页面
+            3. 点击右上角【分享】→ 【复制链接】
+            4. 粘贴到上方输入框
+
+            **网页端分享：**
+            - 复制链接如 `https://m.ximalaya.com/sound/xxxxx?from=pc`
+
+            **PC 客户端复制（不支持）：**
+            - 复制链接如 `https://xima.tv/xxxxx`
+            - 原因：PC 端链接指向播客专辑页面，无法获取单集音频
             """)
 
     with tab_video:
