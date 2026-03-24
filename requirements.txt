@@ -4,6 +4,7 @@ openai>=1.10.0
 openai-whisper>=20231117
 yt-dlp>=2024.1.0
 requests>=2.31.0
+Pillow>=10.0.0
 
 # SenseVoice 转录引擎依赖
 modelscope>=1.35.0
