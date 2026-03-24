@@ -114,6 +114,8 @@ def render_task_monitor():
             type_icon = "🎵 网易云音乐"
         elif task_type == "ximalaya":
             type_icon = "⛰️ 喜马拉雅"
+        elif task_type == "applepodcasts":
+            type_icon = "🍎 苹果播客"
         elif task_type == "local":
             type_icon = "📂"
         else:
@@ -847,6 +849,8 @@ if show_new_task:
                                         task_type = "netease"
                                     elif "xima.tv" in line_lower or "ximalaya.com" in line_lower:
                                         task_type = "ximalaya"
+                                    elif "podcasts.apple.com" in line_lower:
+                                        task_type = "applepodcasts"
                                     else:
                                         task_type = "unknown"
                                     print(f"[DEBUG] 添加任务: source={line}, task_type={task_type}")
@@ -945,6 +949,8 @@ if show_new_task:
                                         task_type = "netease"
                                     elif "xima.tv" in line_lower or "ximalaya.com" in line_lower:
                                         task_type = "ximalaya"
+                                    elif "podcasts.apple.com" in line_lower:
+                                        task_type = "applepodcasts"
                                     else:
                                         task_type = "unknown"
                                     print(f"[DEBUG] 添加任务: source={line}, task_type={task_type}")
@@ -1068,12 +1074,12 @@ if show_new_task:
         st.markdown("**平台支持状态：**")
         col1, col2 = st.columns(2)
         with col1:
-            st.success("✅ 已支持：小宇宙、网易云音乐、喜马拉雅")
+            st.success("✅ 已支持：小宇宙、网易云音乐、喜马拉雅、苹果播客")
         with col2:
-            st.info("⏳ 规划中：苹果播客、荔枝FM、Spotify")
+            st.info("⏳ 规划中：荔枝FM、Spotify")
 
         # 输入框
-        podcast_url = st.text_input("🔗 请粘贴播客单集链接", placeholder="小宇宙/网易云/喜马拉雅 (手机App分享链接)", key="podcast_url")
+        podcast_url = st.text_input("🔗 请粘贴播客单集链接", placeholder="小宇宙/网易云/喜马拉雅/苹果播客 (手机App分享链接)", key="podcast_url")
 
         if podcast_url and api_key:
             if st.button("⚡ 解析并提取音频", use_container_width=True, key="podcast_process"):
@@ -1099,6 +1105,11 @@ if show_new_task:
                     from backend.downloader import download_xiaoyuzhou_audio
                     download_func = download_xiaoyuzhou_audio
                     spinner_text = "🔗 正在连接小宇宙服务器提取音频..."
+                    success_msg = "✅ 音频提取成功"
+                elif platform == "applepodcasts":
+                    from backend.downloader import download_applepodcasts_audio
+                    download_func = download_applepodcasts_audio
+                    spinner_text = "🔗 正在连接苹果播客服务器提取音频..."
                     success_msg = "✅ 音频提取成功"
                 else:
                     st.error(f"❌ 不支持的平台: {platform}")
@@ -1182,6 +1193,20 @@ if show_new_task:
             **PC 客户端复制（不支持）：**
             - 复制链接如 `https://xima.tv/xxxxx`
             - 原因：PC 端链接指向播客专辑页面，无法获取单集音频
+            """)
+
+        # 苹果播客获取方式说明
+        with st.expander("💡 如何获取苹果播客链接？", expanded=False):
+            st.markdown("""
+            **手机 App 分享：**
+            1. 打开【Apple Podcasts App】
+            2. 进入播客单集页面
+            3. 点击右上角【分享】→ 【复制链接】
+            4. 粘贴到上方输入框
+
+            **网页端/PC端复制：**
+            - 复制链接如 `https://podcasts.apple.com/cn/podcast/...`
+            - 以上三种方式获取的链接格式相同，均可使用
             """)
 
     with tab_video:

@@ -210,7 +210,7 @@ def detect_platform(url):
         url (str): 播客链接（可能包含分享文案）
 
     返回:
-        str: 平台标识符，如 "xiaoyuzhou", "bilibili", "netease", "ximalaya", "unknown"
+        str: 平台标识符，如 "xiaoyuzhou", "bilibili", "netease", "ximalaya", "applepodcasts", "unknown"
     """
     url = url.lower()
     if "xiaoyuzhoufm.com" in url:
@@ -221,6 +221,8 @@ def detect_platform(url):
         return "netease"
     elif "xima.tv" in url or "ximalaya.com" in url:
         return "ximalaya"
+    elif "podcasts.apple.com" in url:
+        return "applepodcasts"
     else:
         return "unknown"
 
@@ -726,6 +728,103 @@ def download_ximalaya_audio(raw_text, save_dir="temp_audio"):
         }
 
 
+def download_applepodcasts_audio(url, save_dir="temp_audio"):
+    """
+    从苹果播客链接下载音频。
+
+    参数:
+        url (str): 苹果播客分享链接
+        save_dir (str): 保存目录
+
+    返回:
+        dict: {"success": bool, "file_path": str, "title": str, "error": str}
+    """
+    try:
+        import subprocess
+        import json
+        import os
+
+        # 使用 yt-dlp 获取视频信息
+        cmd = [
+            "yt-dlp",
+            "--dump-json",
+            "--no-download",
+            url
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            return {
+                'success': False,
+                'error': f"获取播客信息失败: {result.stderr}"
+            }
+
+        info = json.loads(result.stdout)
+        title = info.get('title', 'apple_podcast')
+        # 清理标题中的非法字符
+        import re
+        title = re.sub(r'[\\/:*?"<>|]', '', title)
+
+        # 下载音频（先用 m4a 容器）
+        temp_path = os.path.join(save_dir, f"{title}_temp.m4a")
+        output_path = os.path.join(save_dir, f"{title}.m4a")
+        cmd = [
+            "yt-dlp",
+            "-f", "bestaudio",
+            "--output", temp_path,
+            url
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+
+        if result.returncode != 0:
+            return {
+                'success': False,
+                'error': f"下载失败: {result.stderr}"
+            }
+
+        # 使用 ffmpeg 转换为标准 m4a 格式（重新编码）
+        try:
+            convert_cmd = [
+                "ffmpeg",
+                "-y",
+                "-i", temp_path,
+                "-c:a", "aac",
+                "-b:a", "128k",
+                output_path
+            ]
+            convert_result = subprocess.run(convert_cmd, capture_output=True, text=True, timeout=60)
+            # 删除临时文件
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+        except Exception as e:
+            # 如果转换失败，直接使用原文件
+            if os.path.exists(temp_path):
+                os.rename(temp_path, output_path)
+
+        # 检查文件是否存在
+        if os.path.exists(output_path):
+            return {
+                'success': True,
+                'file_path': output_path,
+                'title': title
+            }
+        else:
+            return {
+                'success': False,
+                'error': "下载完成但未找到文件"
+            }
+
+    except subprocess.TimeoutExpired:
+        return {
+            'success': False,
+            'error': "下载超时"
+        }
+    except Exception as e:
+        return {
+            'success': False,
+            'error': f"下载过程出错: {str(e)}"
+        }
+
+
 def route_and_download(url, save_dir="temp_audio", cookies_path=None):
     """
     根据 URL 类型智能路由并下载音频。
@@ -749,9 +848,11 @@ def route_and_download(url, save_dir="temp_audio", cookies_path=None):
         return download_netease_audio(url, save_dir)
     elif platform == "ximalaya":
         return download_ximalaya_audio(url, save_dir)
+    elif platform == "applepodcasts":
+        return download_applepodcasts_audio(url, save_dir)
     else:
         return {
             'success': False,
-            'error': f"不支持的平台，当前仅支持小宇宙、网易云、喜马拉雅和 Bilibili"
+            'error': f"不支持的平台，当前仅支持小宇宙、网易云、喜马拉雅、苹果播客和 Bilibili"
         }
 

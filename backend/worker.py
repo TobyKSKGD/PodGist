@@ -164,6 +164,10 @@ def get_task_type(source):
         print(f"[get_task_type] matched ximalaya!")
         return "ximalaya"
 
+    # 苹果播客检测
+    if "podcasts.apple.com" in s:
+        return "applepodcasts"
+
     # B站检测
     if "bilibili.com" in s:
         return "bilibili"
@@ -217,7 +221,7 @@ def process_single_task(task, api_key):
             # 本地文件
             audio_file_path = source
             title = os.path.splitext(os.path.basename(source))[0]
-        elif task_type in ('xiaoyuzhou', 'bilibili', 'netease', 'ximalaya'):
+        elif task_type in ('xiaoyuzhou', 'bilibili', 'netease', 'ximalaya', 'applepodcasts'):
             # 下载在线音频
             result = route_and_download(source, TEMP_DIR)
             if not result["success"]:
