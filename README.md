@@ -1,4 +1,4 @@
-# 🎙️ PodGist
+# PodGist
 
 > 本地算力驱动的 AI 音频提炼工具 | 让音频内容可搜索、可定位、可复用
 
@@ -18,7 +18,25 @@
 - **结构化摘要生成**：通过大语言模型提取节目短标题、核心关键词、详细概述和密集高光时间轴
 - **语义搜索与定位**：基于 RAG 技术实现自然语言查询，直接向音频提问并精确定位相关时间段
 - **自动化归档**：处理完成后自动清理临时文件，将原始文本和结构化摘要以 Markdown 格式持久化保存
-- **在线视频音频提取**：支持直接输入 Bilibili 视频链接，自动提取音频并生成摘要
+- **多平台音频提取**：支持直接输入多个平台的播客/视频链接，自动提取音频并生成摘要
+- **批量处理**：支持批量上传多个音频文件，排队依次处理
+
+## 支持的平台
+
+### 播客平台
+
+| 平台 | 说明 |
+|------|------|
+| 小宇宙 | 自动解析 MP3 直链 |
+| 喜马拉雅 | 自动解析并下载音频 |
+| Apple Podcasts | 自动提取音频 |
+| 网易云音乐 | 支持播客单集链接 |
+
+### 视频平台
+
+| 平台 | 说明 |
+|------|------|
+| Bilibili | 提取视频音频，支持大会员（需配置 cookies） |
 
 ## 技术架构
 
@@ -56,6 +74,18 @@
 - **实时进度展示与转录动画**
 - **时间轴高亮渲染**（通过正则替换将 `[MM:SS]` 格式化为视觉突出的前端组件）
 - **历史归档查看与删除**
+- **批量处理队列监控**
+
+### 4. 后端模块
+
+| 模块 | 功能 |
+|------|------|
+| `backend/transcriber.py` | Whisper/SenseVoice 转录与硬件检测 |
+| `backend/llm_agent.py` | LLM API 封装与 RAG 搜索 |
+| `backend/downloader.py` | 多平台在线音频链接解析与下载 |
+| `backend/worker.py` | 后台任务处理与队列管理 |
+| `backend/task_queue.py` | 任务队列状态管理 |
+| `backend/diagnostics.py` | 系统诊断与组件检测 |
 
 ## 项目结构
 
@@ -65,15 +95,21 @@ PodGist/
 ├── backend/
 │   ├── transcriber.py          # Whisper/SenseVoice 转录与硬件检测
 │   ├── llm_agent.py            # LLM API 封装与 RAG 搜索
-│   └── downloader.py           # 在线音频链接解析（支持 Bilibili）
+│   ├── downloader.py           # 多平台在线音频解析与下载
+│   ├── worker.py               # 后台任务处理
+│   ├── task_queue.py           # 任务队列状态管理
+│   └── diagnostics.py          # 系统诊断
 ├── archives/                   # 生成的 Markdown 归档目录
 ├── temp_audio/                 # 临时音频文件缓存
 ├── assets/                     # 前端静态资源
+├── .streamlit/
+│   └── config.toml             # Streamlit 主题配置
 ├── .env                        # API Key 本地存储文件
-└── requirements.txt            # Python 依赖清单
+├── requirements.txt            # Python 依赖清单
+└── CLAUDE.md                   # 项目开发指南
 ```
 
-## 🚀 快速开始
+## 快速开始
 
 ### 前置要求
 
@@ -106,28 +142,21 @@ PodGist/
    pip install -r requirements.txt
    ```
 
-4. **安装 SenseVoice 额外依赖**（如果使用 SenseVoice 模式）
-   ```bash
-   pip install modelscope pydub
-   # 或使用 requirements.txt 中的完整依赖
-   pip install -r requirements.txt
-   ```
-
 4. **安装 PyTorch（根据硬件平台选择）**
 
    **macOS (Apple Silicon) / Linux**:
-   
+
    ```bash
    pip install torch torchvision torchaudio
    ```
-   
+
    **Windows (NVIDIA GPU)**:
    ```bash
    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
    ```
-   
+
    > 若安装遇到问题，请参考 [PyTorch 官方安装指南](https://pytorch.org/get-started/locally/) 选择适合你硬件的命令。
-   
+
 5. **安装 FFmpeg**
 
    **macOS**:
@@ -147,7 +176,7 @@ PodGist/
    ```
 
 6. **启动应用**
-   
+
    ```bash
    streamlit run app.py
    ```
@@ -158,14 +187,29 @@ PodGist/
 1. 启动应用 `streamlit run app.py`，自动开启浏览器 Web 版本。
 2. 在侧边栏输入你的大模型 API Key 并保存（当前默认使用 DeepSeek API）
 3. 选择输入方式：
-   - **本地文件**：上传 MP3 格式的音频文件
+   - **本地文件**：上传 MP3 格式的音频文件（支持批量上传）
+   - **播客直连**：粘贴小宇宙、喜马拉雅、Apple Podcasts、网易云音乐等平台链接
    - **在线链接**：粘贴 Bilibili 视频链接
-4. 选择转录模型规模（如 small、medium）和计算设备
+4. 选择转录引擎（SenseVoice 极速模式或 Whisper 高精度模式）
 5. 点击"开始提炼"或"解析并提取音频"启动处理流程
 6. 等待转录和摘要生成完成
 7. 查看生成的节目摘要、核心关键词和详细时间轴
 8. 通过"AI 模糊定位器"输入自然语言问题，精确定位相关内容时间段
 9. 可下载完整 Markdown 报告或查看历史归档
+
+## 配置说明
+
+### API Key 配置
+
+在侧边栏输入 DeepSeek API Key 并保存。API Key 存储在本地 `.env` 文件中，不会提交到版本控制。
+
+### 主题配置
+
+项目使用 Notion 风格的明亮主题，可在 `.streamlit/config.toml` 中自定义：
+
+- 主色调：深蓝绿色 (#008080)
+- 背景：纯白色 (#FFFFFF)
+- 侧边栏：极淡蓝灰色 (#F8FAFC)
 
 ## 未来规划
 
