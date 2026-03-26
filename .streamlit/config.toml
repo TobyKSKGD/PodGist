@@ -1,0 +1,22 @@
+[theme]
+# 强制明亮模式
+base="light"
+
+# 主题色：使用咱们 Logo 渐变色中的 深蓝绿色
+primaryColor="#008080"
+
+# 背景色：主界面纯白
+backgroundColor="#FFFFFF"
+
+# 侧边栏：极淡极淡的蓝灰色，用来区分层级，且不刺眼
+secondaryBackgroundColor="#F8FAFC"
+
+# 文本颜色：深石板灰，对比度柔和护眼
+textColor="#1E293B"
+
+# 字体：强制系统底层无衬线字体
+font="sans serif"
+
+[client]
+# 彻底隐藏右上角的 Toolbar (保留)
+toolbarMode="minimal"
