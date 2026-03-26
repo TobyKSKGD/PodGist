@@ -54,8 +54,12 @@ if reset_count > 0:
 # ================= 核心 UI 重构：细节修复版 (Notion 风格 + API Key对齐) =================
 ui_refactor_css = """
 <style>
-    /* 1. 隐藏多余组件 (Deploy按钮、汉堡菜单、底部水印) */
-    header {visibility: hidden;}
+    /* 1. 隐藏多余组件 (Deploy按钮、汉堡菜单、底部水印)，保留侧边栏展开按钮 */
+    header {visibility: visible !important;}
+    header > div {visibility: visible !important;} /* 保留header内容可见 */
+    header .st-emotion-cache-1vt6gt3 {visibility: hidden !important;} /* 隐藏汉堡菜单文字 */
+    header button[kind="secondary"] {visibility: hidden !important;} /* 隐藏部署按钮 */
+    header [data-testid="stBaseButton-secondary"] {visibility: visible !important;} /* 保留侧边栏按钮 */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     .stAppDeployButton {display: none !important;}
