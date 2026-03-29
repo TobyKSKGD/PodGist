@@ -93,64 +93,52 @@ class AudioDownloader:
                 'preferredquality': '192',
             }],
             'outtmpl': output_template,
-            'quiet': True,
-            'no_warnings': True,
+            'quiet': False,
+            'no_warnings': False,
             'progress_hooks': [],
+            'socket_timeout': 30,
+            'retries': 3,
         }
 
         # 添加 cookies 支持（如果提供）
         if cookies_path and os.path.exists(cookies_path):
             ydl_opts['cookiefile'] = cookies_path
 
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
+        # 用线程超时包装下载，避免永久阻塞
+        import threading
 
-            # 查找下载的 MP3 文件
-            mp3_path = os.path.join(self.save_dir, f"{video_title}.mp3")
+        download_error = [None]
+        download_result = [None]
 
-            if os.path.exists(mp3_path):
-                return {
-                    'success': True,
-                    'file_path': mp3_path,
-                    'title': video_title
-                }
-            else:
-                # 检查是否有其他格式的文件
-                for ext in ['m4a', 'webm', 'aac', 'flac']:
-                    alt_path = os.path.join(self.save_dir, f"{video_title}.{ext}")
-                    if os.path.exists(alt_path):
-                        # 尝试转换为 MP3
-                        try:
-                            mp3_path = alt_path.replace(f".{ext}", ".mp3")
-                            subprocess.run([
-                                'ffmpeg', '-i', alt_path,
-                                '-codec:a', 'libmp3lame',
-                                '-q:a', '2', mp3_path,
-                                '-y'
-                            ], capture_output=True, check=True)
-                            os.remove(alt_path)
-                            return {
-                                'success': True,
-                                'file_path': mp3_path,
-                                'title': video_title
-                            }
-                        except Exception:
-                            pass
+        def _do_download():
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([url])
+                download_result[0] = "done"
+            except Exception as e:
+                download_error[0] = e
 
-                return {
-                    'success': False,
-                    'error': "音频文件下载失败或未找到"
-                }
+        download_thread = threading.Thread(target=_do_download)
+        download_thread.daemon = True
+        download_thread.start()
+        download_thread.join(timeout=300)  # 5分钟超时
 
-        except yt_dlp.utils.DownloadError as e:
-            error_msg = str(e)
-            if "HTTP Error 403" in error_msg:
+        if download_thread.is_alive():
+            # 下载超时
+            return {
+                'success': False,
+                'error': "Bilibili 下载超时（5分钟），可能网络问题或视频无法访问"
+            }
+
+        if download_error[0]:
+            # 下载出错
+            error_msg = str(download_error[0])
+            if "HTTP Error 403" in error_msg or "403" in error_msg:
                 return {
                     'success': False,
                     'error': "下载失败：该视频可能需要大会员权限或视频已被删除"
                 }
-            elif "HTTP Error 404" in error_msg:
+            elif "HTTP Error 404" in error_msg or "404" in error_msg:
                 return {
                     'success': False,
                     'error': "下载失败：视频不存在或链接无效"
@@ -160,10 +148,50 @@ class AudioDownloader:
                     'success': False,
                     'error': f"下载失败: {error_msg}"
                 }
-        except Exception as e:
+
+        # 查找下载的 MP3 文件
+        mp3_path = os.path.join(self.save_dir, f"{video_title}.mp3")
+
+        if os.path.exists(mp3_path):
+            return {
+                'success': True,
+                'file_path': mp3_path,
+                'title': video_title
+            }
+        else:
+            # 检查是否有其他格式的文件
+            for ext in ['m4a', 'webm', 'aac', 'flac']:
+                alt_path = os.path.join(self.save_dir, f"{video_title}.{ext}")
+                if os.path.exists(alt_path):
+                    # 尝试转换为 MP3（带超时）
+                    try:
+                        mp3_path = alt_path.replace(f".{ext}", ".mp3")
+                        result = subprocess.run([
+                            'ffmpeg', '-i', alt_path,
+                            '-codec:a', 'libmp3lame',
+                            '-q:a', '2', mp3_path,
+                            '-y'
+                        ], capture_output=True, text=True, timeout=60)
+                        if result.returncode != 0:
+                            print(f"[Downloader] FFmpeg 转换失败: {result.stderr[:200]}")
+                        else:
+                            os.remove(alt_path)
+                            return {
+                                'success': True,
+                                'file_path': mp3_path,
+                                'title': video_title
+                            }
+                    except subprocess.TimeoutExpired:
+                        return {
+                            'success': False,
+                            'error': "音频格式转换超时"
+                        }
+                    except Exception as e:
+                        print(f"[Downloader] 转换失败: {e}")
+
             return {
                 'success': False,
-                'error': f"下载过程出错: {str(e)}"
+                'error': "音频文件下载失败或未找到"
             }
 
 
@@ -261,7 +289,7 @@ def parse_netease_url(raw_text):
                 return f"https://music.163.com/program?id={podcast_id}"
 
         except Exception as e:
-            print(f"⚠️ 短链解包失败: {e}")
+            print(f"短链解包失败: {e}")
             return None  # 如果网络炸了，优雅退出
 
     # 场景 2: 嗅探 PC/网页端长链 (直接正则切除盲肠参数)
@@ -305,7 +333,7 @@ def parse_ximalaya_url(raw_text):
                 return f"https://m.ximalaya.com/sound/{sound_id}"
 
         except Exception as e:
-            print(f"⚠️ 喜马拉雅短链解包失败: {e}")
+            print(f"喜马拉雅短链解包失败: {e}")
             return None
 
     # 场景 2: 长链 m.ximalaya.com/sound/xxx

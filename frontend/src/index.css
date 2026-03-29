@@ -1,0 +1,36 @@
+@import "tailwindcss";
+
+@theme {
+  /*
+   * PodGist 配色方案 — 基于 Logo 的 PG 蓝绿渐变色系
+   *
+   * G 的颜色（青绿系）— 主基调
+   * P 的颜色（深蓝系）— 点缀
+   */
+
+  /* 主品牌色：G 的青绿色 — 用于主要按钮、链接、强调 */
+  --color-primary: #00ADA6;
+  --color-primary-hover: #009A94;
+  --color-primary-light: #D0F5F3;
+
+  /* 次要色：P 的海洋蓝 — 用于次要交互、徽章、信息提示 */
+  --color-accent: #0891B2;
+  --color-accent-hover: #0E7490;
+  --color-accent-light: #E1F5FE;
+  --color-accent-lighter: #F0F9FF;
+
+  /* 深色：P 渐变起始的深海蓝 — 用于标题、深度文字 */
+  --color-deep: #001F3F;
+
+  /* 成功色：取自 G 的绿色系 */
+  --color-success: #10B981;
+  --color-success-light: #D1FAF5;
+
+  /* 警告色：取自 G 的 cyan 家族 */
+  --color-warning: #0891B2;
+  --color-warning-light: #E1F5FE;
+
+  /* 危险色：玫瑰色 — 唯一跳出蓝绿谱系的颜色，但经过柔化处理 */
+  --color-danger: #E11D48;
+  --color-danger-light: #FFF1F3;
+}

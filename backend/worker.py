@@ -8,6 +8,7 @@ import os
 import sys
 import time
 import gc
+import re
 import threading
 import traceback
 from datetime import datetime
@@ -34,15 +35,6 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 
 # Worker 停止标志
 _worker_stop_flag = False
-
-
-def stop_worker():
-    """
-    停止 Worker 线程（设置停止标志）。
-    """
-    global _worker_stop_flag
-    _worker_stop_flag = True
-    print("[Worker] 已设置停止标志")
 
 
 def is_worker_running():
@@ -204,7 +196,7 @@ def process_single_task(task, api_key):
         # 步骤 1: 获取音频文件
         task_type = get_task_type(source)
         print(f"[Worker] source={source}, task_type={task_type}, type={type(task_type)}")
-        task_queue.update_progress_status(task_id, "📥 正在获取音频...")
+        task_queue.update_progress_status(task_id, "正在获取音频...")
 
         # 强制处理 ximalaya
         if task_type == 'ximalaya':
@@ -215,7 +207,7 @@ def process_single_task(task, api_key):
             audio_file_path = result["file_path"]
             title = result["title"]
             task_queue.update_task_name(task_id, title)
-            task_queue.update_progress_status(task_id, "✅ 音频获取成功")
+            task_queue.update_progress_status(task_id, "音频获取成功")
             # 继续转录...
         elif task_type == "local":
             # 本地文件
@@ -233,12 +225,12 @@ def process_single_task(task, api_key):
 
         # 更新任务名称（从下载结果获取真实标题）
         task_queue.update_task_name(task_id, title)
-        task_queue.update_progress_status(task_id, "✅ 音频获取成功")
+        task_queue.update_progress_status(task_id, "音频获取成功")
 
         # 步骤 2: 转录
         print(f"[Worker] 转录中: {title}")
         engine_name = "SenseVoice" if engine == "sensevoice" else "Whisper"
-        task_queue.update_progress_status(task_id, f"🎙️ 正在调用 {engine_name} 转录...")
+        task_queue.update_progress_status(task_id, f"正在调用 {engine_name} 转录...")
 
         if engine == "sensevoice":
             # 选择设备
@@ -265,7 +257,7 @@ def process_single_task(task, api_key):
             model = get_whisper_model("small", device_key)
             podcast_text = transcribe_audio_to_timestamped_text(model, audio_file_path, device_key)
 
-        task_queue.update_progress_status(task_id, f"✅ {engine_name} 转录完成")
+        task_queue.update_progress_status(task_id, f"{engine_name} 转录完成")
 
         # 步骤 3: 清理音频文件
         if os.path.exists(audio_file_path) and task_type != "local":
@@ -276,7 +268,7 @@ def process_single_task(task, api_key):
 
         # 步骤 4: 调用大模型生成摘要
         print(f"[Worker] 生成摘要中: {title}")
-        task_queue.update_progress_status(task_id, "🧠 正在调用 DeepSeek 提炼高光...")
+        task_queue.update_progress_status(task_id, "正在调用 DeepSeek 提炼高光...")
 
         raw_summary = get_podcast_summary_robust(api_key, podcast_text, max_timeline_items)
 
@@ -284,14 +276,15 @@ def process_single_task(task, api_key):
         lines = raw_summary.strip().split('\n')
         ai_title = lines[0] if lines else title
 
-        task_queue.update_progress_status(task_id, "✅ DeepSeek 提炼完成")
+        task_queue.update_progress_status(task_id, "DeepSeek 提炼完成")
 
         # 步骤 5: 归档
         print(f"[Worker] 归档中: {title}")
-        task_queue.update_progress_status(task_id, "💾 正在归档...")
+        task_queue.update_progress_status(task_id, "正在保存归档...")
 
         date_str = datetime.now().strftime("%Y%m%d_%H%M")
-        archive_name = f"{date_str}_{title}"
+        safe_title = re.sub(r'[\\/*?:"<>|]', "", title).strip()[:50]
+        archive_name = f"{safe_title}_{date_str}"
 
         # 创建归档目录
         archive_path = os.path.join(ARCHIVE_DIR, archive_name)
@@ -318,9 +311,9 @@ def process_single_task(task, api_key):
                 clean_summary = raw_summary
 
         with open(summary_path, "w", encoding="utf-8") as f:
-            f.write(f"# 🎙️ {ai_title}\n\n{clean_summary}")
+            f.write(f"# {ai_title}\n\n{clean_summary}")
 
-        task_queue.update_progress_status(task_id, "✅ 归档完成")
+        task_queue.update_progress_status(task_id, "归档完成")
 
         print(f"[Worker] 任务完成: {title}")
 
@@ -332,6 +325,18 @@ def process_single_task(task, api_key):
     except Exception as e:
         error_msg = f"{str(e)}\n{traceback.format_exc()}"
         print(f"[Worker] 任务失败: {error_msg}")
+
+        # 如果是 LLM 失败且已有转录文本，保存到恢复文件
+        if 'podcast_text' in dir() and podcast_text:
+            recovery_path = os.path.join(TEMP_DIR, f".llm_recovery_{task_id}.txt")
+            try:
+                with open(recovery_path, "w", encoding="utf-8") as f:
+                    f.write(podcast_text)
+                print(f"[Worker] 已保存转录文本到恢复文件: {recovery_path}")
+                # 更新任务 error_msg 标记有恢复文件
+                error_msg = f"[可重试] {error_msg}\n恢复文件: {recovery_path}"
+            except Exception as save_err:
+                print(f"[Worker] 保存恢复文件失败: {save_err}")
 
         # 清理临时音频文件（即使失败也清理）
         cleanup_temp_audio_file(audio_file_path)
