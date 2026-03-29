@@ -1,45 +1,92 @@
 # ================= 1. 密钥与配置文件 =================
-# ⚠️ 绝对不能上传！包含 DeepSeek API Key
+# ⚠️ 绝对不能上传！
 .env
-.streamlit/secrets.toml
+.env.*
+.env.local
+config.json
+*.local
 
-# ================= 2. 用户产生的多媒体与归档数据 =================
+# ================= 2. 用户产生的数据 =================
 # 音频原文件和临时垃圾文件
 temp_audio/
 *.mp3
 *.m4a
 *.wav
+*.flac
+*.aac
 
 # 用户的私人归档记录
 archives/
 
-# ================= 3. Python 运行缓存与虚拟环境 =================
+# 数据库文件
+*.db
+*.sqlite
+*.sqlite3
+
+# ================= 3. Python =================
 __pycache__/
+*.py[cod]
 *.pyc
 *.pyo
 *.pyd
 .Python
+*.so
+
+# 虚拟环境
 env/
 venv/
 .venv/
 env.bak/
 venv.bak/
 
-# ================= 5. Claude Code 相关 =================
-# Claude 项目的配置文件和文档
-CLAUDE.md
-.claude/
-*.claude
+# ================= 4. 前端 =================
+# 构建产物
+frontend/dist/
+frontend/node_modules/
 
-# ================= 6. 操作系统产生的垃圾文件 =================
-# Mac 专属垃圾文件
+# 前端环境变量
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local
+
+# 构建日志
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ================= 5. IDE 与编辑器 =================
+# VS Code
+.vscode/
+*.code-workspace
+
+# JetBrains (IntelliJ, PyCharm, WebStorm, etc.)
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Sublime Text
+*.sublime-*
+
+# Atom
+.atom/
+
+# ================= 6. Claude Code =================
+.claude/
+
+# ================= 7. 操作系统 =================
+# macOS
 .DS_Store
 .AppleDouble
 .LSOverride
 ._*
 .com.apple.timemachine.donotpresent
+.Spotlight-V100
+.Trashes
 
-# Windows 专属垃圾文件
+# Windows
 Thumbs.db
 Thumbs.db:encryptable
 ehthumbs.db
@@ -47,7 +94,24 @@ ehthumbs_vista.db
 desktop.ini
 $RECYCLE.BIN/
 
-# Linux 专属垃圾文件
+# Linux
 .fuse_hidden*
 .directory
 .Trash-*
+.nfs*
+
+# ================= 8. 日志与临时文件 =================
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+*.swp
+*.swo
+*~
+
+# ================= 9. 其他 =================
+*.bak
+*.backup
+*.orig
+*.sage

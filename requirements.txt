@@ -1,14 +1,20 @@
-# 核心依赖项 (PodGist 跨平台纯净版)
-streamlit>=1.30.0
+# FastAPI 后端依赖 (PodGist V2 生产版)
+fastapi>=0.104.1
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+
+# AI 模型与语音转录
 openai>=1.10.0
 openai-whisper>=20231117
-yt-dlp>=2024.1.0
-requests>=2.31.0
-Pillow>=10.0.0
-
-# SenseVoice 转录引擎依赖
 modelscope>=1.35.0
 pydub>=0.25.0
+
+# 网络与数据处理
+requests>=2.31.0
+yt-dlp>=2024.1.0
+
+# 其他工具
+Pillow>=10.0.0
 
 # modelscope 的额外依赖
 addict>=2.4.0
