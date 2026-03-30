@@ -254,7 +254,10 @@ function AppContent() {
     if (currentView === 'chat') {
       return (
         <main className="flex-1 overflow-hidden bg-white">
-          <ChatView />
+          <ChatView onJumpToArchive={(archiveId) => {
+            setSelectedArchiveId(archiveId);
+            setCurrentView('result');
+          }} />
         </main>
       );
     }
