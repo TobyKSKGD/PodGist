@@ -228,7 +228,11 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
               const key = line.slice(0, colonIdx).trim();
               const val = line.slice(colonIdx + 1).trim();
               if (key === 'event') eventData['event'] = val;
-              else if (key === 'data') eventData['data'] = val;
+              else if (key === 'data') {
+                // SSE 多行 data: 同一事件的多个 data 行用 \n 拼接
+                if (eventData['data']) eventData['data'] += '\n' + val;
+                else eventData['data'] = val;
+              }
             }
 
             if (eventData['event'] === 'token' && eventData['data']) {
