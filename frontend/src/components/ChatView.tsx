@@ -11,6 +11,7 @@ import {
 function renderContentWithCitations(
   content: string,
   references: { archive_id: string; archive_name: string; timestamp: string }[] | undefined,
+  archives: { id: string; name: string }[],
   onJump: ((id: string) => void) | undefined
 ): React.ReactNode[] {
   // 支持「」或直接《》格式的来源标注
@@ -27,15 +28,18 @@ function renderContentWithCitations(
     }
     const archiveName = match[1];
     const timestamp = match[2];
-    // 找对应的 archive_id
-    const ref = references?.find(r => r.archive_name === archiveName || r.archive_name.includes(archiveName));
-    const onClick = () => { if (ref && onJump) onJump(ref.archive_id); };
+    // 优先从 references 匹配（最准确），找不到再用 archives 列表模糊匹配
+    const ref = references?.find(r => r.archive_name === archiveName || archiveName.includes(r.archive_name));
+    const fallback = archives.find(a => a.name === archiveName || archiveName.includes(a.name));
+    const targetId = ref?.archive_id || fallback?.id;
+    const onClick = () => { if (targetId && onJump) onJump(targetId); };
     parts.push(
       <button
         key={key++}
         onClick={onClick}
-        className="italic text-slate-400 hover:text-[#00ADA6] underline-offset-2 hover:underline cursor-pointer"
-        title={ref ? `查看 ${archiveName} 的详细总结` : archiveName}
+        disabled={!targetId}
+        className="italic text-slate-400 hover:text-[#00ADA6] underline-offset-2 hover:underline cursor-pointer disabled:cursor-default"
+        title={targetId ? `查看 ${archiveName} 的详细总结` : archiveName}
       >
         来源：《{archiveName}》[{timestamp}]
       </button>
@@ -554,7 +558,7 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
                   }`}>
                     {msg.role === 'assistant' ? (
                       <div className="prose prose-sm max-w-none">
-                        {renderContentWithCitations(msg.content, msg.references, onJumpToArchive)}
+                        {renderContentWithCitations(msg.content, msg.references, archives, onJumpToArchive)}
                       </div>
                     ) : (
                       msg.content
