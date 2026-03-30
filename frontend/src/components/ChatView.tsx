@@ -263,6 +263,34 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
             streamDone = true;
           }
         }
+
+        // 流结束后，buffer 里可能还有没被处理完的事件（如最后的 end 事件没有 \n\n）
+        if (streamDone && buffer.trim()) {
+          const eventData: Record<string, string> = {};
+          for (const line of buffer.split('\n')) {
+            const colonIdx = line.indexOf(':');
+            if (colonIdx === -1) continue;
+            const key = line.slice(0, colonIdx).trim();
+            const val = line.slice(colonIdx + 1).trim();
+            if (key === 'event') eventData['event'] = val;
+            else if (key === 'data') {
+              if (eventData['data']) eventData['data'] += '\n' + val;
+              else eventData['data'] = val;
+            }
+          }
+          if (eventData['event'] === 'done') {
+            const dataStr = eventData['data'] || '';
+            const nlIdx = dataStr.indexOf('\n');
+            if (nlIdx !== -1) {
+              fullContent = dataStr.slice(0, nlIdx);
+              try {
+                receivedRefs = JSON.parse(dataStr.slice(nlIdx + 1));
+              } catch {}
+            } else if (dataStr) {
+              fullContent = dataStr;
+            }
+          }
+        }
       }
 
       // 用真实消息替换临时占位
