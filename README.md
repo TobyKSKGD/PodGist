@@ -45,7 +45,9 @@ PodGist v1.0.0 采用 **React + FastAPI** 分离架构：
 |------|------|
 | `api.py` | FastAPI 主服务，RESTful 接口，CORS 跨域支持 |
 | `backend/transcriber.py` | Whisper/SenseVoice 转录与硬件检测 |
-| `backend/llm_agent.py` | DeepSeek LLM API 封装与 RAG 搜索 |
+| `backend/llm_agent.py` | DeepSeek LLM API 封装与摘要生成 |
+| `backend/rag_db.py` | SQLite 表 + ChromaDB 向量库（RAG 存储） |
+| `backend/rag_retriever.py` | RAG 检索管道与流式生成 |
 | `backend/downloader.py` | 多平台在线音频解析与下载 |
 | `backend/worker.py` | 后台任务处理与队列管理 |
 | `backend/task_queue.py` | SQLite 任务队列状态管理 |
@@ -57,7 +59,8 @@ PodGist v1.0.0 采用 **React + FastAPI** 分离架构：
 - **SenseVoice 极速模式**：基于阿里开源 FunAudioLLM/SenseVoiceSmall，极速转录（比 Whisper 快 10 倍以上），支持中文、英文、粤语等 50+ 语言
 - **精确时间轴**：生成带 `[MM:SS]` 或 `[HH:MM:SS]` 格式时间戳的逐字稿，实现音频内容到文本位置的精确映射
 - **结构化摘要生成**：通过大语言模型提取节目短标题、核心关键词、详细概述和密集高光时间轴
-- **语义搜索与定位**：基于 RAG 技术实现自然语言查询，直接向音频提问并精确定位相关时间段
+- **语义搜索与定位**：基于 RAG 技术实现自然语言查询，直接向全部历史音频归档提问并精确定位相关时间段
+- **智能对话与标签管理**：与音频知识库对话，按标签筛选归档范围，双向溯源引用记录
 - **自动化归档**：处理完成后自动清理临时文件，将原始文本和结构化摘要以 Markdown 格式持久化保存
 - **多平台音频提取**：支持直接输入多个平台的播客/视频链接，自动提取音频并生成摘要
 - **批量处理**：支持批量上传多个音频文件，排队依次处理
@@ -85,98 +88,166 @@ PodGist v1.0.0 采用 **React + FastAPI** 分离架构：
 
 - **Python 3.10+**
 - **Node.js 18+**（含 npm）
-- **FFmpeg**（系统级依赖，Whisper 需要其进行音频解码）
+- **FFmpeg**（系统级依赖，Whisper/SenseVoice 需要其进行音频解码）
 - 支持的计算硬件：
-  - Apple Silicon（MPS 加速）
-  - NVIDIA GPU（CUDA 加速）
+  - Apple Silicon（MPS 加速，macOS）
+  - NVIDIA GPU（CUDA 加速，Windows/Linux）
   - 或普通 CPU（速度较慢）
 
-### 安装步骤
+---
 
-1. **克隆仓库**
-   ```bash
-   git clone https://github.com/TobyKSKGD/PodGist.git
-   cd PodGist
-   ```
+### 安装步骤（所有平台通用）
 
-2. **创建 Python 虚拟环境并安装依赖**
-   ```bash
-   python -m venv env
-   source env/bin/activate
-   pip install -r requirements.txt
-   ```
+#### 1. 克隆并进入项目目录
 
-3. **安装 PyTorch（根据硬件平台选择）**
+```bash
+git clone https://github.com/TobyKSKGD/PodGist.git
+cd PodGist
+```
 
-   **macOS (Apple Silicon) / Linux**:
-   ```bash
-   pip install torch torchvision torchaudio
-   ```
+#### 2. 创建 Python 虚拟环境
 
-   **Windows (NVIDIA GPU)**:
-   ```bash
-   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
-   ```
+**macOS / Linux:**
+```bash
+python3 -m venv env
+source env/bin/activate
+```
 
-   > 若安装遇到问题，请参考 [PyTorch 官方安装指南](https://pytorch.org/get-started/locally/) 选择适合你硬件的命令。
+**Windows (PowerShell / CMD):**
+```powershell
+# PowerShell 或 CMD 均可
+python -m venv env
+env\Scripts\activate
+```
 
-4. **安装 FFmpeg**
+#### 3. 安装 PyTorch（根据你的硬件选择）
 
-   **macOS**:
-   ```bash
-   brew install ffmpeg
-   ```
+**macOS Apple Silicon (M1/M2/M3):**
+```bash
+pip install torch torchvision torchaudio
+```
 
-   **Windows**:
-   ```bash
-   winget install ffmpeg
-   ```
-   或从 [FFmpeg 官网](https://ffmpeg.org/download.html) 下载安装。
+**Windows / Linux NVIDIA GPU (CUDA 12.4):**
+```bash
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
+```
 
-   **Linux** (Ubuntu/Debian):
-   ```bash
-   sudo apt install ffmpeg
-   ```
+**仅 CPU 运行（所有平台）:**
+```bash
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+```
 
-5. **安装前端依赖**
-   ```bash
-   cd frontend
-   npm install
-   cd ..
-   ```
+> 若不确定显卡型号或 CUDA 版本，请先运行 `nvidia-smi` 查看。安装遇到问题参考 [PyTorch 官方指南](https://pytorch.org/get-started/locally/)。
+
+#### 4. 安装 FFmpeg
+
+**macOS:**
+```bash
+brew install ffmpeg
+```
+
+**Windows (PowerShell):**
+```powershell
+# 方式一：winget（推荐）
+winget install ffmpeg
+
+# 方式二：手动下载
+# 从 https://ffmpeg.org/download.html 下载 Windows builds
+# 解压后将 bin/ffmpeg.exe 加入系统 PATH
+```
+
+**Linux (Ubuntu/Debian):**
+```bash
+sudo apt update && sudo apt install ffmpeg
+```
+
+> 安装完成后运行 `ffmpeg -version` 确认。
+
+#### 5. 安装 Python 依赖
+
+```bash
+pip install -r requirements.txt
+```
+
+#### 6. 安装前端依赖
+
+```bash
+cd frontend
+npm install
+cd ..
+```
+
+---
 
 ### 启动应用
 
-一个命令同时启动前后端（后端使用项目虚拟环境）：
+#### 一键启动（推荐）
 
 ```bash
+npm run dev
+```
+
+> `npm run dev` 会自动检测操作系统，清理端口 8000/5173 的旧进程，并同时启动后端和前端。
+
+- **后端**: `http://localhost:8000`
+- **前端**: `http://localhost:5173`
+
+#### 分步启动（调试用）
+
+```bash
+# 终端 1：后端
+source env/bin/activate   # Windows: env\Scripts\activate
+uvicorn api:app --reload --port 8000 --app-dir .
+
+# 终端 2：前端
 cd frontend
 npm run dev
 ```
 
-浏览器访问 **http://localhost:5173**
-
-> `npm run dev` 会自动先清理 8000/5173 端口的僵尸进程，然后并发启动后端（蓝色日志）和前端（青色日志）。
+---
 
 ### 配置说明
 
-在应用界面右上角打开设置，输入你的 **DeepSeek API Key** 并保存。API Key 存储在本地 `.env` 文件中，不会提交到版本控制。
+首次使用需配置 **DeepSeek API Key**：
 
-## 一键启动（已完成）
+1. 打开应用，右侧边栏底部点击「偏好设置」
+2. 输入你的 DeepSeek API Key 并保存
 
-`npm run dev` 已实现一键启动，无需手动管理进程，详见上方"启动应用"章节。
+API Key 存储在本地 `.env` 文件中，不会提交到版本控制。
 
-未来版本将提供打包后的可执行文件，无需手动安装 Python / Node.js 环境，可直接双击运行。
+---
+
+### 常见问题
+
+**Q: SenseVoice 检测失败？**
+确保已安装 `modelscope` 和 `pydub`，以及系统 FFmpeg 已正确配置到 PATH。
+
+**Q: Windows 上 `npm run dev` 报错？**
+确保已安装 Node.js 18+，并使用 PowerShell 或 CMD 运行（非 WSL 子系统内部）。
+
+**Q: 端口被占用？**
+运行 `npm run dev` 前会先自动清理旧进程，也可手动：
+```powershell
+# Windows
+netstat -ano | findstr :8000
+taskkill /PID <PID> /F
+```
+
+**Q: 归档向量索引失败？**
+运行 `POST http://localhost:8000/api/chat/index-all` 手动触发存量归档索引。
 
 ## 项目结构
 
 ```
 PodGist/
-├── api.py                      # FastAPI 主程序（后端服务）
+├── api.py                      # FastAPI 主程序（后端服务入口）
+├── start.js                    # 跨平台一键启动脚本（自动检测 OS）
 ├── backend/
 │   ├── __init__.py
 │   ├── transcriber.py          # Whisper/SenseVoice 转录与硬件检测
-│   ├── llm_agent.py            # LLM API 封装与 RAG 搜索
+│   ├── llm_agent.py            # LLM API 封装与摘要生成
+│   ├── rag_db.py               # SQLite 表 + ChromaDB 向量库（RAG）
+│   ├── rag_retriever.py        # RAG 检索管道与流式生成
 │   ├── downloader.py           # 多平台在线音频解析与下载
 │   ├── worker.py               # 后台任务处理
 │   ├── task_queue.py           # 任务队列状态管理
@@ -185,12 +256,15 @@ PodGist/
 │   ├── src/
 │   │   ├── App.tsx             # 主应用组件
 │   │   ├── components/         # UI 组件
+│   │   │   ├── ChatView.tsx   # 智能对话组件（RAG）
+│   │   │   ├── TagManager.tsx # 标签管理组件
+│   │   │   └── ...
 │   │   └── index.css           # Tailwind CSS 入口
 │   ├── public/                 # 静态资源
 │   ├── package.json
 │   └── vite.config.ts
 ├── archives/                    # 生成的 Markdown 归档目录（用户数据）
-├── temp_audio/                  # 临时音频文件缓存（用户数据）
+├── temp_audio/                  # 临时音频 + SQLite + ChromaDB（用户数据）
 ├── assets/                      # 静态资源（Logo、Favicon）
 ├── config.json                  # 应用配置（引擎、设备等）
 ├── .env                         # API Key 本地存储（不提交）
@@ -200,7 +274,7 @@ PodGist/
 
 ## 使用流程
 
-1. 启动后端 (`uvicorn api:app`) 和前端 (`npm run dev`)
+1. 启动应用：`npm run dev`
 2. 在设置中输入 DeepSeek API Key 并保存
 3. 选择输入方式：
    - **本地文件**：上传 MP3、WAV、M4A 等音频文件（支持拖拽）
@@ -210,15 +284,17 @@ PodGist/
 4. 选择转录引擎（SenseVoice 极速模式或 Whisper 高精度模式）
 5. 等待转录和摘要生成完成
 6. 查看生成的节目摘要、核心关键词和详细时间轴
-7. 通过 AI 模糊定位器输入自然语言问题，精确定位相关内容时间段
-8. 可下载完整 Markdown 报告或查看历史归档
+7. **智能对话**：与全部历史归档进行自然语言对话，支持按标签或指定归档筛选范围
+8. 为归档打标签整理，知识库越用越精准
+9. 通过 AI 模糊定位器输入自然语言问题，精确定位相关内容时间段
+10. 下载完整 Markdown 报告或查看历史归档
 
 ## 未来规划
 
 - [ ] **打包分发**：提供无需安装环境的可执行版本（PyInstaller + Electron）
 - [ ] **多模型支持**：扩展支持更多大语言模型 API
 - [ ] **处理流程优化**：引入异步任务队列和进度中断功能
-- [ ] **跨音频语义搜索**：在全部历史归档中实现全局语义搜索
+- [x] **跨音频语义搜索（RAG）**：在全部历史归档中实现全局语义搜索（已完成）
 - [ ] **导出格式扩展**：支持导出为 JSON、PDF、Notion 等多种格式
 
 ## 依赖
@@ -239,6 +315,8 @@ PodGist/
 - [DeepSeek API](https://platform.deepseek.com/) - 大语言模型
 - [PyTorch](https://pytorch.org/) - 深度学习框架
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp) - 音视频下载
+- [ChromaDB](https://www.trychroma.com/) - 本地向量数据库（RAG）
+- [Sentence Transformers](https://www.sbert.net/) - 文本向量化（RAG）
 
 ## 许可证
 

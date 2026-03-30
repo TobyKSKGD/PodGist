@@ -4,8 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "cd frontend && npm run dev",
+    "dev": "node start.js",
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev:backend": "node start-backend.js",
     "build": "cd frontend && npm run build",
     "preview": "cd frontend && npm run preview"
-  }
+  },
+  "description": "PodGist 跨平台启动脚本（start.js）会在运行时自动检测操作系统并执行对应命令"
 }
