@@ -229,7 +229,6 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
               const val = line.slice(colonIdx + 1).trim();
               if (key === 'event') eventData['event'] = val;
               else if (key === 'data') eventData['data'] = val;
-              else if (key === 'extra_data') eventData['extra_data'] = val;
             }
 
             if (eventData['event'] === 'token' && eventData['data']) {
@@ -240,12 +239,16 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
                 )
               );
             } else if (eventData['event'] === 'done') {
-              // data 字段就是完整内容（来自后端 done 事件的 full_content）
-              if (eventData['data']) fullContent = eventData['data'];
-              if (eventData['extra_data']) {
+              // data 字段格式: "full_content\n{referenced_archives_json}"
+              const dataStr = eventData['data'] || '';
+              const nlIdx = dataStr.indexOf('\n');
+              if (nlIdx !== -1) {
+                fullContent = dataStr.slice(0, nlIdx);
                 try {
-                  receivedRefs = JSON.parse(eventData['extra_data']);
+                  receivedRefs = JSON.parse(dataStr.slice(nlIdx + 1));
                 } catch {}
+              } else {
+                fullContent = dataStr;
               }
             } else if (eventData['event'] === 'end') {
               // SSE 流结束信号
