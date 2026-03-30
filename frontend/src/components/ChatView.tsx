@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
+import ReactMarkdown from 'react-markdown';
 import {
   IconMessageCircle, IconPlus, IconTrash, IconChevronDown,
   IconSearch, IconLoader2,
@@ -493,7 +494,7 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
             // 此时思考中图标会单独显示，不会产生双气泡
             if (msg.id === 'assistant-streaming' && !msg.content) return null;
             return (
-              <div key={msg.id} className={`flex gap-3 mb-4 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
+              <div key={msg.id} className="flex gap-3 mb-4">
                 <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-xs font-medium ${
                   msg.role === 'user'
                     ? 'bg-[#00ADA6] text-white'
@@ -501,13 +502,19 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
                 }`}>
                   {msg.role === 'user' ? '我' : 'AI'}
                 </div>
-                <div className={`max-w-[75%] ${msg.role === 'user' ? 'text-right' : ''}`}>
+                <div className="max-w-[75%]">
                   <div className={`inline-block px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
                     msg.role === 'user'
                       ? 'bg-[#00ADA6] text-white rounded-tr-sm'
                       : 'bg-slate-100 text-slate-700 rounded-tl-sm'
                   }`}>
-                    {msg.content}
+                    {msg.role === 'assistant' ? (
+                      <div className="prose prose-sm max-w-none">
+                        <ReactMarkdown>{msg.content}</ReactMarkdown>
+                      </div>
+                    ) : (
+                      msg.content
+                    )}
                   </div>
                   {msg.created_at && (
                     <div className="text-xs text-slate-300 mt-1 px-1">
