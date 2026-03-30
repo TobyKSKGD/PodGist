@@ -36,6 +36,13 @@ export default function ChatView() {
     loadTags();
     loadArchives();
     loadSessions();
+
+    // 检查是否从归档 Backlink 跳转而来
+    const jumpSessionId = sessionStorage.getItem('jump_to_session');
+    if (jumpSessionId) {
+      sessionStorage.removeItem('jump_to_session');
+      setActiveSessionId(jumpSessionId);
+    }
   }, []);
 
   // 加载会话消息

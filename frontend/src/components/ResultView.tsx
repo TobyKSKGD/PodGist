@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react';
 import { IconFileDescription, IconClock, IconChevronLeft, IconDownload, IconCopy, IconCheck, IconSearch, IconLoader2, IconMessageCircle } from '@tabler/icons-react';
+import TagManager from './TagManager';
 import axios from 'axios';
 
 interface ResultViewProps {
   archiveId: string;
   onBack: () => void;
+  onJumpToChat: (sessionId: string) => void;
 }
 
 interface ArchiveContent {
@@ -17,7 +19,7 @@ interface ArchiveContent {
 
 const api = axios.create({ baseURL: 'http://localhost:8000' });
 
-export default function ResultView({ archiveId, onBack }: ResultViewProps) {
+export default function ResultView({ archiveId, onBack, onJumpToChat }: ResultViewProps) {
   const [content, setContent] = useState<ArchiveContent | null>(null);
   const [activeTab, setActiveTab] = useState<'summary' | 'transcript'>('summary');
   const [loading, setLoading] = useState(true);
@@ -30,8 +32,12 @@ export default function ResultView({ archiveId, onBack }: ResultViewProps) {
   const [isIconSearching, setIsIconSearching] = useState(false);
   const [showIconSearch, setShowIconSearch] = useState(false);
 
+  // Backlinks
+  const [backlinks, setBacklinks] = useState<{id: string; title: string; updated_at: string}[]>([]);
+
   useEffect(() => {
     fetchArchiveContent();
+    fetchBacklinks();
   }, [archiveId]);
 
   const fetchArchiveContent = async () => {
@@ -47,6 +53,13 @@ export default function ResultView({ archiveId, onBack }: ResultViewProps) {
     } finally {
       setLoading(false);
     }
+  };
+
+  const fetchBacklinks = async () => {
+    try {
+      const res = await api.get(`/api/chat/archives/${archiveId}/references`);
+      if (res.data.status === 'success') setBacklinks(res.data.data);
+    } catch {}
   };
 
   const handleIconCopy = async () => {
@@ -154,6 +167,7 @@ export default function ResultView({ archiveId, onBack }: ResultViewProps) {
             <IconSearch size={16} />
             AI 定位
           </button>
+          <TagManager archiveId={archiveId} />
           <button
             onClick={handleIconCopy}
             className="flex items-center gap-2 px-3 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
@@ -267,6 +281,30 @@ export default function ResultView({ archiveId, onBack }: ResultViewProps) {
             </div>
           )}
         </div>
+
+        {/* Backlinks 关联对话 */}
+        {backlinks.length > 0 && (
+          <div className="border-t border-slate-200 bg-slate-50 px-8 py-5">
+            <div className="max-w-4xl mx-auto">
+              <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
+                <IconMessageCircle size={14} className="text-[#00ADA6]" />
+                在这些对话中被引用
+              </h3>
+              <div className="flex flex-wrap gap-2">
+                {backlinks.map(ref => (
+                  <button
+                    key={ref.id}
+                    onClick={() => onJumpToChat(ref.id)}
+                    className="flex items-center gap-2 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm text-slate-600 hover:border-[#00ADA6] hover:text-[#00ADA6] transition-colors"
+                  >
+                    <IconMessageCircle size={12} />
+                    {ref.title || '无标题对话'}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

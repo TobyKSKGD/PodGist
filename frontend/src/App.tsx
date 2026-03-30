@@ -231,7 +231,12 @@ function AppContent() {
   // 渲染主内容区
   const renderMainContent = () => {
     if (currentView === 'result' && selectedArchiveId) {
-      return <ResultView archiveId={selectedArchiveId} onBack={handleBackToIconUpload} />;
+      return <ResultView archiveId={selectedArchiveId} onBack={handleBackToIconUpload} onJumpToChat={(sessionId) => {
+        setSelectedArchiveId(null);
+        setCurrentView('chat');
+        // ChatView will pick up the session via a URL param or localStorage
+        sessionStorage.setItem('jump_to_session', sessionId);
+      }} />;
     }
 
     if (currentView === 'queue') {
