@@ -222,18 +222,25 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
           streamDone = true;
         }
 
-        // 累积 buffer，每次找到完整的 SSE 事件（以 \n\n 分隔）就处理
-        let delimiterIdx;
-        while ((delimiterIdx = buffer.indexOf('\n\n')) !== -1) {
+        // 累积 buffer，每次找到完整的 SSE 事件（\r\n\r\n 或 \n\n 分隔）就处理
+        while (true) {
+          // 找到下一个事件分隔符（优先 \r\n\r\n，其次 \n\n）
+          const rIdx = buffer.indexOf('\r\n\r\n');
+          const nIdx = buffer.indexOf('\n\n');
+          if (nIdx === -1 && rIdx === -1) break;
+          const delimiterIdx = rIdx !== -1 && rIdx < nIdx ? rIdx : nIdx;
+          const delimiterLen = rIdx !== -1 && rIdx < nIdx ? 4 : 2;
           const rawEvent = buffer.slice(0, delimiterIdx);
-          buffer = buffer.slice(delimiterIdx + 2);
+          buffer = buffer.slice(delimiterIdx + delimiterLen);
 
           const eventData: Record<string, string> = {};
           for (const line of rawEvent.split('\n')) {
-            const colonIdx = line.indexOf(':');
+            // 去掉 \r（来自 \r\n 行结束符）
+            const cleanLine = line.replace(/\r$/, '');
+            const colonIdx = cleanLine.indexOf(':');
             if (colonIdx === -1) continue;
-            const key = line.slice(0, colonIdx).trim();
-            const val = line.slice(colonIdx + 1).trim();
+            const key = cleanLine.slice(0, colonIdx).trim();
+            const val = cleanLine.slice(colonIdx + 1).trim();
             if (key === 'event') eventData['event'] = val;
             else if (key === 'data') {
               if (eventData['data']) eventData['data'] += '\n' + val;
@@ -256,7 +263,7 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
               try {
                 receivedRefs = JSON.parse(dataStr.slice(nlIdx + 1));
               } catch {}
-            } else {
+            } else if (dataStr) {
               fullContent = dataStr;
             }
           } else if (eventData['event'] === 'end') {
@@ -268,10 +275,11 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
         if (streamDone && buffer.trim()) {
           const eventData: Record<string, string> = {};
           for (const line of buffer.split('\n')) {
-            const colonIdx = line.indexOf(':');
+            const cleanLine = line.replace(/\r$/, '');
+            const colonIdx = cleanLine.indexOf(':');
             if (colonIdx === -1) continue;
-            const key = line.slice(0, colonIdx).trim();
-            const val = line.slice(colonIdx + 1).trim();
+            const key = cleanLine.slice(0, colonIdx).trim();
+            const val = cleanLine.slice(colonIdx + 1).trim();
             if (key === 'event') eventData['event'] = val;
             else if (key === 'data') {
               if (eventData['data']) eventData['data'] += '\n' + val;
