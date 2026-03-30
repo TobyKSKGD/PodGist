@@ -1008,10 +1008,10 @@ async def chat_stream(session_id: str, request: dict):
                 elif event["type"] == "done":
                     referenced_archives = event["referenced_archives"]
                     full_content = event["content"]
-                    # 将 referenced_archives 作为第二行 data 字段发送（\n 分隔），前端按 \n 分割解析
+                    # JSON 放前面（JSON 不以 \n 开头，保证 split 只匹配分隔符）
                     yield {
                         "event": "done",
-                        "data": f"{full_content}\n{json.dumps(referenced_archives, ensure_ascii=False)}"
+                        "data": f"{json.dumps(referenced_archives, ensure_ascii=False)}\n{full_content}"
                     }
 
             # 保存助手消息

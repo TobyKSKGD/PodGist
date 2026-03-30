@@ -307,14 +307,15 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
               )
             );
           } else if (eventData['event'] === 'done') {
+            // 新格式：JSON 在前（JSON 不以 \n 开头，保证 split 只匹配分隔符）
             const dataStr = eventData['data'] || '';
             const nlIdx = dataStr.indexOf('\n');
             if (nlIdx !== -1) {
-              fullContent = dataStr.slice(0, nlIdx);
               try {
-                receivedRefs = JSON.parse(dataStr.slice(nlIdx + 1));
+                receivedRefs = JSON.parse(dataStr.slice(0, nlIdx));
               } catch {}
-            } else if (dataStr) {
+              fullContent = dataStr.slice(nlIdx + 1);
+            } else {
               fullContent = dataStr;
             }
           } else if (eventData['event'] === 'end') {
@@ -340,13 +341,14 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
               }
             }
             if (eventData['event'] === 'done' && eventData['data']) {
+              // 新格式：JSON 在前
               const dataStr = eventData['data'];
               const nlIdx = dataStr.indexOf('\n');
               if (nlIdx !== -1) {
-                fullContent = dataStr.slice(0, nlIdx);
                 try {
-                  receivedRefs = JSON.parse(dataStr.slice(nlIdx + 1));
+                  receivedRefs = JSON.parse(dataStr.slice(0, nlIdx));
                 } catch {}
+                fullContent = dataStr.slice(nlIdx + 1);
               } else {
                 fullContent = dataStr;
               }
