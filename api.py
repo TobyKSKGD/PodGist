@@ -1003,11 +1003,10 @@ async def chat_stream(session_id: str, request: dict):
                 elif event["type"] == "done":
                     referenced_archives = event["referenced_archives"]
                     full_content = event["content"]
-                    # 将 referenced_archives 内嵌到 data JSON 中，避免非标准 SSE 字段被忽略
+                    # 将 referenced_archives 作为第二行 data 字段发送（\n 分隔），前端按 \n 分割解析
                     yield {
                         "event": "done",
-                        "data": full_content,
-                        "extra_data": json.dumps(referenced_archives, ensure_ascii=False)
+                        "data": f"{full_content}\n{json.dumps(referenced_archives, ensure_ascii=False)}"
                     }
 
             # 保存助手消息
