@@ -170,15 +170,6 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
     setInput('');
     setIsLoading(true);
 
-    // 添加一个占位的消息
-    const assistantTempId = `temp-assistant-${Date.now()}`;
-    setMessages(prev => [...prev, {
-      id: assistantTempId,
-      role: 'assistant',
-      content: '',
-      created_at: new Date().toISOString()
-    }]);
-
     try {
       const body: Record<string, unknown> = { query: userMessage.content };
       if (scope.type === 'archive' && scope.id) {
@@ -211,6 +202,14 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
       let streamDone = false;
       let fullContent = '';
       let receivedRefs: { archive_id: string; archive_name: string; timestamp: string }[] = [];
+      // 流式内容先存到 ref，渲染时直接显示（避免放入 messages 产生双气泡）
+      const streamingContent = { current: '' };
+      setMessages(prev => [...prev, {
+        id: `assistant-streaming`,
+        role: 'assistant',
+        content: '',
+        created_at: new Date().toISOString()
+      }]);
 
       while (!streamDone && reader) {
         const { value, done } = await reader.read();
@@ -224,7 +223,6 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
 
         // 累积 buffer，每次找到完整的 SSE 事件（\r\n\r\n 或 \n\n 分隔）就处理
         while (true) {
-          // 找到下一个事件分隔符（优先 \r\n\r\n，其次 \n\n）
           const rIdx = buffer.indexOf('\r\n\r\n');
           const nIdx = buffer.indexOf('\n\n');
           if (nIdx === -1 && rIdx === -1) break;
@@ -235,7 +233,6 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
 
           const eventData: Record<string, string> = {};
           for (const line of rawEvent.split('\n')) {
-            // 去掉 \r（来自 \r\n 行结束符）
             const cleanLine = line.replace(/\r$/, '');
             const colonIdx = cleanLine.indexOf(':');
             if (colonIdx === -1) continue;
@@ -250,9 +247,10 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
 
           if (eventData['event'] === 'token' && eventData['data']) {
             fullContent += eventData['data'];
+            streamingContent.current = fullContent;
             setMessages(prev =>
               prev.map(m =>
-                m.id === assistantTempId ? { ...m, content: fullContent } : m
+                m.id === 'assistant-streaming' ? { ...m, content: fullContent } : m
               )
             );
           } else if (eventData['event'] === 'done') {
@@ -271,7 +269,7 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
           }
         }
 
-        // 流结束后，buffer 里可能还有没被处理完的事件（如最后的 end 事件没有 \n\n）
+        // 流结束后，处理剩余 buffer
         if (streamDone && buffer.trim()) {
           const eventData: Record<string, string> = {};
           for (const line of buffer.split('\n')) {
@@ -301,10 +299,10 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
         }
       }
 
-      // 用真实消息替换临时占位
+      // 用真实消息替换临时流式消息
       setMessages(prev =>
         prev.map(m => {
-          if (m.id === assistantTempId) {
+          if (m.id === 'assistant-streaming') {
             return {
               id: `assistant-${Date.now()}`,
               role: 'assistant',
@@ -319,8 +317,8 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
       loadSessions();
     } catch (err) {
       console.error('[ChatView] sendMessage error:', err);
-      // 移除失败的占位，显示错误消息
-      setMessages(prev => prev.filter(m => m.id !== assistantTempId));
+      // 移除失败的流式占位
+      setMessages(prev => prev.filter(m => m.id !== 'assistant-streaming'));
       if (err instanceof Error && err.name === 'AbortError') {
         setMessages(prev => [...prev, {
           id: `error-${Date.now()}`,
@@ -481,49 +479,54 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
             </div>
           )}
 
-          {messages.map(msg => (
-            <div key={msg.id} className={`flex gap-3 mb-4 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
-              <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-xs font-medium ${
-                msg.role === 'user'
-                  ? 'bg-[#00ADA6] text-white'
-                  : 'bg-slate-100 text-slate-500'
-              }`}>
-                {msg.role === 'user' ? '我' : 'AI'}
-              </div>
-              <div className={`max-w-[75%] ${msg.role === 'user' ? 'text-right' : ''}`}>
-                <div className={`inline-block px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
+          {messages.map(msg => {
+            // 流式占位（id=assistant-streaming）且内容为空时，跳过不渲染
+            // 此时思考中图标会单独显示，不会产生双气泡
+            if (msg.id === 'assistant-streaming' && !msg.content) return null;
+            return (
+              <div key={msg.id} className={`flex gap-3 mb-4 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
+                <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-xs font-medium ${
                   msg.role === 'user'
-                    ? 'bg-[#00ADA6] text-white rounded-tr-sm'
-                    : 'bg-slate-100 text-slate-700 rounded-tl-sm'
+                    ? 'bg-[#00ADA6] text-white'
+                    : 'bg-slate-100 text-slate-500'
                 }`}>
-                  {msg.content}
+                  {msg.role === 'user' ? '我' : 'AI'}
                 </div>
-                {msg.created_at && (
-                  <div className="text-xs text-slate-300 mt-1 px-1">
-                    {formatTime(msg.created_at)}
+                <div className={`max-w-[75%] ${msg.role === 'user' ? 'text-right' : ''}`}>
+                  <div className={`inline-block px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
+                    msg.role === 'user'
+                      ? 'bg-[#00ADA6] text-white rounded-tr-sm'
+                      : 'bg-slate-100 text-slate-700 rounded-tl-sm'
+                  }`}>
+                    {msg.content}
                   </div>
-                )}
-                {/* 引用来源 chips（仅助手消息） */}
-                {msg.role === 'assistant' && msg.references && msg.references.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 mt-2">
-                    <span className="text-xs text-slate-400 self-center">参考：</span>
-                    {msg.references.map((ref, i) => (
-                      <button
-                        key={i}
-                        onClick={() => onJumpToArchive?.(ref.archive_id)}
-                        className="flex items-center gap-1 px-2 py-0.5 bg-white border border-slate-200 rounded-full text-xs text-slate-500 hover:border-[#00ADA6] hover:text-[#00ADA6] transition-colors"
-                        title={`跳转到 ${ref.archive_name}`}
-                      >
-                        <IconBook size={10} />
-                        <span>{ref.archive_name}</span>
-                        {ref.timestamp && <span className="text-slate-400">[{ref.timestamp}]</span>}
-                      </button>
-                    ))}
-                  </div>
-                )}
+                  {msg.created_at && (
+                    <div className="text-xs text-slate-300 mt-1 px-1">
+                      {formatTime(msg.created_at)}
+                    </div>
+                  )}
+                  {/* 引用来源 chips（仅助手消息） */}
+                  {msg.role === 'assistant' && msg.references && msg.references.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                      <span className="text-xs text-slate-400 self-center">参考：</span>
+                      {msg.references.map((ref, i) => (
+                        <button
+                          key={i}
+                          onClick={() => onJumpToArchive?.(ref.archive_id)}
+                          className="flex items-center gap-1 px-2 py-0.5 bg-white border border-slate-200 rounded-full text-xs text-slate-500 hover:border-[#00ADA6] hover:text-[#00ADA6] transition-colors"
+                          title={`跳转到 ${ref.archive_name}`}
+                        >
+                          <IconBook size={10} />
+                          <span>{ref.archive_name}</span>
+                          {ref.timestamp && <span className="text-slate-400">[{ref.timestamp}]</span>}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
 
           {isLoading && (
             <div className="flex gap-3 mb-4">
