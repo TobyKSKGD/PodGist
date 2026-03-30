@@ -150,8 +150,14 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
           sessionId = res.data.session_id;
           setActiveSessionId(sessionId);
           loadSessions();
+        } else {
+          setIsLoading(false);
+          return;
         }
-      } catch { return; }
+      } catch {
+        setIsLoading(false);
+        return;
+      }
     }
 
     const userMessage: Message = {
@@ -201,35 +207,35 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
         done = d;
         if (value) {
           const text = decoder.decode(value, { stream: !done });
-          // SSE 解析：按事件分组
-          const events: Record<string, string> = {};
-          for (const line of text.split('\n')) {
-            const colonIdx = line.indexOf(':');
-            if (colonIdx === -1) continue;
-            const key = line.slice(0, colonIdx).trim();
-            const val = line.slice(colonIdx + 1).trim();
-            if (key === 'event') {
-              events['event'] = val;
-            } else if (key === 'data') {
-              events['data'] = val;
-            } else if (key === 'referenced_archives') {
-              events['referenced_archives'] = val;
+          // SSE 解析：按空行分隔事件，每行内部按冒号分割
+          const rawEvents = text.split(/\n\n/);
+          for (const rawEvent of rawEvents) {
+            if (!rawEvent.trim()) continue;
+            const eventData: Record<string, string> = {};
+            for (const line of rawEvent.split('\n')) {
+              const colonIdx = line.indexOf(':');
+              if (colonIdx === -1) continue;
+              const key = line.slice(0, colonIdx).trim();
+              const val = line.slice(colonIdx + 1).trim();
+              if (key === 'event') eventData['event'] = val;
+              else if (key === 'data') eventData['data'] = val;
+              else if (key === 'referenced_archives') eventData['referenced_archives'] = val;
             }
-          }
 
-          if (events['event'] === 'token' && events['data']) {
-            fullContent += events['data'];
-            setMessages(prev =>
-              prev.map(m =>
-                m.id === assistantTempId ? { ...m, content: fullContent } : m
-              )
-            );
-          } else if (events['event'] === 'done') {
-            fullContent = events['data'] || fullContent;
-            if (events['referenced_archives']) {
-              try {
-                receivedRefs = JSON.parse(events['referenced_archives']);
-              } catch {}
+            if (eventData['event'] === 'token' && eventData['data']) {
+              fullContent += eventData['data'];
+              setMessages(prev =>
+                prev.map(m =>
+                  m.id === assistantTempId ? { ...m, content: fullContent } : m
+                )
+              );
+            } else if (eventData['event'] === 'done') {
+              fullContent = eventData['data'] || fullContent;
+              if (eventData['referenced_archives']) {
+                try {
+                  receivedRefs = JSON.parse(eventData['referenced_archives']);
+                } catch {}
+              }
             }
           }
         }
@@ -447,8 +453,9 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
               <div className="shrink-0 w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-xs text-slate-500">
                 AI
               </div>
-              <div className="bg-slate-100 px-4 py-3 rounded-2xl rounded-tl-sm">
+              <div className="bg-slate-100 px-4 py-3 rounded-2xl rounded-tl-sm flex items-center gap-2">
                 <IconLoader2 size={16} className="text-slate-400 animate-spin" />
+                <span className="text-sm text-slate-400">正在思考中...</span>
               </div>
             </div>
           )}
