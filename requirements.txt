@@ -25,3 +25,8 @@ sortedcontainers>=2.4.0
 
 # 注意：Torch 故意未在此处锁死版本。
 # Windows (N卡) 和 Mac (M芯片) 需要分别使用不同的命令安装对应的 Torch 硬件加速版。
+
+# RAG 向量数据库与 Embedding
+chromadb>=0.5.0
+sentence-transformers>=3.0.0
+sse-starlette>=1.8.0

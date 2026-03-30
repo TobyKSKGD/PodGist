@@ -12,6 +12,15 @@ from backend.llm_agent import get_podcast_summary_robust, search_in_podcast
 from backend.downloader import route_and_download, detect_platform, AudioDownloader
 from backend.task_queue import add_task, get_task, get_all_tasks, get_queue_stats, update_task_status, delete_task, clear_completed
 from backend.worker import start_worker, is_worker_running, pause_worker, resume_worker, is_paused, stop_worker, retry_failed_tasks
+from backend.rag_db import (
+    create_tag, get_all_tags, delete_tag, set_archive_tags, get_archive_tags,
+    create_chat_session, get_chat_sessions, get_chat_session, update_chat_session_title, delete_chat_session,
+    add_chat_message, get_chat_messages, add_chat_reference, get_archive_references,
+    index_archive, delete_archive_vectors, get_archives_by_tag, init_db as init_rag_db
+)
+from backend.rag_retriever import generate_chat_response
+from sse_starlette.sse import EventSourceResponse
+import asyncio
 
 app = FastAPI(title="PodGist API", version="1.0.0")
 
@@ -152,6 +161,12 @@ async def transcribe_local(
         with open(raw_path, "w", encoding="utf-8") as f:
             f.write(podcast_text)
 
+        # 7.5 自动索引到向量库
+        try:
+            index_archive(archive_name, archive_name, podcast_text)
+        except Exception as e:
+            print(f"[RAG] 向量索引失败（不影响归档）: {e}")
+
         # 8. 保存摘要（确保有 H1 标题）
         summary_path = os.path.join(archive_path, "summary.md")
         lines = summary.strip().split('\n')
@@ -276,6 +291,12 @@ async def transcribe_url(
         with open(raw_path, "w", encoding="utf-8") as f:
             f.write(podcast_text)
 
+        # 7.5 自动索引到向量库
+        try:
+            index_archive(archive_name, archive_name, podcast_text)
+        except Exception as e:
+            print(f"[RAG] 向量索引失败（不影响归档）: {e}")
+
         # 8. 保存摘要
         summary_path = os.path.join(archive_path, "summary.md")
         lines = summary.strip().split('\n')
@@ -366,6 +387,8 @@ def delete_archive(archive_name: str):
 
         # 删除整个目录
         shutil.rmtree(archive_path)
+        # 删除向量
+        delete_archive_vectors(archive_name)
         return {"status": "success", "message": f"归档 '{archive_name}' 已删除"}
     except HTTPException:
         raise
@@ -731,6 +754,12 @@ def retry_task_llm(task_id: str):
         with open(raw_path, "w", encoding="utf-8") as f:
             f.write(podcast_text)
 
+        # 自动索引到向量库
+        try:
+            index_archive(archive_name, archive_name, podcast_text)
+        except Exception as e:
+            print(f"[RAG] 向量索引失败（不影响归档）: {e}")
+
         # 保存 summary.md
         summary_path = os.path.join(archive_path, "summary.md")
         lines = raw_summary.strip().split('\n')
@@ -772,7 +801,7 @@ def retry_task_llm(task_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# 17. AI 模糊定位器
+# 17. AI 模糊定位器（单归档版）
 @app.post("/api/search")
 async def search_podcast(request: dict):
     """在归档的转录文本中搜索相关内容"""
@@ -810,3 +839,260 @@ async def search_podcast(request: dict):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ================= RAG 知识库 API =================
+
+# 18. 标签管理
+@app.get("/api/chat/tags")
+def list_tags():
+    """获取所有标签"""
+    try:
+        return {"status": "success", "data": get_all_tags()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/chat/tags")
+def create_tag_api(request: dict):
+    """创建标签"""
+    try:
+        name = request.get("name", "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="标签名不能为空")
+        tag_id = create_tag(name)
+        return {"status": "success", "tag_id": tag_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/chat/tags/{tag_id}")
+def delete_tag_api(tag_id: str):
+    """删除标签"""
+    try:
+        delete_tag(tag_id)
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# 19. 归档标签关联
+@app.get("/api/chat/archives/{archive_id}/tags")
+def get_archive_tags_api(archive_id: str):
+    """获取归档的标签"""
+    try:
+        return {"status": "success", "data": get_archive_tags(archive_id)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/chat/archives/{archive_id}/tags")
+def set_archive_tags_api(archive_id: str, request: dict):
+    """设置归档的标签"""
+    try:
+        tag_ids = request.get("tag_ids", [])
+        set_archive_tags(archive_id, tag_ids)
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# 20. 会话管理
+@app.get("/api/chat/sessions")
+def list_chat_sessions():
+    """获取所有会话列表"""
+    try:
+        return {"status": "success", "data": get_chat_sessions()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/chat/sessions")
+def create_chat_session_api(request: dict = None):
+    """创建新会话"""
+    try:
+        title = (request.get("title", "新对话") if request else "新对话").strip()
+        if not title:
+            title = "新对话"
+        session_id = create_chat_session(title)
+        return {"status": "success", "session_id": session_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/chat/sessions/{session_id}")
+def get_chat_session_api(session_id: str):
+    """获取会话详情（含消息）"""
+    try:
+        session = get_chat_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        messages = get_chat_messages(session_id)
+        return {"status": "success", "data": {**session, "messages": messages}}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.patch("/api/chat/sessions/{session_id}/title")
+def update_chat_session_title_api(session_id: str, request: dict):
+    """更新会话标题"""
+    try:
+        title = request.get("title", "").strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="标题不能为空")
+        update_chat_session_title(session_id, title)
+        return {"status": "success"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/chat/sessions/{session_id}")
+def delete_chat_session_api(session_id: str):
+    """删除会话"""
+    try:
+        delete_chat_session(session_id)
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# 21. SSE 流式对话
+@app.post("/api/chat/sessions/{session_id}/stream")
+async def chat_stream(session_id: str, request: dict):
+    """
+    SSE 流式对话接口。
+
+    前端发送：{"query": "...", "archive_ids": [], "tag_ids": []}
+    返回：Server-Sent Events 流
+    """
+    try:
+        session = get_chat_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="会话不存在")
+
+        query = request.get("query", "").strip()
+        if not query:
+            raise HTTPException(status_code=400, detail="问题不能为空")
+
+        archive_ids = request.get("archive_ids") or None
+        tag_ids = request.get("tag_ids") or None
+
+        api_key = load_api_key()
+        if not api_key:
+            raise HTTPException(status_code=400, detail="请先配置 DeepSeek API Key")
+
+        # 保存用户消息
+        add_chat_message(session_id, "user", query)
+
+        # 异步生成器，用于 SSE
+        async def event_generator():
+            referenced_archives = []
+            full_content = ""
+
+            for event in generate_chat_response(
+                api_key=api_key,
+                query=query,
+                archive_ids=archive_ids,
+                tag_ids=tag_ids,
+                top_k=5,
+                stream=True
+            ):
+                if event["type"] == "token":
+                    referenced_archives = event["referenced_archives"]
+                    full_content += event["content"]
+                    yield {
+                        "event": "token",
+                        "data": event["content"]
+                    }
+                elif event["type"] == "done":
+                    referenced_archives = event["referenced_archives"]
+                    full_content = event["content"]
+                    yield {
+                        "event": "done",
+                        "data": full_content
+                    }
+
+            # 保存助手消息
+            if full_content:
+                add_chat_message(session_id, "assistant", full_content)
+
+                # 记录引用（去重）
+                for archive_id in set(referenced_archives):
+                    add_chat_reference(session_id, archive_id)
+
+                # 更新会话标题（如果还是默认标题，用第一个用户问题截取）
+                if session.get("title", "新对话") == "新对话":
+                    short_title = query[:30] + ("..." if len(query) > 30 else "")
+                    update_chat_session_title(session_id, short_title)
+
+            yield {"event": "end", "data": ""}
+
+        return EventSourceResponse(event_generator())
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# 22. 归档索引（手动触发）
+@app.post("/api/chat/archives/{archive_id}/index")
+def index_archive_api(archive_id: str):
+    """手动将归档索引到向量库"""
+    try:
+        archive_path = os.path.join(ARCHIVE_DIR, archive_id)
+        if not os.path.exists(archive_path):
+            raise HTTPException(status_code=404, detail="归档不存在")
+
+        raw_path = os.path.join(archive_path, "raw.txt")
+        if not os.path.exists(raw_path):
+            raise HTTPException(status_code=404, detail="转录文本不存在")
+
+        with open(raw_path, "r", encoding="utf-8") as f:
+            raw_text = f.read()
+
+        index_archive(archive_id, archive_id, raw_text)
+        return {"status": "success", "message": f"归档 '{archive_id}' 已索引"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# 23. 批量索引所有未索引的归档
+@app.post("/api/chat/index-all")
+def index_all_archives():
+    """将所有已有 raw.txt 的归档批量索引"""
+    try:
+        if not os.path.exists(ARCHIVE_DIR):
+            return {"status": "success", "indexed": 0, "skipped": 0}
+
+        indexed = 0
+        skipped = 0
+        for archive_name in os.listdir(ARCHIVE_DIR):
+            archive_path = os.path.join(ARCHIVE_DIR, archive_name)
+            if not os.path.isdir(archive_path):
+                continue
+            raw_path = os.path.join(archive_path, "raw.txt")
+            if not os.path.exists(raw_path):
+                skipped += 1
+                continue
+            try:
+                with open(raw_path, "r", encoding="utf-8") as f:
+                    raw_text = f.read()
+                index_archive(archive_name, archive_name, raw_text)
+                indexed += 1
+            except Exception:
+                skipped += 1
+
+        return {"status": "success", "indexed": indexed, "skipped": skipped}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# 24. 归档的反向引用（Backlinks）
+@app.get("/api/chat/archives/{archive_id}/references")
+def get_archive_backlinks(archive_id: str):
+    """获取哪些对话引用过此归档"""
+    try:
+        refs = get_archive_references(archive_id)
+        return {"status": "success", "data": refs}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ================= 启动时初始化 RAG 数据库 =================
+init_rag_db()
