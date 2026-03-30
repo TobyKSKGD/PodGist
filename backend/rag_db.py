@@ -302,55 +302,66 @@ def get_archive_references(archive_id: str) -> list[dict]:
     return [dict(row) for row in rows]
 
 # ================= 向量入库 =================
-def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> list[dict]:
+def chunk_text(text: str, chunk_size: int = 500, overlap: int = 100) -> list[dict]:
     """
-    将文本按段落切分成块，每块带时间戳信息。
+    将转录文本按字符数切分成块，每块带时间戳信息。
+
+    参数:
+        text: 原始转录文本（含 [MM:SS] 时间戳格式）
+        chunk_size: 每块最大字符数（默认 500）
+        overlap: 相邻块之间的重叠字符数（默认 100）
 
     返回: list[{"text": str, "timestamp": str, "chunk_index": int}]
     """
-    # 按行分割，保留时间戳格式 [MM:SS] 或 [HH:MM:SS]
     import re
     lines = text.split('\n')
     chunks = []
-    current_chunk_lines = []
-    current_ts = None
+    current_chunk_chars = []
+    current_chunk_len = 0
+    first_ts = None  # 用第一个时间戳，不是最后一个
     chunk_index = 0
 
     for line in lines:
-        # 提取时间戳
+        # 提取时间戳（保留）
         ts_match = re.search(r'\[(\d{1,2}:\d{2}(?::\d{2})?)\]', line)
         if ts_match:
+            if first_ts is None:
+                first_ts = ts_match.group(1)
             current_ts = ts_match.group(1)
 
-        # 跳过空行
         stripped = line.strip()
         if not stripped:
             continue
 
-        # 移除时间戳后检查是否为空
+        # 移除时间戳后检查内容是否为空
         content = re.sub(r'\[(\d{1,2}:\d{2}(?::\d{2})?)\]\s*', '', stripped).strip()
         if not content:
             continue
 
-        current_chunk_lines.append(stripped)
+        line_len = len(stripped) + 1  # +1 for \n
 
-        # 当累积行数达到 chunk_size 时，切一块
-        if len(current_chunk_lines) >= chunk_size:
-            chunk_text = '\n'.join(current_chunk_lines)
+        # 如果加上这行会超过 chunk_size，先保存当前块
+        if current_chunk_len + line_len > chunk_size and current_chunk_chars:
             chunks.append({
-                "text": chunk_text,
-                "timestamp": current_ts or "",
+                "text": '\n'.join(current_chunk_chars),
+                "timestamp": first_ts or "",
                 "chunk_index": chunk_index
             })
-            # 保留 overlap 行作为重叠上下文
-            current_chunk_lines = current_chunk_lines[-overlap:]
             chunk_index += 1
+            # 重置，保留最后 overlap 个字符作为重叠上下文
+            overlap_chars = '\n'.join(current_chunk_chars)[-overlap:]
+            current_chunk_chars = overlap_chars.split('\n') if overlap_chars.strip() else []
+            current_chunk_len = sum(len(l) + 1 for l in current_chunk_chars)
+            first_ts = current_ts  # 重叠部分的时间轴起点更新为最后一个时间戳
+
+        current_chunk_chars.append(stripped)
+        current_chunk_len += line_len
 
     # 处理剩余内容
-    if current_chunk_lines:
+    if current_chunk_chars:
         chunks.append({
-            "text": '\n'.join(current_chunk_lines),
-            "timestamp": current_ts or "",
+            "text": '\n'.join(current_chunk_chars),
+            "timestamp": first_ts or "",
             "chunk_index": chunk_index
         })
 
