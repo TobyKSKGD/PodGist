@@ -92,7 +92,7 @@ function checkDeps() {
 
 async function main() {
   console.log('========================================');
-  console.log('  PodGist 启动脚本 (跨平台版)');
+  console.log('  PodGist 启动脚本');
   console.log(`  平台: ${platform()} ${arch()}`);
   console.log('========================================' + EOL);
 
