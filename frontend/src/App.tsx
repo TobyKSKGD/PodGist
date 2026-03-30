@@ -18,7 +18,7 @@ const api = axios.create({ baseURL: 'http://localhost:8000' });
 // 内部组件 - 可以使用 useToast
 function AppContent() {
   const { showToast } = useToast();
-  const [activeInputTab, setActiveInputTab] = useState<'local' | 'podcast' | 'bilibili' | 'batch' | 'chat'>('chat');
+  const [activeInputTab, setActiveInputTab] = useState<'local' | 'podcast' | 'bilibili' | 'batch' | 'chat'>('local');
   const [archives, setArchives] = useState<{id: string, name: string}[]>([]);
   const [isIconUploading, setIsIconUploading] = useState(false);
   const [isIconSettingsOpen, setIsIconSettingsOpen] = useState(false);
@@ -245,7 +245,7 @@ function AppContent() {
       />;
     }
 
-    // 智能对话视图（占满整屏）
+    // 智能对话视图（占满整屏，通过侧边栏触发）
     if (activeInputTab === 'chat') {
       return (
         <main className="flex-1 overflow-hidden bg-white">
@@ -274,14 +274,6 @@ function AppContent() {
           )}
 
           <div className="flex border-b border-slate-200 mb-8">
-            <button
-              onClick={() => setActiveInputTab('chat')}
-              className="px-4 py-3 text-sm font-medium border-b-2 transition-colors border-transparent text-slate-500 hover:text-slate-700">
-              <span className="flex items-center gap-1.5">
-                <IconBrain size={16} />
-                智能对话
-              </span>
-            </button>
             <button
               onClick={() => setActiveInputTab('local')}
               className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${activeInputTab === 'local' ? 'border-[#00ADA6] text-[#00ADA6]' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
@@ -387,7 +379,7 @@ function AppContent() {
         <div className="p-3 border-b border-slate-200 flex items-center justify-between">
           {!sidebarCollapsed && (
             <button
-              onClick={() => { setActiveInputTab('chat'); setCurrentView('upload'); setSelectedArchiveId(null); }}
+              onClick={() => { setActiveInputTab('local'); setCurrentView('upload'); setSelectedArchiveId(null); }}
               className="text-lg font-bold flex items-center gap-2 hover:opacity-80 transition-opacity"
             >
               <Logo size={28} /> PodGist
@@ -409,6 +401,21 @@ function AppContent() {
                 className="w-full bg-[#00ADA6] hover:bg-[#009A94] text-white py-2.5 px-4 rounded-lg font-medium transition-all shadow-sm flex items-center justify-center gap-2"
               >
                 <IconPlus size={18} /> 新建提炼任务
+              </button>
+            </div>
+
+            {/* 智能对话入口 */}
+            <div className="px-3 mb-1">
+              <button
+                onClick={() => setActiveInputTab('chat')}
+                className={`w-full flex items-center gap-2 px-3 py-2.5 text-sm rounded-md transition-colors ${
+                  activeInputTab === 'chat'
+                    ? 'bg-slate-200 text-[#00ADA6]'
+                    : 'text-slate-600 hover:bg-slate-200 hover:text-[#00ADA6]'
+                }`}
+              >
+                <IconBrain size={16} className="shrink-0" />
+                <span>智能对话</span>
               </button>
             </div>
 
@@ -475,11 +482,18 @@ function AppContent() {
         {sidebarCollapsed && (
           <div className="flex-1 flex flex-col items-center py-4 gap-2">
             <button
-              onClick={() => setCurrentView('upload')}
+              onClick={() => { setActiveInputTab('local'); setCurrentView('upload'); }}
               className="p-2.5 hover:bg-slate-200 rounded-lg transition-colors text-slate-600"
               title="新建任务"
             >
               <IconPlus size={20} />
+            </button>
+            <button
+              onClick={() => setActiveInputTab('chat')}
+              className={`p-2.5 rounded-lg transition-colors ${activeInputTab === 'chat' ? 'bg-slate-200 text-[#00ADA6]' : 'text-slate-600 hover:bg-slate-200'}`}
+              title="智能对话"
+            >
+              <IconBrain size={20} />
             </button>
             <button
               onClick={() => setCurrentView(currentView === 'queue' ? 'upload' : 'queue')}
