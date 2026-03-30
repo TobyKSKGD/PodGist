@@ -995,7 +995,7 @@ async def chat_stream(session_id: str, request: dict):
                 query=query,
                 archive_ids=archive_ids,
                 tag_ids=tag_ids,
-                top_k=5,
+                top_k=20,
                 stream=True
             ):
                 if event["type"] == "token":
