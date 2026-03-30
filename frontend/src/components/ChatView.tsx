@@ -10,7 +10,13 @@ const api = axios.create({ baseURL: 'http://localhost:8000' });
 
 interface Tag { id: string; name: string; created_at: string; }
 interface Session { id: string; title: string; updated_at: string; }
-interface Message { id: string; role: string; content: string; created_at: string; }
+interface Message {
+  id: string;
+  role: string;
+  content: string;
+  created_at: string;
+  references?: { archive_id: string; archive_name: string; timestamp: string }[];
+}
 
 interface ScopeOption {
   type: 'global' | 'tag' | 'archive';
@@ -18,7 +24,11 @@ interface ScopeOption {
   id?: string;
 }
 
-export default function ChatView() {
+interface ChatViewProps {
+  onJumpToArchive?: (archiveId: string) => void;
+}
+
+export default function ChatView({ onJumpToArchive }: ChatViewProps) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -184,25 +194,42 @@ export default function ChatView() {
       const decoder = new TextDecoder();
       let done = false;
       let fullContent = '';
+      let receivedRefs: { archive_id: string; archive_name: string; timestamp: string }[] = [];
 
       while (!done && reader) {
         const { value, done: d } = await reader.read();
         done = d;
         if (value) {
           const text = decoder.decode(value, { stream: !done });
-          // SSE 解析
-          const lines = text.split('\n');
-          for (const line of lines) {
-            if (line.startsWith('event: token') || line.startsWith('data:')) {
-              const data = line.replace(/^event: token\s*/i, '').replace(/^data:\s*/, '');
-              if (data) {
-                fullContent += data;
-                setMessages(prev =>
-                  prev.map(m =>
-                    m.id === assistantTempId ? { ...m, content: fullContent } : m
-                  )
-                );
-              }
+          // SSE 解析：按事件分组
+          const events: Record<string, string> = {};
+          for (const line of text.split('\n')) {
+            const colonIdx = line.indexOf(':');
+            if (colonIdx === -1) continue;
+            const key = line.slice(0, colonIdx).trim();
+            const val = line.slice(colonIdx + 1).trim();
+            if (key === 'event') {
+              events['event'] = val;
+            } else if (key === 'data') {
+              events['data'] = val;
+            } else if (key === 'referenced_archives') {
+              events['referenced_archives'] = val;
+            }
+          }
+
+          if (events['event'] === 'token' && events['data']) {
+            fullContent += events['data'];
+            setMessages(prev =>
+              prev.map(m =>
+                m.id === assistantTempId ? { ...m, content: fullContent } : m
+              )
+            );
+          } else if (events['event'] === 'done') {
+            fullContent = events['data'] || fullContent;
+            if (events['referenced_archives']) {
+              try {
+                receivedRefs = JSON.parse(events['referenced_archives']);
+              } catch {}
             }
           }
         }
@@ -216,7 +243,8 @@ export default function ChatView() {
               id: `assistant-${Date.now()}`,
               role: 'assistant',
               content: fullContent || '（未能获取回复）',
-              created_at: new Date().toISOString()
+              created_at: new Date().toISOString(),
+              references: receivedRefs
             };
           }
           return m;
@@ -390,6 +418,24 @@ export default function ChatView() {
                 {msg.created_at && (
                   <div className="text-xs text-slate-300 mt-1 px-1">
                     {formatTime(msg.created_at)}
+                  </div>
+                )}
+                {/* 引用来源 chips（仅助手消息） */}
+                {msg.role === 'assistant' && msg.references && msg.references.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mt-2">
+                    <span className="text-xs text-slate-400 self-center">参考：</span>
+                    {msg.references.map((ref, i) => (
+                      <button
+                        key={i}
+                        onClick={() => onJumpToArchive?.(ref.archive_id)}
+                        className="flex items-center gap-1 px-2 py-0.5 bg-white border border-slate-200 rounded-full text-xs text-slate-500 hover:border-[#00ADA6] hover:text-[#00ADA6] transition-colors"
+                        title={`跳转到 ${ref.archive_name}`}
+                      >
+                        <IconBook size={10} />
+                        <span>{ref.archive_name}</span>
+                        {ref.timestamp && <span className="text-slate-400">[{ref.timestamp}]</span>}
+                      </button>
+                    ))}
                   </div>
                 )}
               </div>

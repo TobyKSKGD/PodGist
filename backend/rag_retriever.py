@@ -74,8 +74,18 @@ def generate_chat_response(
         injected_retrieved_context=retrieved_context
     )
 
-    # Step 3: 提取引用信息（用于后端记录）
-    referenced_archives = list({c["archive_id"] for c in chunks})
+    # Step 3: 提取引用信息（包含 archive_name 和 timestamp）
+    # 构建 {archive_id: {archive_name, timestamp}} 映射，取每个归档的第一个时间戳
+    archive_refs: dict[str, dict] = {}
+    for c in chunks:
+        aid = c["archive_id"]
+        if aid not in archive_refs:
+            archive_refs[aid] = {
+                "archive_id": aid,
+                "archive_name": c.get("archive_name", aid),
+                "timestamp": c.get("timestamp", "")
+            }
+    referenced_archives = list(archive_refs.values())
 
     # Step 4: 构建消息历史
     messages = [

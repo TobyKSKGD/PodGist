@@ -1005,16 +1005,21 @@ async def chat_stream(session_id: str, request: dict):
                     full_content = event["content"]
                     yield {
                         "event": "done",
-                        "data": full_content
+                        "data": full_content,
+                        "referenced_archives": referenced_archives
                     }
 
             # 保存助手消息
             if full_content:
                 add_chat_message(session_id, "assistant", full_content)
 
-                # 记录引用（去重）
-                for archive_id in set(referenced_archives):
-                    add_chat_reference(session_id, archive_id)
+                # 记录引用（去重，按 archive_id）
+                seen_ids = set()
+                for ref in referenced_archives:
+                    aid = ref["archive_id"]
+                    if aid not in seen_ids:
+                        seen_ids.add(aid)
+                        add_chat_reference(session_id, aid, cited_timestamp=ref.get("timestamp", ""))
 
                 # 更新会话标题（如果还是默认标题，用第一个用户问题截取）
                 if session.get("title", "新对话") == "新对话":
