@@ -187,22 +187,32 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
         body.tag_ids = [scope.id];
       }
 
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 60000);
+
       const response = await fetch(
         `http://localhost:8000/api/chat/sessions/${sessionId}/stream`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body)
+          body: JSON.stringify(body),
+          signal: controller.signal
         }
       );
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        throw new Error(`请求失败: ${response.status}`);
+      }
 
       const reader = response.body?.getReader();
       const decoder = new TextDecoder();
       let done = false;
+      let streamDone = false;
       let fullContent = '';
       let receivedRefs: { archive_id: string; archive_name: string; timestamp: string }[] = [];
 
-      while (!done && reader) {
+      while (!streamDone && reader) {
         const { value, done: d } = await reader.read();
         done = d;
         if (value) {
@@ -219,7 +229,7 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
               const val = line.slice(colonIdx + 1).trim();
               if (key === 'event') eventData['event'] = val;
               else if (key === 'data') eventData['data'] = val;
-              else if (key === 'referenced_archives') eventData['referenced_archives'] = val;
+              else if (key === 'extra_data') eventData['extra_data'] = val;
             }
 
             if (eventData['event'] === 'token' && eventData['data']) {
@@ -230,15 +240,21 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
                 )
               );
             } else if (eventData['event'] === 'done') {
-              fullContent = eventData['data'] || fullContent;
-              if (eventData['referenced_archives']) {
+              // data 字段就是完整内容（来自后端 done 事件的 full_content）
+              if (eventData['data']) fullContent = eventData['data'];
+              if (eventData['extra_data']) {
                 try {
-                  receivedRefs = JSON.parse(eventData['referenced_archives']);
+                  receivedRefs = JSON.parse(eventData['extra_data']);
                 } catch {}
               }
+            } else if (eventData['event'] === 'end') {
+              // SSE 流结束信号
+              streamDone = true;
             }
           }
         }
+        // 当 done=true（reader 返回的最后一条数据）时，处理完当前数据后退出
+        if (done) streamDone = true;
       }
 
       // 用真实消息替换临时占位
@@ -258,8 +274,23 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
       );
       loadSessions();
     } catch (err) {
-      // 移除失败的占位
+      // 移除失败的占位，显示错误消息
       setMessages(prev => prev.filter(m => m.id !== assistantTempId));
+      if (err instanceof Error && err.name === 'AbortError') {
+        setMessages(prev => [...prev, {
+          id: `error-${Date.now()}`,
+          role: 'assistant',
+          content: '（请求超时，请检查网络或 API 配置）',
+          created_at: new Date().toISOString()
+        }]);
+      } else {
+        setMessages(prev => [...prev, {
+          id: `error-${Date.now()}`,
+          role: 'assistant',
+          content: '（发送失败，请重试）',
+          created_at: new Date().toISOString()
+        }]);
+      }
     } finally {
       setIsLoading(false);
     }
