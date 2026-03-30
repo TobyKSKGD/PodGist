@@ -199,11 +199,9 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
       const reader = response.body?.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
-      let streamDone = false;
       let fullContent = '';
       let receivedRefs: { archive_id: string; archive_name: string; timestamp: string }[] = [];
-      // 流式内容先存到 ref，渲染时直接显示（避免放入 messages 产生双气泡）
-      const streamingContent = { current: '' };
+
       setMessages(prev => [...prev, {
         id: `assistant-streaming`,
         role: 'assistant',
@@ -211,17 +209,24 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
         created_at: new Date().toISOString()
       }]);
 
-      while (!streamDone && reader) {
-        const { value, done } = await reader.read();
+      while (true) {
+        let value: Uint8Array | undefined;
+        let done = false;
+        if (!reader) break;
+        try {
+          const result = await reader.read();
+          value = result.value;
+          done = result.done;
+        } catch (readErr) {
+          // reader 出错（如网络中断），退出循环
+          break;
+        }
+
         if (value) {
           buffer += decoder.decode(value, { stream: true });
         }
-        if (done) {
-          buffer += decoder.decode();
-          streamDone = true;
-        }
 
-        // 累积 buffer，每次找到完整的 SSE 事件（\r\n\r\n 或 \n\n 分隔）就处理
+        // 每次 read 后尝试消费 buffer 中的完整事件
         while (true) {
           const rIdx = buffer.indexOf('\r\n\r\n');
           const nIdx = buffer.indexOf('\n\n');
@@ -247,7 +252,6 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
 
           if (eventData['event'] === 'token' && eventData['data']) {
             fullContent += eventData['data'];
-            streamingContent.current = fullContent;
             setMessages(prev =>
               prev.map(m =>
                 m.id === 'assistant-streaming' ? { ...m, content: fullContent } : m
@@ -265,41 +269,46 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
               fullContent = dataStr;
             }
           } else if (eventData['event'] === 'end') {
-            streamDone = true;
+            break; // 退出事件消费循环，等待下一轮 read
           }
         }
 
-        // 流结束后，处理剩余 buffer
-        if (streamDone && buffer.trim()) {
-          const eventData: Record<string, string> = {};
-          for (const line of buffer.split('\n')) {
-            const cleanLine = line.replace(/\r$/, '');
-            const colonIdx = cleanLine.indexOf(':');
-            if (colonIdx === -1) continue;
-            const key = cleanLine.slice(0, colonIdx).trim();
-            const val = cleanLine.slice(colonIdx + 1).trim();
-            if (key === 'event') eventData['event'] = val;
-            else if (key === 'data') {
-              if (eventData['data']) eventData['data'] += '\n' + val;
-              else eventData['data'] = val;
+        // 读完且 buffer 清空时退出
+        if (done) {
+          // 处理剩余 buffer（如最后的 end 事件）
+          if (buffer.trim()) {
+            const eventData: Record<string, string> = {};
+            for (const line of buffer.split('\n')) {
+              const cleanLine = line.replace(/\r$/, '');
+              const colonIdx = cleanLine.indexOf(':');
+              if (colonIdx === -1) continue;
+              const key = cleanLine.slice(0, colonIdx).trim();
+              const val = cleanLine.slice(colonIdx + 1).trim();
+              if (key === 'event') eventData['event'] = val;
+              else if (key === 'data') {
+                if (eventData['data']) eventData['data'] += '\n' + val;
+                else eventData['data'] = val;
+              }
+            }
+            if (eventData['event'] === 'done' && eventData['data']) {
+              const dataStr = eventData['data'];
+              const nlIdx = dataStr.indexOf('\n');
+              if (nlIdx !== -1) {
+                fullContent = dataStr.slice(0, nlIdx);
+                try {
+                  receivedRefs = JSON.parse(dataStr.slice(nlIdx + 1));
+                } catch {}
+              } else {
+                fullContent = dataStr;
+              }
             }
           }
-          if (eventData['event'] === 'done') {
-            const dataStr = eventData['data'] || '';
-            const nlIdx = dataStr.indexOf('\n');
-            if (nlIdx !== -1) {
-              fullContent = dataStr.slice(0, nlIdx);
-              try {
-                receivedRefs = JSON.parse(dataStr.slice(nlIdx + 1));
-              } catch {}
-            } else if (dataStr) {
-              fullContent = dataStr;
-            }
-          }
+          break; // 退出主读取循环
         }
       }
 
-      // 用真实消息替换临时流式消息
+      // 统一在 finally 前替换流式消息（无论成功结束还是 reader 出错）
+      // 如果 streamEnded=false（reader 出错），fullContent 可能为空
       setMessages(prev =>
         prev.map(m => {
           if (m.id === 'assistant-streaming') {
