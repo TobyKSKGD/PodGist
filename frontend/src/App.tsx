@@ -518,8 +518,8 @@ function AppContent() {
         {renderMainContent()}
       </div>
 
-      {/* 全局通知铃铛（仅在非任务队列视图显示） */}
-      {currentView !== 'queue' && (
+      {/* 全局通知铃铛（仅在非任务队列/非智能对话视图显示） */}
+      {currentView !== 'queue' && currentView !== 'chat' && (
         <div className="fixed bottom-6 right-6 z-50">
           <button
             ref={bellButtonRef}
