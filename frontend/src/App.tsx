@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
-import { IconSettings, IconPlus, IconMessageCircle, IconCloudUpload, IconLayoutList, IconChevronLeft, IconChevronRight, IconLayersLinked, IconTrash, IconAlertTriangle, IconBell, IconX, IconCircleCheck, IconUpload, IconRadio, IconVideo } from '@tabler/icons-react';
+import { IconSettings, IconPlus, IconMessageCircle, IconCloudUpload, IconLayoutList, IconChevronLeft, IconChevronRight, IconLayersLinked, IconTrash, IconAlertTriangle, IconBell, IconX, IconCircleCheck, IconUpload, IconRadio, IconVideo, IconBrain } from '@tabler/icons-react';
 import SettingsModal from './components/SettingsModal';
 import ResultView from './components/ResultView';
 import PodcastDownloadForm from './components/PodcastDownloadForm';
@@ -10,6 +10,7 @@ import Logo from './components/Logo';
 import DinoLoader from './components/DinoLoader';
 import { ToastProvider, useToast } from './components/Toast';
 import ConfirmDialog from './components/ConfirmDialog';
+import ChatView from './components/ChatView';
 
 // 配置 axios 基础路径，指向你的 FastAPI 后端
 const api = axios.create({ baseURL: 'http://localhost:8000' });
@@ -17,7 +18,7 @@ const api = axios.create({ baseURL: 'http://localhost:8000' });
 // 内部组件 - 可以使用 useToast
 function AppContent() {
   const { showToast } = useToast();
-  const [activeInputTab, setActiveInputTab] = useState<'local' | 'podcast' | 'bilibili' | 'batch'>('local');
+  const [activeInputTab, setActiveInputTab] = useState<'local' | 'podcast' | 'bilibili' | 'batch' | 'chat'>('chat');
   const [archives, setArchives] = useState<{id: string, name: string}[]>([]);
   const [isIconUploading, setIsIconUploading] = useState(false);
   const [isIconSettingsOpen, setIsIconSettingsOpen] = useState(false);
@@ -244,6 +245,15 @@ function AppContent() {
       />;
     }
 
+    // 智能对话视图（占满整屏）
+    if (activeInputTab === 'chat') {
+      return (
+        <main className="flex-1 overflow-hidden bg-white">
+          <ChatView />
+        </main>
+      );
+    }
+
     return (
       <main className="flex-1 overflow-y-auto bg-white">
         <div className="max-w-4xl w-full mx-auto p-8 pb-16">
@@ -264,6 +274,14 @@ function AppContent() {
           )}
 
           <div className="flex border-b border-slate-200 mb-8">
+            <button
+              onClick={() => setActiveInputTab('chat')}
+              className="px-4 py-3 text-sm font-medium border-b-2 transition-colors border-transparent text-slate-500 hover:text-slate-700">
+              <span className="flex items-center gap-1.5">
+                <IconBrain size={16} />
+                智能对话
+              </span>
+            </button>
             <button
               onClick={() => setActiveInputTab('local')}
               className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${activeInputTab === 'local' ? 'border-[#00ADA6] text-[#00ADA6]' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
@@ -369,7 +387,7 @@ function AppContent() {
         <div className="p-3 border-b border-slate-200 flex items-center justify-between">
           {!sidebarCollapsed && (
             <button
-              onClick={() => { setCurrentView('upload'); setSelectedArchiveId(null); }}
+              onClick={() => { setActiveInputTab('chat'); setCurrentView('upload'); setSelectedArchiveId(null); }}
               className="text-lg font-bold flex items-center gap-2 hover:opacity-80 transition-opacity"
             >
               <Logo size={28} /> PodGist
@@ -387,7 +405,7 @@ function AppContent() {
           <>
             <div className="p-4">
               <button
-                onClick={() => setCurrentView('upload')}
+                onClick={() => { setActiveInputTab('local'); setCurrentView('upload'); }}
                 className="w-full bg-[#00ADA6] hover:bg-[#009A94] text-white py-2.5 px-4 rounded-lg font-medium transition-all shadow-sm flex items-center justify-center gap-2"
               >
                 <IconPlus size={18} /> 新建提炼任务
