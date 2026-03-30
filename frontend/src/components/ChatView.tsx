@@ -510,7 +510,9 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
                   }`}>
                     {msg.role === 'assistant' ? (
                       <div className="prose prose-sm max-w-none">
-                        <ReactMarkdown>{msg.content}</ReactMarkdown>
+                        <ReactMarkdown>
+                          {msg.content.replace(/来源：《([^》]+)》\[([^\]]+)\]/g, '_来源：《$1》[$2]_')}
+                        </ReactMarkdown>
                       </div>
                     ) : (
                       msg.content
