@@ -7,6 +7,50 @@ import {
   IconBook, IconTag, IconBrain
 } from '@tabler/icons-react';
 
+/** 把纯文本内容按引用格式拆成片段，引用部分可点击 */
+function renderContentWithCitations(
+  content: string,
+  references: { archive_id: string; archive_name: string; timestamp: string }[] | undefined,
+  onJump: ((id: string) => void) | undefined
+): React.ReactNode[] {
+  // 支持「」或直接《》格式的来源标注
+  const pattern = /(?:来源：)?《([^》]+)》\[([^\]]+)\]/g;
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  let key = 0;
+
+  while ((match = pattern.exec(content)) !== null) {
+    // 冒号前的普通文本
+    if (match.index > lastIndex) {
+      parts.push(<ReactMarkdown key={key++}>{content.slice(lastIndex, match.index)}</ReactMarkdown>);
+    }
+    const archiveName = match[1];
+    const timestamp = match[2];
+    // 找对应的 archive_id
+    const ref = references?.find(r => r.archive_name === archiveName || r.archive_name.includes(archiveName));
+    const onClick = () => { if (ref && onJump) onJump(ref.archive_id); };
+    parts.push(
+      <button
+        key={key++}
+        onClick={onClick}
+        className="italic text-slate-400 hover:text-[#00ADA6] underline-offset-2 hover:underline cursor-pointer"
+        title={ref ? `查看 ${archiveName} 的详细总结` : archiveName}
+      >
+        来源：《{archiveName}》[{timestamp}]
+      </button>
+    );
+    lastIndex = match.index + match[0].length;
+  }
+
+  // 剩余文本
+  if (lastIndex < content.length) {
+    parts.push(<ReactMarkdown key={key++}>{content.slice(lastIndex)}</ReactMarkdown>);
+  }
+
+  return parts;
+}
+
 const api = axios.create({ baseURL: 'http://localhost:8000' });
 
 interface Tag { id: string; name: string; created_at: string; }
@@ -510,9 +554,7 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
                   }`}>
                     {msg.role === 'assistant' ? (
                       <div className="prose prose-sm max-w-none">
-                        <ReactMarkdown>
-                          {msg.content.replace(/来源：《([^》]+)》\[([^\]]+)\]/g, '_来源：《$1》[$2]_')}
-                        </ReactMarkdown>
+                        {renderContentWithCitations(msg.content, msg.references, onJumpToArchive)}
                       </div>
                     ) : (
                       msg.content
