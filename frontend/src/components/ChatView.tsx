@@ -188,7 +188,7 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
       }
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 60000);
+      const timeoutId = setTimeout(() => controller.abort(), 120000);
 
       const response = await fetch(
         `http://localhost:8000/api/chat/sessions/${sessionId}/stream`,
@@ -207,61 +207,62 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
 
       const reader = response.body?.getReader();
       const decoder = new TextDecoder();
-      let done = false;
+      let buffer = '';
       let streamDone = false;
       let fullContent = '';
       let receivedRefs: { archive_id: string; archive_name: string; timestamp: string }[] = [];
 
       while (!streamDone && reader) {
-        const { value, done: d } = await reader.read();
-        done = d;
+        const { value, done } = await reader.read();
         if (value) {
-          const text = decoder.decode(value, { stream: !done });
-          // SSE 解析：按空行分隔事件，每行内部按冒号分割
-          const rawEvents = text.split(/\n\n/);
-          for (const rawEvent of rawEvents) {
-            if (!rawEvent.trim()) continue;
-            const eventData: Record<string, string> = {};
-            for (const line of rawEvent.split('\n')) {
-              const colonIdx = line.indexOf(':');
-              if (colonIdx === -1) continue;
-              const key = line.slice(0, colonIdx).trim();
-              const val = line.slice(colonIdx + 1).trim();
-              if (key === 'event') eventData['event'] = val;
-              else if (key === 'data') {
-                // SSE 多行 data: 同一事件的多个 data 行用 \n 拼接
-                if (eventData['data']) eventData['data'] += '\n' + val;
-                else eventData['data'] = val;
-              }
-            }
+          buffer += decoder.decode(value, { stream: true });
+        }
+        if (done) {
+          buffer += decoder.decode();
+          streamDone = true;
+        }
 
-            if (eventData['event'] === 'token' && eventData['data']) {
-              fullContent += eventData['data'];
-              setMessages(prev =>
-                prev.map(m =>
-                  m.id === assistantTempId ? { ...m, content: fullContent } : m
-                )
-              );
-            } else if (eventData['event'] === 'done') {
-              // data 字段格式: "full_content\n{referenced_archives_json}"
-              const dataStr = eventData['data'] || '';
-              const nlIdx = dataStr.indexOf('\n');
-              if (nlIdx !== -1) {
-                fullContent = dataStr.slice(0, nlIdx);
-                try {
-                  receivedRefs = JSON.parse(dataStr.slice(nlIdx + 1));
-                } catch {}
-              } else {
-                fullContent = dataStr;
-              }
-            } else if (eventData['event'] === 'end') {
-              // SSE 流结束信号
-              streamDone = true;
+        // 累积 buffer，每次找到完整的 SSE 事件（以 \n\n 分隔）就处理
+        let delimiterIdx;
+        while ((delimiterIdx = buffer.indexOf('\n\n')) !== -1) {
+          const rawEvent = buffer.slice(0, delimiterIdx);
+          buffer = buffer.slice(delimiterIdx + 2);
+
+          const eventData: Record<string, string> = {};
+          for (const line of rawEvent.split('\n')) {
+            const colonIdx = line.indexOf(':');
+            if (colonIdx === -1) continue;
+            const key = line.slice(0, colonIdx).trim();
+            const val = line.slice(colonIdx + 1).trim();
+            if (key === 'event') eventData['event'] = val;
+            else if (key === 'data') {
+              if (eventData['data']) eventData['data'] += '\n' + val;
+              else eventData['data'] = val;
             }
           }
+
+          if (eventData['event'] === 'token' && eventData['data']) {
+            fullContent += eventData['data'];
+            setMessages(prev =>
+              prev.map(m =>
+                m.id === assistantTempId ? { ...m, content: fullContent } : m
+              )
+            );
+          } else if (eventData['event'] === 'done') {
+            const dataStr = eventData['data'] || '';
+            const nlIdx = dataStr.indexOf('\n');
+            if (nlIdx !== -1) {
+              fullContent = dataStr.slice(0, nlIdx);
+              try {
+                receivedRefs = JSON.parse(dataStr.slice(nlIdx + 1));
+              } catch {}
+            } else {
+              fullContent = dataStr;
+            }
+          } else if (eventData['event'] === 'end') {
+            streamDone = true;
+          }
         }
-        // 当 done=true（reader 返回的最后一条数据）时，处理完当前数据后退出
-        if (done) streamDone = true;
       }
 
       // 用真实消息替换临时占位
@@ -281,6 +282,7 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
       );
       loadSessions();
     } catch (err) {
+      console.error('[ChatView] sendMessage error:', err);
       // 移除失败的占位，显示错误消息
       setMessages(prev => prev.filter(m => m.id !== assistantTempId));
       if (err instanceof Error && err.name === 'AbortError') {
@@ -291,10 +293,11 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
           created_at: new Date().toISOString()
         }]);
       } else {
+        const errMsg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
         setMessages(prev => [...prev, {
           id: `error-${Date.now()}`,
           role: 'assistant',
-          content: '（发送失败，请重试）',
+          content: `（发送失败: ${errMsg}）`,
           created_at: new Date().toISOString()
         }]);
       }
