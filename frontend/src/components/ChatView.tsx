@@ -479,9 +479,9 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
                 {/* 全库 */}
                 <button
                   onClick={() => selectScope({ type: 'global', label: '全库检索' })}
-                  className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm hover:bg-slate-50 transition-colors"
+                  className="w-full flex items-center gap-2.5 px-3 py-2 text-sm hover:bg-slate-50 transition-colors"
                 >
-                  <IconSearch size={14} className="text-[#00ADA6]" />
+                  <IconSearch size={14} className="text-[#00ADA6] shrink-0" />
                   <span>全库检索</span>
                   <span className="ml-auto text-xs text-slate-400">所有归档</span>
                 </button>
@@ -498,7 +498,7 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
                         onClick={() => selectScope({ type: 'tag', label: `🏷 ${tag.name}`, id: tag.id })}
                         className="w-full flex items-center gap-2.5 px-3 py-2 text-sm hover:bg-slate-50 transition-colors"
                       >
-                        <IconTag size={14} className="text-purple-500" />
+                        <IconTag size={14} className="text-purple-500 shrink-0" />
                         <span>{tag.name}</span>
                       </button>
                     ))}
@@ -506,22 +506,26 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
                   </>
                 )}
 
-                {/* 归档列表 */}
-                <div className="px-3 py-1.5 text-xs font-bold text-slate-400">归档</div>
-                {archives.length === 0 ? (
-                  <div className="px-3 py-2 text-xs text-slate-400">暂无归档</div>
-                ) : (
-                  archives.map(arch => (
-                    <button
-                      key={arch.id}
-                      onClick={() => selectScope({ type: 'archive', label: `📄 ${arch.name}`, id: arch.id })}
-                      className="w-full flex items-center gap-2.5 px-3 py-2 text-sm hover:bg-slate-50 transition-colors"
-                    >
-                      <IconBook size={14} className="text-blue-500" />
-                      <span className="truncate">{arch.name}</span>
-                    </button>
-                  ))
-                )}
+                {/* 归档列表（可滚动） */}
+                <div className="border-t border-slate-100">
+                  <div className="px-3 py-1.5 text-xs font-bold text-slate-400">归档</div>
+                  <div className="max-h-48 overflow-y-auto">
+                    {archives.length === 0 ? (
+                      <div className="px-3 py-2 text-xs text-slate-400">暂无归档</div>
+                    ) : (
+                      archives.map(arch => (
+                        <button
+                          key={arch.id}
+                          onClick={() => selectScope({ type: 'archive', label: `📄 ${arch.name}`, id: arch.id })}
+                          className="w-full flex items-center gap-2.5 px-3 py-2 text-sm hover:bg-slate-50 transition-colors"
+                        >
+                          <IconBook size={14} className="text-blue-500 shrink-0" />
+                          <span className="truncate">{arch.name}</span>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                </div>
               </div>
             )}
           </div>
