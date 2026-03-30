@@ -28,7 +28,7 @@ function AppContent() {
     device: 'auto',
     max_timeline_items: 15
   });
-  const [currentView, setCurrentView] = useState<'upload' | 'result' | 'queue'>('upload');
+  const [currentView, setCurrentView] = useState<'upload' | 'result' | 'queue' | 'chat'>('upload');
   const [selectedArchiveId, setSelectedArchiveId] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [hasApiKey, setHasApiKey] = useState(false);
@@ -245,8 +245,8 @@ function AppContent() {
       />;
     }
 
-    // 智能对话视图（占满整屏，通过侧边栏触发）
-    if (activeInputTab === 'chat') {
+    // 智能对话视图（占满整屏）
+    if (currentView === 'chat') {
       return (
         <main className="flex-1 overflow-hidden bg-white">
           <ChatView />
@@ -407,9 +407,9 @@ function AppContent() {
             {/* 智能对话入口 */}
             <div className="px-3 mb-1">
               <button
-                onClick={() => setActiveInputTab('chat')}
+                onClick={() => setCurrentView(currentView === 'chat' ? 'upload' : 'chat')}
                 className={`w-full flex items-center gap-2 px-3 py-2.5 text-sm rounded-md transition-colors ${
-                  activeInputTab === 'chat'
+                  currentView === 'chat'
                     ? 'bg-slate-200 text-[#00ADA6]'
                     : 'text-slate-600 hover:bg-slate-200 hover:text-[#00ADA6]'
                 }`}
@@ -489,8 +489,8 @@ function AppContent() {
               <IconPlus size={20} />
             </button>
             <button
-              onClick={() => setActiveInputTab('chat')}
-              className={`p-2.5 rounded-lg transition-colors ${activeInputTab === 'chat' ? 'bg-slate-200 text-[#00ADA6]' : 'text-slate-600 hover:bg-slate-200'}`}
+              onClick={() => setCurrentView(currentView === 'chat' ? 'upload' : 'chat')}
+              className={`p-2.5 rounded-lg transition-colors ${currentView === 'chat' ? 'bg-slate-200 text-[#00ADA6]' : 'text-slate-600 hover:bg-slate-200'}`}
               title="智能对话"
             >
               <IconBrain size={20} />
