@@ -302,7 +302,7 @@ def get_archive_references(archive_id: str) -> list[dict]:
     return [dict(row) for row in rows]
 
 # ================= 向量入库 =================
-def chunk_text(text: str, chunk_size: int = 500, overlap: int = 100) -> list[dict]:
+def chunk_text(text: str, chunk_size: int = 800, overlap: int = 200) -> list[dict]:
     """
     将转录文本按字符数切分成块，每块带时间戳信息。
 
