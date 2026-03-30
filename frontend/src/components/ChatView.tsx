@@ -275,86 +275,93 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
           buffer += decoder.decode(value, { stream: true });
         }
 
-        // 每次 read 后尝试消费 buffer 中的完整事件
+        // 逐行解析 SSE 事件
+        let eventData: Record<string, string> = { event: '', data: '' };
+        let prevEventType = '';
+
         while (true) {
-          const rIdx = buffer.indexOf('\r\n\r\n');
-          const nIdx = buffer.indexOf('\n\n');
-          if (nIdx === -1 && rIdx === -1) break;
-          const delimiterIdx = rIdx !== -1 && rIdx < nIdx ? rIdx : nIdx;
-          const delimiterLen = rIdx !== -1 && rIdx < nIdx ? 4 : 2;
-          const rawEvent = buffer.slice(0, delimiterIdx);
-          buffer = buffer.slice(delimiterIdx + delimiterLen);
+          if (!buffer) break;
 
-          const eventData: Record<string, string> = {};
-          for (const line of rawEvent.split('\n')) {
-            const cleanLine = line.replace(/\r$/, '');
-            const colonIdx = cleanLine.indexOf(':');
-            if (colonIdx === -1) continue;
-            const key = cleanLine.slice(0, colonIdx).trim();
-            const val = cleanLine.slice(colonIdx + 1).trim();
-            if (key === 'event') eventData['event'] = val;
-            else if (key === 'data') {
-              if (eventData['data']) eventData['data'] += '\n' + val;
-              else eventData['data'] = val;
-            }
-          }
+          // 从 buffer 头部解析一行（行格式：field: value）
+          const lfIdx = buffer.indexOf('\n');
+          if (lfIdx === -1) break; // 没有完整行，等待更多数据
+          const line = buffer.slice(0, lfIdx).replace(/\r$/, '');
+          buffer = buffer.slice(lfIdx + 1);
 
-          if (eventData['event'] === 'token' && eventData['data']) {
-            fullContent += eventData['data'];
-            setMessages(prev =>
-              prev.map(m =>
-                m.id === 'assistant-streaming' ? { ...m, content: fullContent } : m
-              )
-            );
-          } else if (eventData['event'] === 'done') {
-            // 新格式：JSON 在前（JSON 不以 \n 开头，保证 split 只匹配分隔符）
-            const dataStr = eventData['data'] || '';
-            const nlIdx = dataStr.indexOf('\n');
-            if (nlIdx !== -1) {
-              try {
-                receivedRefs = JSON.parse(dataStr.slice(0, nlIdx));
-              } catch {}
-              fullContent = dataStr.slice(nlIdx + 1);
-            } else {
-              fullContent = dataStr;
-            }
-          } else if (eventData['event'] === 'end') {
-            break; // 退出事件消费循环，等待下一轮 read
-          }
-        }
-
-        // 读完且 buffer 清空时退出
-        if (done) {
-          // 处理剩余 buffer（如最后的 end 事件）
-          if (buffer.trim()) {
-            const eventData: Record<string, string> = {};
-            for (const line of buffer.split('\n')) {
-              const cleanLine = line.replace(/\r$/, '');
-              const colonIdx = cleanLine.indexOf(':');
-              if (colonIdx === -1) continue;
-              const key = cleanLine.slice(0, colonIdx).trim();
-              const val = cleanLine.slice(colonIdx + 1).trim();
-              if (key === 'event') eventData['event'] = val;
-              else if (key === 'data') {
-                if (eventData['data']) eventData['data'] += '\n' + val;
-                else eventData['data'] = val;
-              }
-            }
-            if (eventData['event'] === 'done' && eventData['data']) {
-              // 新格式：JSON 在前
-              const dataStr = eventData['data'];
+          // 空行（长度为0，或只有 \r）→ 事件结束
+          if (line === '' || line === '\r') {
+            // 处理当前已收集的 eventData
+            if (eventData['event'] === 'token' && eventData['data']) {
+              fullContent += eventData['data'];
+              setMessages(prev =>
+                prev.map(m =>
+                  m.id === 'assistant-streaming' ? { ...m, content: fullContent } : m
+                )
+              );
+            } else if (eventData['event'] === 'done') {
+              const dataStr = eventData['data'] || '';
               const nlIdx = dataStr.indexOf('\n');
               if (nlIdx !== -1) {
                 try {
                   receivedRefs = JSON.parse(dataStr.slice(0, nlIdx));
                 } catch {}
                 fullContent = dataStr.slice(nlIdx + 1);
-              } else {
+              } else if (dataStr) {
                 fullContent = dataStr;
               }
             }
+            // 如果遇到 end 事件，则退出事件消费循环
+            if (prevEventType === 'end') break;
+            // 重置事件数据，准备解析下一个事件
+            eventData = { event: '', data: '' };
+            continue;
           }
-          break; // 退出主读取循环
+
+          // 非空行：解析 field: value
+          const colonIdx = line.indexOf(':');
+          if (colonIdx === -1) continue; // 非法行，跳过
+          const field = line.slice(0, colonIdx).trim();
+          const fieldValue = line.slice(colonIdx + 1); // 不 trim，保留数据原样
+
+          if (field === 'event') {
+            prevEventType = eventData['event'];
+            eventData['event'] = fieldValue;
+          } else if (field === 'data') {
+            // 拼接到已有 data（多条 data: 行组成一个完整 data 值）
+            if (eventData['data']) eventData['data'] += '\n' + fieldValue;
+            else eventData['data'] = fieldValue;
+          }
+        }
+
+        if (done) break; // reader 已无数据，退出主循环
+      }
+
+      // 处理流结束后 buffer 中可能残留的未结束事件（通常为空）
+      if (buffer.trim()) {
+        // 按同样的行解析逻辑处理
+        const eventData: Record<string, string> = { event: '', data: '' };
+        for (const line of buffer.split('\n')) {
+          const cleanLine = line.replace(/\r$/, '');
+          if (cleanLine === '') continue;
+          const colonIdx = cleanLine.indexOf(':');
+          if (colonIdx === -1) continue;
+          const field = cleanLine.slice(0, colonIdx).trim();
+          const fieldValue = cleanLine.slice(colonIdx + 1);
+          if (field === 'event') eventData['event'] = fieldValue;
+          else if (field === 'data') {
+            if (eventData['data']) eventData['data'] += '\n' + fieldValue;
+            else eventData['data'] = fieldValue;
+          }
+        }
+        if (eventData['event'] === 'done') {
+          const dataStr = eventData['data'] || '';
+          const nlIdx = dataStr.indexOf('\n');
+          if (nlIdx !== -1) {
+            try { receivedRefs = JSON.parse(dataStr.slice(0, nlIdx)); } catch {}
+            fullContent = dataStr.slice(nlIdx + 1);
+          } else if (dataStr) {
+            fullContent = dataStr;
+          }
         }
       }
 
