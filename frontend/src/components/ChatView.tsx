@@ -3,6 +3,7 @@ import axios from 'axios';
 import ReactMarkdown from 'react-markdown';
 import {
   IconMessageCircle, IconPlus, IconTrash, IconChevronDown,
+  IconChevronLeft, IconChevronRight,
   IconSearch, IconLoader2,
   IconBook, IconTag, IconBrain
 } from '@tabler/icons-react';
@@ -85,6 +86,7 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [scopeOpen, setScopeOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [scope, setScope] = useState<ScopeOption>({ type: 'global', label: '全库检索' });
   const [archives, setArchives] = useState<{id: string; name: string}[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -418,51 +420,88 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
 
   return (
     <div className="flex h-full">
-      {/* ================= 左侧会话列表 ================= */}
-      <div className="w-64 border-r border-slate-200 flex flex-col bg-[#F9F9F9]">
+      {/* ================= 左侧会话列表（可折叠）================= */}
+      <div className={`border-r border-slate-200 flex flex-col bg-[#F9F9F9] transition-all duration-300 ${sidebarCollapsed ? 'w-16' : 'w-64'}`}>
+        {/* Header */}
         <div className="p-3 border-b border-slate-200 flex items-center justify-between">
-          <span className="text-sm font-bold text-slate-700 flex items-center gap-1.5">
-            <IconBrain size={16} className="text-[#00ADA6]" />
-            智能对话
-          </span>
-          <button
-            onClick={createSession}
-            className="p-1.5 hover:bg-slate-200 rounded-md transition-colors"
-            title="新建对话"
-          >
-            <IconPlus size={16} className="text-slate-500" />
-          </button>
+          {!sidebarCollapsed && (
+            <span className="text-sm font-bold text-slate-700 flex items-center gap-1.5">
+              <IconBrain size={16} className="text-[#00ADA6]" />
+              智能对话
+            </span>
+          )}
+          <div className="flex items-center gap-1">
+            {!sidebarCollapsed && (
+              <button
+                onClick={createSession}
+                className="p-1.5 hover:bg-slate-200 rounded-md transition-colors"
+                title="新建对话"
+              >
+                <IconPlus size={16} className="text-slate-500" />
+              </button>
+            )}
+            <button
+              onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+              className="p-1.5 hover:bg-slate-200 rounded-md transition-colors text-slate-500 hover:text-slate-700"
+              title={sidebarCollapsed ? '展开侧栏' : '收起侧栏'}
+            >
+              {sidebarCollapsed ? <IconChevronRight size={16} /> : <IconChevronLeft size={16} />}
+            </button>
+          </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto">
-          {sessions.length === 0 ? (
-            <div className="px-4 py-8 text-center text-xs text-slate-400">
-              <IconMessageCircle size={24} className="mx-auto mb-2 opacity-40" />
-              暂无对话记录
-            </div>
-          ) : (
-            sessions.map(s => (
-              <div
+        {/* 会话列表 */}
+        {!sidebarCollapsed && (
+          <div className="flex-1 overflow-y-auto">
+            {sessions.length === 0 ? (
+              <div className="px-4 py-8 text-center text-xs text-slate-400">
+                <IconMessageCircle size={24} className="mx-auto mb-2 opacity-40" />
+                暂无对话记录
+              </div>
+            ) : (
+              sessions.map(s => (
+                <div
+                  key={s.id}
+                  onClick={() => setActiveSessionId(s.id)}
+                  className={`group flex items-center gap-2 px-3 py-2.5 mx-2 my-0.5 text-sm rounded-lg cursor-pointer transition-colors ${
+                    activeSessionId === s.id
+                      ? 'bg-slate-200 text-[#00ADA6]'
+                      : 'text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  <IconMessageCircle size={14} className="shrink-0" />
+                  <span className="truncate flex-1">{s.title || '新对话'}</span>
+                  <button
+                    onClick={(e) => deleteSession(s.id, e)}
+                    className="opacity-0 group-hover:opacity-100 p-1 hover:bg-[#FFF1F3] hover:text-[#E11D48] rounded transition-all shrink-0"
+                  >
+                    <IconTrash size={12} />
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+
+        {/* 折叠时显示的图标 */}
+        {sidebarCollapsed && (
+          <div className="flex-1 flex flex-col items-center pt-3 gap-1">
+            {sessions.map(s => (
+              <button
                 key={s.id}
                 onClick={() => setActiveSessionId(s.id)}
-                className={`group flex items-center gap-2 px-3 py-2.5 mx-2 my-0.5 text-sm rounded-lg cursor-pointer transition-colors ${
+                className={`p-2 rounded-lg transition-colors ${
                   activeSessionId === s.id
                     ? 'bg-slate-200 text-[#00ADA6]'
-                    : 'text-slate-600 hover:bg-slate-200'
+                    : 'text-slate-500 hover:bg-slate-200'
                 }`}
+                title={s.title || '新对话'}
               >
-                <IconMessageCircle size={14} className="shrink-0" />
-                <span className="truncate flex-1">{s.title || '新对话'}</span>
-                <button
-                  onClick={(e) => deleteSession(s.id, e)}
-                  className="opacity-0 group-hover:opacity-100 p-1 hover:bg-[#FFF1F3] hover:text-[#E11D48] rounded transition-all shrink-0"
-                >
-                  <IconTrash size={12} />
-                </button>
-              </div>
-            ))
-          )}
-        </div>
+                <IconMessageCircle size={16} />
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* ================= 右侧对话区 ================= */}
