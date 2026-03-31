@@ -20,7 +20,7 @@ from backend.rag_db import (
     index_archive, delete_archive_vectors, get_archives_by_tag, init_db as init_rag_db
 )
 from backend.rag_retriever import generate_chat_response
-from backend.model_manager import get_all_models_status, download_model, get_manual_download_info
+from backend.model_manager import get_all_models_status, download_model, get_manual_download_info, get_model_path
 from sse_starlette.sse import EventSourceResponse
 import asyncio
 
@@ -521,37 +521,91 @@ def get_manual_download(model_name: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# 4.3 下载模型（SSE 流式进度）
-@app.post("/api/models/download/{model_name}")
-async def download_model_stream(model_name: str):
-    """
-    下载指定模型，通过 SSE 流式返回进度
-
-    前端可使用 EventSource 接收进度更新
-    """
+# 4.3 删除模型
+@app.delete("/api/models/{model_name}")
+def delete_model(model_name: str):
+    """删除指定模型"""
     try:
         # 验证模型名称
-        valid_models = ["whisper-large-v3", "sensevoice", "all-MiniLM-L6-v2"]
+        valid_models = [
+            "whisper-tiny", "whisper-base", "whisper-small", "whisper-medium",
+            "whisper-large-v3", "whisper-large-v3-turbo",
+            "sensevoice", "all-MiniLM-L6-v2"
+        ]
         if model_name not in valid_models:
             raise HTTPException(status_code=400, detail=f"未知模型: {model_name}")
 
-        # 进度收集器
-        progress_data = {}
+        model_path = get_model_path(model_name)
+        if os.path.exists(model_path):
+            if os.path.isdir(model_path):
+                import shutil
+                shutil.rmtree(model_path)
+            else:
+                os.remove(model_path)
+            return {"status": "success", "message": f"{model_name} 已删除", "path": model_path}
+        else:
+            raise HTTPException(status_code=404, detail="模型文件不存在")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# 4.4 下载模型（SSE 流式进度）
+@app.get("/api/models/download/{model_name}")
+async def download_model_stream(model_name: str):
+    """
+    下载指定模型，通过 SSE 流式返回进度
+    """
+    try:
+        # 验证模型名称
+        valid_models = [
+            "whisper-tiny", "whisper-base", "whisper-small", "whisper-medium",
+            "whisper-large-v3", "whisper-large-v3-turbo",
+            "sensevoice", "all-MiniLM-L6-v2"
+        ]
+        if model_name not in valid_models:
+            raise HTTPException(status_code=400, detail=f"未知模型: {model_name}")
+
+        # 进度收集器（线程安全）
+        import threading
+        progress_lock = threading.Lock()
+        progress_data = {"type": "starting", "downloaded_mb": 0, "total_mb": 0, "percent": 0}
+        download_done = False
+        download_result = None
 
         def progress_callback(event):
-            progress_data.update(event)
+            nonlocal download_done, download_result
+            with progress_lock:
+                progress_data.update(event)
+            if event.get("type") in ("error", "success"):
+                download_done = True
+                download_result = event
 
         async def event_generator():
+            nonlocal download_done, download_result
+
+            # 先发送一个起始事件
+            yield {"event": "progress", "data": json.dumps(progress_data)}
+
             # 在线程池中执行下载
             import concurrent.futures
+            loop = asyncio.get_event_loop()
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(download_model, model_name, progress_callback)
-                result = future.result()
+                # 等待下载完成，每 0.5 秒 yield 一次进度
+                while not future.done():
+                    await asyncio.sleep(0.5)
+                    with progress_lock:
+                        data = dict(progress_data)
+                    yield {"event": "progress", "data": json.dumps(data)}
 
-            yield {
-                "event": "done",
-                "data": json.dumps(result)
-            }
+                # 下载完成，获取最终结果
+                final_result = future.result()
+                with progress_lock:
+                    if download_result:
+                        final_result = download_result
+
+                yield {"event": "done", "data": json.dumps(final_result)}
 
         return EventSourceResponse(event_generator())
 

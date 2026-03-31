@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
-import { IconX, IconKey, IconCpu, IconActivity, IconCircleCheck, IconCircleX, IconLoader2, IconHelp, IconDownload, IconFile } from '@tabler/icons-react';
+import { IconX, IconKey, IconCpu, IconActivity, IconCircleCheck, IconCircleX, IconLoader2, IconHelp, IconDownload, IconFile, IconChevronDown, IconChevronRight, IconTrash } from '@tabler/icons-react';
+import ConfirmDialog from './ConfirmDialog';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -22,6 +23,7 @@ interface ModelInfo {
   local_size_mb: number;
   path: string;
   download_url: string;
+  group: string | null;
 }
 
 const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToast }) => {
@@ -43,6 +45,8 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
   const [downloadProgress, setDownloadProgress] = useState<{percent: number, downloaded_mb: number, total_mb: number} | null>(null);
   const [expandedManualModel, setExpandedManualModel] = useState<string | null>(null);
   const [manualDownloadInfo, setManualDownloadInfo] = useState<{url: string, instructions: string} | null>(null);
+  const [expandedWhisper, setExpandedWhisper] = useState(false);
+  const [deleteConfirmModel, setDeleteConfirmModel] = useState<{name: string, displayName: string} | null>(null);
 
   // 当弹窗打开时，从后端加载设置
   useEffect(() => {
@@ -96,47 +100,92 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
     setManualDownloadInfo(null);
 
     try {
-      const response = await axios.post(
-        `http://localhost:8000/api/models/download/${modelName}`,
-        {},
-        { responseType: 'text' }
-      );
-    } catch (error: any) {
-      // 如果是 SSE 响应，需要解析 progress
-      console.log('下载响应:', error);
-    }
+      const response = await fetch(`http://localhost:8000/api/models/download/${modelName}`);
 
-    // 轮询检查进度（因为 SSE 可能被 axios 中断）
-    const progressInterval = setInterval(async () => {
-      try {
-        const statusResponse = await axios.get('http://localhost:8000/api/models/status');
-        if (statusResponse.data.status === 'success') {
-          const updatedModels = statusResponse.data.data;
-          const currentModel = updatedModels.find((m: ModelInfo) => m.name === modelName);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
 
-          if (currentModel?.downloaded) {
-            // 下载完成
-            clearInterval(progressInterval);
-            setDownloadingModel(null);
-            setDownloadProgress(null);
-            setModels(updatedModels);
-            showToast('success', `${currentModel.display_name} 下载完成`);
-            return;
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let currentEvent = '';
+      let currentData = '';
+
+      if (!reader) {
+        throw new Error('无法读取响应流');
+      }
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        buffer += chunk;
+
+        // 解析 SSE 行（去掉 \r 适配 Windows CRLF）
+        const lines = buffer.split('\n').map(l => l.replace(/\r$/, ''));
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('event:')) {
+            currentEvent = line.slice(6).trim();
+          } else if (line.startsWith('data:')) {
+            currentData = line.slice(5).trim();
+          } else if (line === '') {
+            // 空行 = 事件结束，触发处理
+            if (currentData) {
+              try {
+                const data = JSON.parse(currentData);
+                if (currentEvent === 'progress' || data.type === 'progress' || data.type === 'starting') {
+                  setDownloadProgress({
+                    percent: data.percent || 0,
+                    downloaded_mb: data.downloaded_mb || 0,
+                    total_mb: data.total_mb || 0
+                  });
+                } else if (currentEvent === 'done' || data.type === 'success') {
+                  if (data.success) {
+                    fetchModelsStatus();
+                    showToast('success', `${modelName} 下载完成`);
+                  } else {
+                    showToast('error', data.error || '下载失败');
+                  }
+                  setDownloadingModel(null);
+                  setDownloadProgress(null);
+                  reader.releaseLock();
+                  return;
+                }
+              } catch (err) {
+                // JSON 解析失败，忽略
+              }
+            }
+            currentEvent = '';
+            currentData = '';
           }
         }
-      } catch (e) {
-        console.log('轮询进度中...');
       }
-    }, 3000);
+    } catch (err) {
+      showToast('error', '下载连接失败，请刷新页面重试');
+    }
 
-    // 30 秒后停止轮询
-    setTimeout(() => {
-      clearInterval(progressInterval);
-      if (downloadingModel === modelName) {
-        setDownloadingModel(null);
-        showToast('error', '下载超时，请刷新页面检查状态或使用手动下载');
+    setDownloadingModel(null);
+    setDownloadProgress(null);
+  };
+
+  const deleteModel = async () => {
+    if (!deleteConfirmModel) return;
+    const modelName = deleteConfirmModel.name;
+
+    try {
+      const response = await axios.delete(`http://localhost:8000/api/models/${modelName}`);
+      if (response.data.status === 'success') {
+        showToast('success', response.data.message);
+        fetchModelsStatus();
       }
-    }, 30000);
+    } catch (error: any) {
+      showToast('error', error.response?.data?.detail || '删除失败');
+    }
+    setDeleteConfirmModel(null);
   };
 
   const showManualDownload = async (modelName: string) => {
@@ -348,9 +397,10 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
                     <option value="small">small - 平衡选择（推荐）</option>
                     <option value="medium">medium - 精度较好</option>
                     <option value="large-v3">large-v3 - 精度最高，需更多显存</option>
+                    <option value="large-v3-turbo">large-v3-turbo - large-v3 加速版，精度接近 large-v3</option>
                   </select>
                   <p className="text-xs text-slate-400">
-                    选择 Whisper 模型规模。tiny/base 速度快，small/medium 平衡，large-v3 精度最高。
+                    选择 Whisper 模型规模。tiny/base 速度快，small/medium 平衡，large-v3/large-v3-turbo 精度最高。
                   </p>
                 </div>
               )}
@@ -439,7 +489,114 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {models.map((model) => (
+                  {/* Whisper 模型 - 作为普通卡片但可展开 */}
+                  <div className="border border-slate-200 rounded-lg p-4">
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <button
+                          onClick={() => setExpandedWhisper(!expandedWhisper)}
+                          className="flex items-center gap-2 hover:text-[#00ADA6] transition-colors w-full"
+                        >
+                          {expandedWhisper ? <IconChevronDown size={18} /> : <IconChevronRight size={18} />}
+                          <div className="text-left">
+                            <div className="flex items-center gap-2">
+                              <h4 className="font-medium text-slate-800">Whisper</h4>
+                              <span className="text-xs text-slate-400">
+                                {models.filter(m => m.group === 'whisper' && m.downloaded).length} / {models.filter(m => m.group === 'whisper').length} 已下载
+                              </span>
+                            </div>
+                            <p className="text-sm text-slate-500 mt-0.5">高精度语音转录模型 · 6 个版本</p>
+                          </div>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* 展开的版本列表 */}
+                    {expandedWhisper && (
+                      <div className="mt-4 space-y-3 pl-6 border-l-2 border-slate-100">
+                        {models.filter(m => m.group === 'whisper').map((model) => (
+                          <div key={model.name} className="flex items-center justify-between">
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm text-slate-700">{model.display_name}</span>
+                                {model.downloaded ? (
+                                  <span className="text-xs bg-[#D1FAF5] text-[#00ADA6] px-2 py-0.5 rounded">已下载</span>
+                                ) : (
+                                  <span className="text-xs bg-slate-100 text-slate-500 px-2 py-0.5 rounded">未下载</span>
+                                )}
+                              </div>
+                              <p className="text-xs text-slate-400 mt-0.5">
+                                {model.size_mb} MB
+                                {model.downloaded && model.local_size_mb > 0 && ` · 本地: ${model.local_size_mb} MB`}
+                              </p>
+                            </div>
+                            <div className="ml-4 min-w-[80px]">
+                              {downloadingModel === model.name ? (
+                                <div className="text-center">
+                                  <div className="w-full bg-slate-200 rounded-full h-2 mb-1">
+                                    <div
+                                      className="bg-[#00ADA6] h-2 rounded-full transition-all duration-300"
+                                      style={{ width: `${downloadProgress?.percent || 0}%` }}
+                                    />
+                                  </div>
+                                  <span className="text-xs text-slate-500">
+                                    {downloadProgress?.percent || 0}%
+                                  </span>
+                                </div>
+                              ) : model.downloaded ? (
+                                <button
+                                  onClick={() => setDeleteConfirmModel({ name: model.name, displayName: model.display_name })}
+                                  className="text-slate-400 hover:text-red-500 p-1 transition-colors"
+                                  title="删除模型"
+                                >
+                                  <IconTrash size={18} />
+                                </button>
+                              ) : (
+                                <div className="flex gap-2">
+                                  <button
+                                    onClick={() => downloadModel(model.name)}
+                                    className="flex items-center gap-1 bg-[#00ADA6] hover:bg-[#009A94] text-white text-xs px-3 py-1.5 rounded-lg transition-colors"
+                                  >
+                                    <IconDownload size={14} />
+                                  </button>
+                                  <button
+                                    onClick={() => showManualDownload(model.name)}
+                                    className="text-xs text-slate-500 hover:text-slate-700 px-2 py-1.5 border border-slate-200 rounded-lg"
+                                  >
+                                    ?
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* 手动下载信息（Whisper 通用） */}
+                    {expandedManualModel && expandedManualModel.startsWith('whisper-') && manualDownloadInfo && (
+                      <div className="mt-4 p-3 bg-slate-50 border border-slate-200 rounded-lg">
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="text-sm font-medium text-slate-700">手动下载链接</p>
+                          <button
+                            onClick={() => copyToClipboard(manualDownloadInfo.url)}
+                            className="text-xs text-[#00ADA6] hover:underline"
+                          >
+                            复制链接
+                          </button>
+                        </div>
+                        <p className="text-xs text-slate-600 bg-white px-2 py-1 rounded border break-all">
+                          {manualDownloadInfo.url}
+                        </p>
+                        <div className="mt-2 text-xs text-slate-500 whitespace-pre-line">
+                          {manualDownloadInfo.instructions}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 非 Whisper 模型 */}
+                  {models.filter(m => !m.group).map((model) => (
                     <div key={model.name} className="border border-slate-200 rounded-lg p-4">
                       <div className="flex items-start justify-between">
                         <div className="flex-1">
@@ -466,23 +623,28 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
                           </p>
                         </div>
 
-                        <div className="ml-4">
+                        <div className="ml-4 min-w-[100px]">
                           {downloadingModel === model.name ? (
-                            <div className="text-center">
-                              <IconLoader2 className="animate-spin text-[#00ADA6] mx-auto" size={20} />
-                              <span className="text-xs text-slate-500 mt-1 block">
-                                {downloadProgress?.percent || 0}%
-                              </span>
-                              {downloadProgress && (
-                                <span className="text-xs text-slate-400">
-                                  {downloadProgress.downloaded_mb} / {downloadProgress.total_mb} MB
-                                </span>
-                              )}
+                            <div>
+                              <div className="w-full bg-slate-200 rounded-full h-2 mb-1">
+                                <div
+                                  className="bg-[#00ADA6] h-2 rounded-full transition-all duration-300"
+                                  style={{ width: `${downloadProgress?.percent || 0}%` }}
+                                />
+                              </div>
+                              <div className="flex justify-between text-xs text-slate-500">
+                                <span>{downloadProgress?.downloaded_mb || 0} MB</span>
+                                <span>{downloadProgress?.percent || 0}%</span>
+                              </div>
                             </div>
                           ) : model.downloaded ? (
-                            <span className="text-[#10B981]">
-                              <IconCircleCheck size={24} />
-                            </span>
+                            <button
+                              onClick={() => setDeleteConfirmModel({ name: model.name, displayName: model.display_name })}
+                              className="text-slate-400 hover:text-red-500 p-1 transition-colors"
+                              title="删除模型"
+                            >
+                              <IconTrash size={20} />
+                            </button>
                           ) : (
                             <div className="flex gap-2">
                               <button
@@ -588,6 +750,18 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
           )}
         </div>
       </div>
+
+      {/* 删除模型确认对话框 */}
+      <ConfirmDialog
+        isOpen={deleteConfirmModel !== null}
+        title="删除模型"
+        message={`确定要删除 ${deleteConfirmModel?.displayName || ''} 吗？删除后需要重新下载。`}
+        confirmText="删除"
+        cancelText="取消"
+        danger
+        onConfirm={deleteModel}
+        onCancel={() => setDeleteConfirmModel(null)}
+      />
     </div>
   );
 };

@@ -12,33 +12,94 @@ from urllib.parse import urlparse
 
 # ================= 模型信息 =================
 
-MODELS = {
+# Whisper 模型组 - 所有版本
+WHISPER_MODELS = {
+    "whisper-tiny": {
+        "name": "Whisper tiny",
+        "description": "最小模型，速度最快，精度较低",
+        "size_mb": 75,
+        "url": "https://openaipublic.azureedge.net/main/whisper/models/65147644a518d12f04e32d6f3b26facc3f8dd46e5390956a9424a650c0ce22b9/tiny.pt",
+        "cache_subdir": "whisper",
+        "filename": "tiny.pt",
+        "sha256": "65147644a518d12f04e32d6f3b26facc3f8dd46e5390956a9424a650c0ce22b9",
+        "group": "whisper"
+    },
+    "whisper-base": {
+        "name": "Whisper base",
+        "description": "基础模型，速度快，精度一般",
+        "size_mb": 142,
+        "url": "https://openaipublic.azureedge.net/main/whisper/models/ed3a0b6b1c0edf879ad9b11b1af5a0e6ab5db9205f891f668f8b0e6c6326e34e/base.pt",
+        "cache_subdir": "whisper",
+        "filename": "base.pt",
+        "sha256": "ed3a0b6b1c0edf879ad9b11b1af5a0e6ab5db9205f891f668f8b0e6c6326e34e",
+        "group": "whisper"
+    },
+    "whisper-small": {
+        "name": "Whisper small",
+        "description": "小模型，平衡选择（推荐）",
+        "size_mb": 465,
+        "url": "https://openaipublic.azureedge.net/main/whisper/models/9ecf779972d90ba49c06d968637d720dd632c55bbf19d441fb42bf17a411e794/small.pt",
+        "cache_subdir": "whisper",
+        "filename": "small.pt",
+        "sha256": "9ecf779972d90ba49c06d968637d720dd632c55bbf19d441fb42bf17a411e794",
+        "group": "whisper"
+    },
+    "whisper-medium": {
+        "name": "Whisper medium",
+        "description": "中模型，精度较好，需更多显存",
+        "size_mb": 1500,
+        "url": "https://openaipublic.azureedge.net/main/whisper/models/345ae4da62f9b3d59415adc60127b97c714f32e89e936602e85993674d08dcb1/medium.pt",
+        "cache_subdir": "whisper",
+        "filename": "medium.pt",
+        "sha256": "345ae4da62f9b3d59415adc60127b97c714f32e89e936602e85993674d08dcb1",
+        "group": "whisper"
+    },
     "whisper-large-v3": {
         "name": "Whisper large-v3",
-        "description": "高精度语音转录模型",
+        "description": "最大模型，精度最高，需大量显存",
         "size_mb": 2880,
-        "url": "https://openaipublic.azureedge.net/main/whisper/models/81f6c10d7c7e6a8274c60fc4baa8dae83adfb42fb8d33f2fdb8fe64a24a0ec76/large-v3.pt",
+        "url": "https://openaipublic.azureedge.net/main/whisper/models/e5b1a55b89c1367dacf97e3e19bfd829a01529dbfdeefa8caeb59b3f1b81dadb/large-v3.pt",
         "cache_subdir": "whisper",
         "filename": "large-v3.pt",
-        "sha256": "81f6c10d7c7e6a8274c60fc4baa8dae83adfb42fb8d33f2fdb8fe64a24a0ec76"
+        "sha256": "e5b1a55b89c1367dacf97e3e19bfd829a01529dbfdeefa8caeb59b3f1b81dadb",
+        "group": "whisper"
     },
+    "whisper-large-v3-turbo": {
+        "name": "Whisper large-v3-turbo",
+        "description": "large-v3 加速版，精度接近 large-v3，速度更快",
+        "size_mb": 1550,
+        "url": "https://openaipublic.azureedge.net/main/whisper/models/aff26ae408abcba5fbf8813c21e62b0941638c5f6eebfb145be0c9839262a19a/large-v3-turbo.pt",
+        "cache_subdir": "whisper",
+        "filename": "large-v3-turbo.pt",
+        "sha256": "aff26ae408abcba5fbf8813c21e62b0941638c5f6eebfb145be0c9839262a19a",
+        "group": "whisper"
+    }
+}
+
+# 非 Whisper 模型
+MODELS = {
+    **WHISPER_MODELS,
     "sensevoice": {
         "name": "SenseVoice",
         "description": "极速语音转录（阿里开源）",
-        "size_mb": 200,
+        "size_mb": 893,
         "url": "https://modelscope.cn/models/iic/SenseVoiceSmall/repository?file=SpeechSenseVoiceSmall/model.pt",
-        "cache_subdir": "modelscope/iic/SenseVoiceSmall",
+        "cache_subdir": "modelscope/hub/models/iic/SenseVoiceSmall",
         "filename": "model.pt",
-        "sha256": None  # ModelScope 不校验 SHA256
+        "sha256": None,  # ModelScope 不校验 SHA256
+        "check_type": "file",
+        "group": None
     },
     "all-MiniLM-L6-v2": {
         "name": "Sentence Transformer",
         "description": "文本向量化模型（用于 RAG 语义搜索）",
-        "size_mb": 90,
+        "size_mb": 103,
         "url": "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/pytorch_model.bin",
-        "cache_subdir": "huggingface/hub/models--sentence-transformers--all-MiniLM-L6-v2/snapshots/xxxx",
-        "filename": "pytorch_model.bin",
-        "sha256": None  # HuggingFace 不校验
+        "cache_subdir": "huggingface/hub/models--sentence-transformers--all-MiniLM-L6-v2",
+        "filename": None,  # HuggingFace 使用 blob 存储，不检查特定文件
+        "sha256": None,
+        "check_type": "directory",
+        "group": None
     }
 }
 
@@ -68,12 +129,12 @@ def get_model_path(model_name: str) -> str:
     if not model_info:
         raise ValueError(f"未知模型: {model_name}")
 
-    # Whisper 特殊处理
-    if model_name == "whisper-large-v3":
-        return os.path.join(cache_dir, model_info["cache_subdir"], model_info["filename"])
+    filename = model_info.get("filename")
+    if not filename:
+        # 对于没有特定文件名的模型（如 HuggingFace），返回目录路径
+        return os.path.join(cache_dir, model_info["cache_subdir"])
 
-    # 其他模型
-    return os.path.join(cache_dir, model_info["cache_subdir"], model_info["filename"])
+    return os.path.join(cache_dir, model_info["cache_subdir"], filename)
 
 def get_model_dir(model_name: str) -> str:
     """获取模型的目录路径"""
@@ -95,12 +156,29 @@ def check_model_status(model_name: str) -> Dict:
     if not model_info:
         return {"error": f"未知模型: {model_name}"}
 
-    model_path = get_model_path(model_name)
-    exists = os.path.exists(model_path)
+    check_type = model_info.get("check_type", "file")
+    model_dir = get_model_dir(model_name)
+    exists = False
     size_mb = 0
+    display_path = model_dir
 
-    if exists:
-        size_mb = os.path.getsize(model_path) / (1024 * 1024)
+    if check_type == "directory":
+        # 对于 HuggingFace 等目录式存储，检查目录是否存在
+        exists = os.path.isdir(model_dir)
+        if exists:
+            # 计算目录总大小
+            for dirpath, dirnames, filenames in os.walk(model_dir):
+                for f in filenames:
+                    fp = os.path.join(dirpath, f)
+                    if os.path.exists(fp):
+                        size_mb += os.path.getsize(fp) / (1024 * 1024)
+    else:
+        # 对于文件式存储，检查具体文件
+        model_path = get_model_path(model_name)
+        exists = os.path.exists(model_path)
+        display_path = model_path
+        if exists:
+            size_mb = os.path.getsize(model_path) / (1024 * 1024)
 
     return {
         "name": model_name,
@@ -109,8 +187,9 @@ def check_model_status(model_name: str) -> Dict:
         "size_mb": model_info["size_mb"],
         "downloaded": exists,
         "local_size_mb": round(size_mb, 2) if exists else 0,
-        "path": model_path,
-        "download_url": model_info["url"]
+        "path": display_path,
+        "download_url": model_info["url"],
+        "group": model_info.get("group")
     }
 
 def get_all_models_status() -> List[Dict]:
@@ -279,28 +358,38 @@ def get_manual_download_info(model_name: str) -> Dict:
 
 def _get_download_instructions(model_name: str) -> str:
     """获取下载说明"""
-    if model_name == "whisper-large-v3":
-        return """1. 复制上方链接
+    model_info = MODELS.get(model_name)
+    if not model_info:
+        return ""
+
+    # Whisper 系列统一处理
+    if model_info.get("group") == "whisper":
+        filename = model_info["filename"]
+        return f"""1. 复制上方链接
 2. 打开浏览器/迅雷/IDM 下载
 3. 下载完成后，将文件保存到:
-   Windows: %USERPROFILE%\\.cache\\whisper\\
+   Windows: %USERPROFILE%\.cache\whisper\
    macOS: ~/.cache/whisper/
    Linux: ~/.cache/whisper/
-4. 文件命名为: large-v3.pt
+4. 文件命名为: {filename}
 5. 刷新此页面"""
-    elif model_name == "sensevoice":
+
+    if model_name == "sensevoice":
         return """1. 复制上方链接
 2. 打开 ModelScope App 或浏览器下载
 3. 保存到以下目录:
-   Windows: %USERPROFILE%\\.cache\\modelscope\\iic\\SenseVoiceSmall\\
-   macOS: ~/.cache/modelscope/iic/SenseVoiceSmall/
+   Windows: %USERPROFILE%\.cache\modelscope\hub\models\iic\SenseVoiceSmall\
+   macOS: ~/.cache/modelscope/hub/models/iic/SenseVoiceSmall/
 4. 文件命名为: model.pt
 5. 刷新此页面"""
-    elif model_name == "all-MiniLM-L6-v2":
+
+    if model_name == "all-MiniLM-L6-v2":
         return """1. 复制上方链接
 2. 打开 HuggingFace 下载
 3. 保存到以下目录:
-   Windows: %USERPROFILE%\\.cache\\huggingface\\hub\\models--sentence-transformers--all-MiniLM-L6-v2\\
+   Windows: %USERPROFILE%\.cache\huggingface\hub\models--sentence-transformers--all-MiniLM-L6-v2\
    macOS: ~/.cache/huggingface/hub/models--sentence-transformers--all-MiniLM-L6-v2/
 4. 刷新此页面"""
+
     return ""
+

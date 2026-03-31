@@ -2,7 +2,7 @@ import { useState, useEffect, createContext, useContext, useCallback, type React
 import { IconCircleCheck, IconCircleX, IconInfoCircle, IconX } from '@tabler/icons-react';
 
 interface ToastItem {
-  id: number;
+  id: string;
   type: 'success' | 'error' | 'info';
   message: string;
 }
@@ -23,15 +23,12 @@ export function useToast() {
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
-  const [nextId, setNextId] = useState(1);
-
   const showToast = useCallback((type: 'success' | 'error' | 'info', message: string) => {
-    const id = nextId;
-    setNextId(prev => prev + 1);
+    const id = crypto.randomUUID();
     setToasts(prev => [...prev, { id, type, message }]);
-  }, [nextId]);
+  }, []);
 
-  const dismissToast = useCallback((id: number) => {
+  const dismissToast = useCallback((id: string) => {
     setToasts(prev => prev.filter(t => t.id !== id));
   }, []);
 
