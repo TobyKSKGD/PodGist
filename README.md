@@ -7,6 +7,10 @@
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.104-009688?logo=fastapi)
 
+## 软件截图
+
+![PodGist Homepage](assets/screenshot-homepage.png)
+
 ## 简介
 
 **PodGist** 是一个基于本地算力与 AI 技术的音频内容结构化工具。它通过语音转录和大语言模型分析，将各类音频（播客、讲座、会议录音等）转化为带精确时间轴的结构化摘要，解决音频内容难以快速定位、检索和预览的核心痛点。
