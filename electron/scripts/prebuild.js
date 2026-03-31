@@ -8,8 +8,8 @@ const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
-const electronDir = __dirname;
-const projectRoot = path.dirname(electronDir);
+const electronDir = path.dirname(__dirname);  // electron/ 目录
+const projectRoot = path.dirname(electronDir);  // PodGist/ 目录
 
 function copyDir(src, dest) {
   // 先删除目标如果存在
