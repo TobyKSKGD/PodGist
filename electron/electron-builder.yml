@@ -91,6 +91,8 @@ mac:
 # Windows 配置
 win:
   icon: assets/icon.ico
+  forceCodeSigning: false
+  signAndEditExecutable: false
   target:
     - target: nsis
       arch:
