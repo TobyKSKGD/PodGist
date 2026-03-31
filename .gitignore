@@ -127,6 +127,14 @@ electron/resources/python_venv/
 electron/resources/models/
 electron/resources/ffmpeg/
 
+# Electron 前端构建产物（从 frontend/dist 复制）
+electron/frontend-dist/
+
+# Electron 构建时从项目根目录复制的文件
+electron/api.py
+electron/requirements.txt
+electron/backend/
+
 # 发布包（非常大，不上传）
 release/
 
