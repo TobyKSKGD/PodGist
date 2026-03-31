@@ -20,6 +20,7 @@ from backend.rag_db import (
     index_archive, delete_archive_vectors, get_archives_by_tag, init_db as init_rag_db
 )
 from backend.rag_retriever import generate_chat_response
+from backend.model_manager import get_all_models_status, download_model, get_manual_download_info
 from sse_starlette.sse import EventSourceResponse
 import asyncio
 
@@ -491,6 +492,71 @@ def run_diagnostics():
                 "message": message
             })
         return {"status": "success", "data": formatted_results}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ================= 模型管理 API =================
+
+# 4.1 获取所有模型状态
+@app.get("/api/models/status")
+def get_models_status():
+    """获取所有模型的状态"""
+    try:
+        return {"status": "success", "data": get_all_models_status()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# 4.2 获取手动下载信息
+@app.get("/api/models/manual-download/{model_name}")
+def get_manual_download(model_name: str):
+    """获取手动下载链接和说明"""
+    try:
+        info = get_manual_download_info(model_name)
+        if "error" in info:
+            raise HTTPException(status_code=404, detail=info["error"])
+        return {"status": "success", "data": info}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# 4.3 下载模型（SSE 流式进度）
+@app.post("/api/models/download/{model_name}")
+async def download_model_stream(model_name: str):
+    """
+    下载指定模型，通过 SSE 流式返回进度
+
+    前端可使用 EventSource 接收进度更新
+    """
+    try:
+        # 验证模型名称
+        valid_models = ["whisper-large-v3", "sensevoice", "all-MiniLM-L6-v2"]
+        if model_name not in valid_models:
+            raise HTTPException(status_code=400, detail=f"未知模型: {model_name}")
+
+        # 进度收集器
+        progress_data = {}
+
+        def progress_callback(event):
+            progress_data.update(event)
+
+        async def event_generator():
+            # 在线程池中执行下载
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(download_model, model_name, progress_callback)
+                result = future.result()
+
+            yield {
+                "event": "done",
+                "data": json.dumps(result)
+            }
+
+        return EventSourceResponse(event_generator())
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
