@@ -421,9 +421,9 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
   return (
     <div className="flex h-full">
       {/* ================= 左侧会话列表（可折叠）================= */}
-      <div className={`flex flex-col bg-[#F9F9F9] transition-all duration-300 ${sidebarCollapsed ? 'w-16' : 'w-64'}`}>
-        {/* Header：用 h-full 的上边框代替 container 的 border-r，让线条连贯 */}
-        <div className="flex items-center justify-between h-12 px-3 border-b border-slate-200">
+      <div className={`flex flex-col bg-[#F9F9F9] border-r border-slate-200 transition-all duration-300 ${sidebarCollapsed ? 'w-16' : 'w-64'}`}>
+        {/* Header */}
+        <div className="flex items-center justify-between h-12 px-3">
           {!sidebarCollapsed && (
             <span className="text-sm font-bold text-slate-700 flex items-center gap-1.5">
               <IconBrain size={16} className="text-[#00ADA6]" />
@@ -450,63 +450,58 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
           </div>
         </div>
 
-        {/* 左侧栏右侧分隔线（通过 relative + after 实现，与右侧面板相连） */}
-        <div className="flex-1 relative">
-          <div className="absolute inset-y-0 right-0 w-px bg-slate-200" />
-
-          {/* 会话列表 */}
-          {!sidebarCollapsed && (
-            <div className="flex-1 overflow-y-auto">
-              {sessions.length === 0 ? (
-                <div className="px-4 py-8 text-center text-xs text-slate-400">
-                  <IconMessageCircle size={24} className="mx-auto mb-2 opacity-40" />
-                  暂无对话记录
-                </div>
-              ) : (
-                sessions.map(s => (
-                  <div
-                    key={s.id}
-                    onClick={() => setActiveSessionId(s.id)}
-                    className={`group flex items-center gap-2 px-3 py-2.5 mx-2 my-0.5 text-sm rounded-lg cursor-pointer transition-colors ${
-                      activeSessionId === s.id
-                        ? 'bg-slate-200 text-[#00ADA6]'
-                        : 'text-slate-600 hover:bg-slate-200'
-                    }`}
-                  >
-                    <IconMessageCircle size={14} className="shrink-0" />
-                    <span className="truncate flex-1">{s.title || '新对话'}</span>
-                    <button
-                      onClick={(e) => deleteSession(s.id, e)}
-                      className="opacity-0 group-hover:opacity-100 p-1 hover:bg-[#FFF1F3] hover:text-[#E11D48] rounded transition-all shrink-0"
-                    >
-                      <IconTrash size={12} />
-                    </button>
-                  </div>
-                ))
-              )}
-            </div>
-          )}
-
-          {/* 折叠时显示的图标 */}
-          {sidebarCollapsed && (
-            <div className="flex-1 flex flex-col items-center pt-3 gap-1">
-              {sessions.map(s => (
-                <button
+        {/* 会话列表 */}
+        {!sidebarCollapsed && (
+          <div className="flex-1 overflow-y-auto">
+            {sessions.length === 0 ? (
+              <div className="px-4 py-8 text-center text-xs text-slate-400">
+                <IconMessageCircle size={24} className="mx-auto mb-2 opacity-40" />
+                暂无对话记录
+              </div>
+            ) : (
+              sessions.map(s => (
+                <div
                   key={s.id}
                   onClick={() => setActiveSessionId(s.id)}
-                  className={`p-2 rounded-lg transition-colors ${
+                  className={`group flex items-center gap-2 px-3 py-2.5 mx-2 my-0.5 text-sm rounded-lg cursor-pointer transition-colors ${
                     activeSessionId === s.id
                       ? 'bg-slate-200 text-[#00ADA6]'
-                      : 'text-slate-500 hover:bg-slate-200'
+                      : 'text-slate-600 hover:bg-slate-200'
                   }`}
-                  title={s.title || '新对话'}
                 >
-                  <IconMessageCircle size={16} />
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+                  <IconMessageCircle size={14} className="shrink-0" />
+                  <span className="truncate flex-1">{s.title || '新对话'}</span>
+                  <button
+                    onClick={(e) => deleteSession(s.id, e)}
+                    className="opacity-0 group-hover:opacity-100 p-1 hover:bg-[#FFF1F3] hover:text-[#E11D48] rounded transition-all shrink-0"
+                  >
+                    <IconTrash size={12} />
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+
+        {/* 折叠时显示的图标 */}
+        {sidebarCollapsed && (
+          <div className="flex-1 flex flex-col items-center pt-3 gap-1">
+            {sessions.map(s => (
+              <button
+                key={s.id}
+                onClick={() => setActiveSessionId(s.id)}
+                className={`p-2 rounded-lg transition-colors ${
+                  activeSessionId === s.id
+                    ? 'bg-slate-200 text-[#00ADA6]'
+                    : 'text-slate-500 hover:bg-slate-200'
+                }`}
+                title={s.title || '新对话'}
+              >
+                <IconMessageCircle size={16} />
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* ================= 右侧对话区 ================= */}
