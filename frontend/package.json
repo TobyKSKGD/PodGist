@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "kill-port 8000 5173 --quiet && concurrently -k -n backend,frontend -c blue.bold,cyan.bold \"bash -l -c 'source ../env/bin/activate && uvicorn api:app --reload --port 8000 --app-dir ..'\" \"vite\"",
+    "dev": "kill-port 8000 5173 --quiet && concurrently -k -n backend,frontend -c blue.bold,cyan.bold \"bash -l -c 'source ../env/bin/activate && uvicorn api:app --reload --host 127.0.0.1 --port 8000'\" \"vite\"",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview"
