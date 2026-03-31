@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { IconX, IconKey, IconCpu, IconActivity, IconCircleCheck, IconCircleX, IconLoader2, IconHelp, IconDownload, IconFile, IconChevronDown, IconChevronRight, IconTrash } from '@tabler/icons-react';
 import ConfirmDialog from './ConfirmDialog';
