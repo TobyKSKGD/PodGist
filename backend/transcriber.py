@@ -2,6 +2,24 @@ import whisper
 import torch
 import subprocess
 import re
+import os
+
+# ================= 模型路径配置（支持 Electron 打包）=================
+# 通过环境变量 PODGIST_MODEL_DIR 指定模型根目录
+
+MODEL_CACHE_DIR = os.environ.get('PODGIST_MODEL_DIR', None)
+
+def get_whisper_model_dir():
+    """获取 Whisper 模型目录"""
+    if MODEL_CACHE_DIR:
+        return os.path.join(MODEL_CACHE_DIR, 'whisper')
+    return None  # 使用默认路径 ~/.cache/whisper/
+
+def get_sensevoice_cache_dir():
+    """获取 SenseVoice (ModelScope) 模型目录"""
+    if MODEL_CACHE_DIR:
+        return os.path.join(MODEL_CACHE_DIR, 'modelscope')
+    return None  # 使用默认路径 ~/.cache/modelscope/
 
 def get_available_devices():
     """
@@ -39,7 +57,21 @@ def get_whisper_model(model_name="small", device_key="cpu"):
     返回:
         whisper.Whisper: 加载的 Whisper 模型实例
     """
-    return whisper.load_model(model_name, device=device_key)
+    whisper_model_dir = get_whisper_model_dir()
+
+    if whisper_model_dir:
+        # 确保目录存在
+        os.makedirs(whisper_model_dir, exist_ok=True)
+        # 临时修改 torch hub 缓存目录
+        original_dir = torch.hub.get_dir()
+        try:
+            torch.hub.set_dir(whisper_model_dir)
+            model = whisper.load_model(model_name, device=device_key)
+        finally:
+            torch.hub.set_dir(original_dir)
+        return model
+    else:
+        return whisper.load_model(model_name, device=device_key)
 
 def transcribe_audio_to_timestamped_text(model, audio_file_path, device_key):
     """
@@ -96,10 +128,22 @@ def get_sensevoice_model(device_key="cuda"):
         from modelscope.pipelines import pipeline
         from modelscope.utils.constant import Tasks
 
+        # SenseVoice 模型路径
+        sensevoice_dir = os.path.join(
+            get_sensevoice_cache_dir() or '',
+            'iic', 'SenseVoiceSmall'
+        ) if get_sensevoice_cache_dir() else None
+
+        # 检查本地是否存在模型
+        if sensevoice_dir and os.path.exists(sensevoice_dir):
+            model_path = sensevoice_dir
+        else:
+            model_path = "iic/SenseVoiceSmall"  # 回退到 ModelScope 下载
+
         # 使用 ModelScope 的 SenseVoice pipeline
         _sensevoice_model = pipeline(
             Tasks.auto_speech_recognition,
-            model="iic/SenseVoiceSmall",
+            model=model_path,
             device=device_key
         )
         return _sensevoice_model
@@ -164,9 +208,22 @@ def transcribe_with_sensevoice(audio_file_path, device_key="cuda"):
     num_chunks = int((duration_sec + chunk_size - 1) // chunk_size)
 
     # 创建 SenseVoice pipeline
+    # 检查本地是否存在模型
+    sensevoice_local_dir = os.path.join(
+        get_sensevoice_cache_dir() or '',
+        'iic', 'SenseVoiceSmall'
+    ) if get_sensevoice_cache_dir() else None
+
+    if sensevoice_local_dir and os.path.exists(sensevoice_local_dir):
+        model_path = sensevoice_local_dir
+        print(f"[SenseVoice] 使用本地模型: {model_path}")
+    else:
+        model_path = "iic/SenseVoiceSmall"
+        print(f"[SenseVoice] 使用 ModelScope 下载模型: {model_path}")
+
     inference_pipeline = pipeline(
         Tasks.auto_speech_recognition,
-        model="iic/SenseVoiceSmall",
+        model=model_path,
         device=device
     )
 
