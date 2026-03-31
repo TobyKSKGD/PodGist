@@ -59,6 +59,7 @@ files:
   - backend/**/*
   - api.py
   - requirements.txt
+  - frontend-dist/**/*
 
 # 解包文件（从 asar 中提取出来以便执行）
 asarUnpack:

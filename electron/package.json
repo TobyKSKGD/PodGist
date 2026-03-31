@@ -7,14 +7,13 @@
   "main": "src/main.js",
   "scripts": {
     "start": "electron-builder --dir",
-    "build": "electron-builder --config electron-builder.yml",
-    "build:win": "electron-builder --config electron-builder.yml --win",
-    "build:mac": "electron-builder --config electron-builder.yml --mac",
-    "build:all": "electron-builder --config electron-builder.yml --win --mac",
-    "build:full": "BUILD_TYPE=full electron-builder --config electron-builder.yml --win",
-    "build:lite": "BUILD_TYPE=lite electron-builder --config electron-builder.yml --win",
-    "build:mac:lite": "BUILD_TYPE=lite npm run build:mac",
-    "upload:release": "electron-builder --config electron-builder.yml --win --mac --publish always"
+    "prebuild": "node scripts/prebuild.js",
+    "build:mac": "npm run prebuild && electron-builder --config electron-builder.yml --mac",
+    "build:win": "npm run prebuild && electron-builder --config electron-builder.yml --win",
+    "build:all": "npm run prebuild && electron-builder --config electron-builder.yml --win --mac",
+    "build:full": "BUILD_TYPE=full npm run build:win",
+    "build:lite": "BUILD_TYPE=lite npm run build:win",
+    "upload:release": "npm run prebuild && electron-builder --config electron-builder.yml --win --mac --publish always"
   },
   "devDependencies": {
     "electron": "^28.3.3",
