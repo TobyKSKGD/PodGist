@@ -2,8 +2,6 @@
 
 ## 前提条件
 
-在 Windows 上构建前，需要准备：
-
 ### 1. 安装 Node.js
 - 下载地址：https://nodejs.org/ (建议 LTS 版本 18+)
 - 安装后打开 PowerShell 验证：
@@ -30,7 +28,7 @@ git --version
 
 ---
 
-## 构建步骤
+## 构建步骤（按顺序执行）
 
 ### Step 1: 克隆项目
 
@@ -39,156 +37,204 @@ git clone https://github.com/TobyKSKGD/PodGist.git
 cd PodGist
 ```
 
-### Step 2: 下载 AI 模型
+---
 
-**这步很关键**：完整包需要提前下载所有模型。
-
-```powershell
-# 进入项目目录
-cd PodGist
-
-# 创建模型下载脚本并运行
-python -c "
-import whisper
-print('下载 Whisper large-v3 模型...')
-model = whisper.load_model('large-v3')
-print('Whisper 模型下载完成')
-"
-```
-
-```powershell
-# SenseVoice 模型
-pip install modelscope
-python -c "
-from modelscope.pipelines import pipeline
-from modelscope.utils.constant import Tasks
-print('下载 SenseVoice 模型...')
-p = pipeline(Tasks.auto_speech_recognition, model='iic/SenseVoiceSmall')
-print('SenseVoice 模型下载完成')
-"
-```
-
-```powershell
-# Sentence Transformer 模型
-pip install sentence-transformers
-python -c "
-from sentence_transformers import SentenceTransformer
-print('下载 Sentence Transformer 模型...')
-model = SentenceTransformer('all-MiniLM-L6-v2')
-print('Sentence Transformer 模型下载完成')
-"
-```
-
-### Step 3: 安装 Python 依赖
+### Step 2: 安装 Python 依赖（先做这个！）
 
 ```powershell
 cd PodGist
 
 # 创建虚拟环境
-python -m venv electron\resources\python_venv
+python -m venv env
 
 # 激活虚拟环境
-electron\resources\python_venv\Scripts\activate
+env\Scripts\activate
 
-# 安装 PyTorch (CPU 版本，Windows NVIDIA GPU 用户用 cu126)
+# 安装 PyTorch（根据你的硬件选择）：
+
+# 方式 A：NVIDIA GPU 用户
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
+
+# 方式 B：仅 CPU 用户（推荐，没有 GPU 的人用这个）
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
 
-# 安装其他依赖
+# 安装所有 Python 依赖
 pip install -r requirements.txt
 ```
 
-### Step 4: 下载 FFmpeg
+**验证安装成功**：
+```powershell
+python -c "import whisper; import modelscope; import chromadb; print('所有依赖安装成功')"
+```
 
-下载 FFmpeg Windows 版本并解压到 `electron\resources\ffmpeg\`:
+---
+
+### Step 3: 下载 AI 模型
+
+依赖安装好后，才能下载模型。
+
+```powershell
+# 确保在 PodGist 目录下且虚拟环境已激活
+cd PodGist
+env\Scripts\activate
+
+# 3.1 下载 Whisper large-v3 模型（约 1.5GB，可能需要 10-30 分钟）
+python -c "
+import whisper
+print('正在下载 Whisper large-v3 模型...')
+model = whisper.load_model('large-v3')
+print('Whisper 模型下载完成')
+"
+
+# 3.2 下载 SenseVoice 模型（约 200MB）
+python -c "
+from modelscope.pipelines import pipeline
+from modelscope.utils.constant import Tasks
+print('正在下载 SenseVoice 模型...')
+p = pipeline(Tasks.auto_speech_recognition, model='iic/SenseVoiceSmall')
+print('SenseVoice 模型下载完成')
+"
+
+# 3.3 下载 Sentence Transformer 模型（约 90MB）
+python -c "
+from sentence_transformers import SentenceTransformer
+print('正在下载 Sentence Transformer 模型...')
+model = SentenceTransformer('all-MiniLM-L6-v2')
+print('Sentence Transformer 模型下载完成')
+"
+```
+
+**模型默认保存到**：`%USERPROFILE%\.cache\` 目录下
+
+---
+
+### Step 4: 准备 FFmpeg
 
 1. 访问 https://www.gyan.dev/ffmpeg/builds/
 2. 下载 `ffmpeg-release-essentials.zip`
 3. 解压得到 `ffmpeg.exe`
 4. 将 `ffmpeg.exe` 复制到 `PodGist\electron\resources\ffmpeg\`
+   - 如果没有这个文件夹，先创建：`mkdir electron\resources\ffmpeg`
 
-### Step 5: 拷贝模型到资源目录
+---
+
+### Step 5: 创建 Python 虚拟环境（Electron 打包用）
+
+```powershell
+# 在 electron 目录下创建虚拟环境
+cd electron
+python -m venv resources\python_venv
+
+# 安装依赖到这个虚拟环境
+resources\python_venv\Scripts\activate
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+pip install -r ..\requirements.txt
+deactivate
+```
+
+---
+
+### Step 6: 拷贝模型到资源目录
 
 ```powershell
 # 创建模型目录
 mkdir electron\resources\models
 
-# 拷贝 Whisper 模型 (~1.5GB)
-# 模型默认在 %USERPROFILE%\.cache\whisper\
-xcopy /E /I "%USERPROFILE%\.cache\whisper" electron\resources\models\whisper
+# 拷贝 Whisper 模型
+xcopy /E /I "%USERPROFILE%\.cache\whisper" electron\resources\models\whisper-large-v3
 
-# 拷贝 SenseVoice 模型 (~200MB)
-xcopy /E /I "%USERPROFILE%\.cache\modelscope" electron\resources\models\SenseVoiceSmall
+# 拷贝 SenseVoice 模型
+xcopy /E /I "%USERPROFILE%\.cache\modelscope\iic" electron\resources\models\SenseVoiceSmall
 
-# 拷贝 Sentence Transformer 模型 (~90MB)
-xcopy /E /I "%USERPROFILE%\.cache\huggingface" electron\resources\models\all-MiniLM-L6-v2
+# 拷贝 Sentence Transformer 模型
+mkdir electron\resources\models\all-MiniLM-L6-v2
+xcopy /E /I "%USERPROFILE%\.cache\huggingface\hub\models--sentence-transformers--all-MiniLM-L6-v2" electron\resources\models\all-MiniLM-L6-v2
 ```
 
-### Step 6: 安装 Node.js 依赖
+---
+
+### Step 7: 安装 Node.js 依赖
 
 ```powershell
 cd electron
 npm install
 ```
 
-### Step 7: 构建 Windows 安装包
+---
+
+### Step 8: 构建 Windows 安装包
 
 ```powershell
-# 完整包（包含所有模型）
-npm run build:full
+# 构建完整包（包含所有模型）
+set BUILD_TYPE=full
+npm run build:win
+```
+
+或者一行命令：
+```powershell
+cd electron
+set BUILD_TYPE=full && npm run build:win
 ```
 
 构建产物会在 `release\1.0.0\windows\` 目录下。
 
 ---
 
-## 完整包构建命令速览
+## 快速命令汇总
 
 ```powershell
-# 1. 克隆项目
+# 完整流程
 git clone https://github.com/TobyKSKGD/PodGist.git
 cd PodGist
 
-# 2. 下载模型（每步可能需要 10-30 分钟）
+# 1. 安装 Python 依赖
+python -m venv env
+env\Scripts\activate
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+pip install -r requirements.txt
+
+# 2. 下载模型
 python -c "import whisper; whisper.load_model('large-v3')"
 python -c "from modelscope.pipelines import pipeline; pipeline('auto_speech_recognition', 'iic/SenseVoiceSmall')"
 python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
 
-# 3. 安装 Python 虚拟环境和依赖
-python -m venv electron\resources\python_venv
-electron\resources\python_venv\Scripts\activate
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-pip install -r requirements.txt
+# 3. FFmpeg 放到 electron\resources\ffmpeg\
 
-# 4. 下载 FFmpeg 并放到 electron\resources\ffmpeg\
+# 4. 创建打包用虚拟环境
+cd electron
+python -m venv resources\python_venv
+resources\python_venv\Scripts\activate
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+pip install -r ..\requirements.txt
+deactivate
 
 # 5. 拷贝模型到 electron\resources\models\
 
 # 6. 构建
-cd electron
 npm install
-npm run build:full
+set BUILD_TYPE=full && npm run build:win
 ```
 
 ---
 
 ## 常见问题
 
-### Q: 模型下载太慢？
-可以使用镜像或代理。如果下载中断，可以重新运行下载命令，会从断点继续。
+### Q: pip install 报错 "不是内部或外部命令"
+确保 Python 已添加到系统 PATH，或者使用 `python -m pip`
 
-### Q: 报错 "python 不是内部或外部命令"
-确保 Python 已添加到系统 PATH。重新安装 Python 时勾选 "Add Python to PATH"。
+### Q: 模型下载中断/失败
+重新运行下载命令，会从断点继续
 
 ### Q: 打包后运行报错
-检查是否缺少 FFmpeg 或模型文件。确保 `electron\resources\` 目录结构完整。
+检查：
+1. FFmpeg.exe 是否放在正确位置
+2. 模型是否完整拷贝到 electron\resources\models\
+3. python_venv 是否正确创建
 
-### Q: 如何清理并重新构建？
+### Q: 如何清理重新构建？
 ```powershell
-# 删除构建缓存
 rd /s /q electron\dist
 rd /s /q electron\out
 rd /s /q release
-
-# 重新构建
-npm run build:full
+npm run build:win
 ```
