@@ -25,12 +25,14 @@ from sse_starlette.sse import EventSourceResponse
 import asyncio
 
 # ================= 命令行参数解析 =================
+# 注意：使用 parse_known_args() 而不是 parse_args()
+# 这样当 uvicorn 传递参数时，只会处理我们定义的参数，忽略其他的
 _parser = argparse.ArgumentParser(description='PodGist API Server')
 _parser.add_argument('--data-dir', type=str, default=None,
                      help='用户数据目录（archives, temp_audio, config, .env）')
 _parser.add_argument('--model-dir', type=str, default=None,
                      help='AI 模型目录路径')
-_cli_args = _parser.parse_args()
+_cli_args, _unknown = _parser.parse_known_args()
 
 # 设置环境变量供其他模块使用
 if _cli_args.data_dir:
