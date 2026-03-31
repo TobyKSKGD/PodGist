@@ -56,6 +56,10 @@ outputDir: ../release/${version}
 files:
   - src/**/*
   - package.json
+  - ../frontend/dist/**/*
+  - ../api.py
+  - ../backend/**/*
+  - ../requirements.txt
 
 # 额外资源（不打包进 asar，直接复制到 resources）
 extraResources:
