@@ -32,11 +32,11 @@ nsis:
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: PodGist
-  artifactName: ${productName}-${version}-${os}-${arch}-${buildType}.${ext}
+  artifactName: ${productName}-${version}-${os}-${arch}.${ext}
 
 # DMG macOS 安装包配置
 dmg:
-  artifactName: ${productName}-${version}-${os}-${arch}-${buildType}.${ext}
+  artifactName: ${productName}-${version}-${os}-${arch}.${ext}
   window:
     width: 600
     height: 400
@@ -49,8 +49,8 @@ dmg:
       path: /Applications
 
 # 构建产物输出目录
-# 会创建 ../release/v1.0.0/mac/ 和 ../release/v1.0.0/windows/
-outputDir: ../release/${version}
+directories:
+  output: ../release/${version}
 
 # 打包文件
 files:
@@ -90,9 +90,3 @@ win:
       arch:
         - x64
 
-# 构建类型（full: 包含所有模型，lite: 首次运行下载模型）
-buildType: ${BUILD_TYPE:-lite}
-
-# electron-builder 配置变体（通过环境变量或命令行覆盖）
-# 构建完整包: BUILD_TYPE=full npm run build:full
-# 构建精简包: BUILD_TYPE=lite npm run build:lite
