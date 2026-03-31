@@ -5,6 +5,7 @@ import shutil
 import json
 import re
 import torch
+import argparse
 from datetime import datetime
 from backend.diagnostics import run_all_diagnostics
 from backend.transcriber import transcribe_with_sensevoice, transcribe_audio_to_timestamped_text, get_whisper_model, get_available_devices
@@ -22,6 +23,22 @@ from backend.rag_retriever import generate_chat_response
 from sse_starlette.sse import EventSourceResponse
 import asyncio
 
+# ================= 命令行参数解析 =================
+_parser = argparse.ArgumentParser(description='PodGist API Server')
+_parser.add_argument('--data-dir', type=str, default=None,
+                     help='用户数据目录（archives, temp_audio, config, .env）')
+_parser.add_argument('--model-dir', type=str, default=None,
+                     help='AI 模型目录路径')
+_parser.add_argument('--port', type=int, default=8000,
+                     help='服务端口')
+_cli_args = _parser.parse_args()
+
+# 设置环境变量供其他模块使用
+if _cli_args.data_dir:
+    os.environ['PODGIST_DATA_DIR'] = _cli_args.data_dir
+if _cli_args.model_dir:
+    os.environ['PODGIST_MODEL_DIR'] = _cli_args.model_dir
+
 app = FastAPI(title="PodGist API", version="1.0.0")
 
 @app.on_event("startup")
@@ -29,8 +46,15 @@ async def startup_index():
     """启动时自动索引所有已有归档到向量库（后台运行，避免阻塞启动）"""
     asyncio.to_thread(index_all_archives)
 
-# 获取 api.py 所在目录作为项目根目录
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# 获取 api.py 所在目录作为项目根目录（默认）
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# 用户数据目录（Electron 模式或开发模式）
+if _cli_args.data_dir:
+    BASE_DIR = _cli_args.data_dir
+else:
+    BASE_DIR = _SCRIPT_DIR
+
 ENV_FILE = os.path.join(BASE_DIR, ".env")
 CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
 

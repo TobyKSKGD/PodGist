@@ -115,3 +115,21 @@ temp/
 *.backup
 *.orig
 *.sage
+
+# ================= 10. Electron 打包产物 =================
+# Electron 构建目录
+electron/dist/
+electron/out/
+electron/node_modules/
+
+# Electron 打包资源
+electron/resources/python_venv/
+electron/resources/models/
+electron/resources/ffmpeg/
+
+# 发布包（非常大，不上传）
+release/
+
+# macOS build 相关
+*.dSYM/
+*.app.dSYM/

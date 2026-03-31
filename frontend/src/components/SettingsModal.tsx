@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { IconX, IconKey, IconCpu, IconActivity, IconCircleCheck, IconCircleX, IconLoader2 } from '@tabler/icons-react';
+import { IconX, IconKey, IconCpu, IconActivity, IconCircleCheck, IconCircleX, IconLoader2, IconHelp } from '@tabler/icons-react';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -137,7 +137,23 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
             <div className="space-y-6">
               <h3 className="text-lg font-semibold border-b border-slate-100 pb-4">核心安全设置</h3>
               <div className="space-y-3">
-                <label className="text-sm font-medium text-slate-700">DeepSeek API IconKey</label>
+                <div className="flex items-center gap-2">
+                  <label className="text-sm font-medium text-slate-700">DeepSeek API Key</label>
+                  <div className="relative group">
+                    <IconHelp size={16} className="text-slate-400 cursor-help" />
+                    <div className="absolute left-0 top-6 w-72 p-3 bg-slate-800 text-white text-xs rounded-lg shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 space-y-2">
+                      <p className="font-medium text-white">如何获取 DeepSeek API Key？</p>
+                      <ol className="list-decimal list-inside space-y-1 text-slate-300">
+                        <li>访问 <a href="https://platform.deepseek.com/" target="_blank" rel="noopener noreferrer" className="text-[#00ADA6] hover:underline">platform.deepseek.com</a></li>
+                        <li>注册/登录账号</li>
+                        <li>点击左侧「API Keys」→「创建 API Key」</li>
+                        <li>复制生成的密钥（sk-...）</li>
+                        <li>粘贴到左侧输入框并保存</li>
+                      </ol>
+                      <p className="text-slate-400 text-[10px] pt-1 border-t border-slate-600">密钥仅保存在本地，绝不会上传</p>
+                    </div>
+                  </div>
+                </div>
                 <input
                   type="password"
                   placeholder="sk-..."

@@ -12,9 +12,17 @@ from chromadb.config import Settings as ChromaSettings
 from datetime import datetime
 from typing import Optional
 
-# ================= 路径配置 =================
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-RAG_DB_DIR = os.path.join(BASE_DIR, "temp_audio")
+# ================= 路径配置（支持 Electron 打包）=================
+# 通过环境变量 PODGIST_DATA_DIR 指定用户数据目录
+
+_USER_DATA_DIR = os.environ.get('PODGIST_DATA_DIR', None)
+
+if _USER_DATA_DIR:
+    RAG_DB_DIR = os.path.join(_USER_DATA_DIR, "temp_audio")
+else:
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    RAG_DB_DIR = os.path.join(BASE_DIR, "temp_audio")
+
 RAG_DB_PATH = os.path.join(RAG_DB_DIR, "podgist_rag.db")
 CHROMA_DB_PATH = os.path.join(RAG_DB_DIR, "chroma_db")
 
@@ -473,8 +481,15 @@ def get_embedding_model():
     global _embedding_model
     if _embedding_model is None:
         from sentence_transformers import SentenceTransformer
-        # 使用轻量模型，CPU 可用
-        _embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+
+        # 检查是否有本地模型
+        model_dir = os.environ.get('PODGIST_EMBEDDING_MODEL_DIR')
+        if model_dir and os.path.exists(model_dir):
+            print(f"[Embedding] 使用本地模型: {model_dir}")
+            _embedding_model = SentenceTransformer(model_dir)
+        else:
+            # 使用轻量模型，CPU 可用
+            _embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
     return _embedding_model
 
 def compute_embeddings(texts: list[str]) -> list[list[float]]:
