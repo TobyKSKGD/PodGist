@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
-import { IconX, IconKey, IconCpu, IconActivity, IconCircleCheck, IconCircleX, IconLoader2, IconHelp } from '@tabler/icons-react';
+import { IconX, IconKey, IconCpu, IconActivity, IconCircleCheck, IconCircleX, IconLoader2, IconHelp, IconDownload, IconFile } from '@tabler/icons-react';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -11,6 +11,17 @@ interface SettingsModalProps {
 interface Device {
   key: string;
   name: string;
+}
+
+interface ModelInfo {
+  name: string;
+  display_name: string;
+  description: string;
+  size_mb: number;
+  downloaded: boolean;
+  local_size_mb: number;
+  path: string;
+  download_url: string;
 }
 
 const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToast }) => {
@@ -25,12 +36,26 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
   const [maxTimelineItems, setMaxTimelineItems] = useState(15);
   const [availableDevices, setAvailableDevices] = useState<Device[]>([]);
 
+  // 模型管理状态
+  const [models, setModels] = useState<ModelInfo[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState<{percent: number, downloaded_mb: number, total_mb: number} | null>(null);
+  const [manualDownloadInfo, setManualDownloadInfo] = useState<{url: string, instructions: string} | null>(null);
+
   // 当弹窗打开时，从后端加载设置
   useEffect(() => {
     if (isOpen) {
       fetchSettings();
     }
   }, [isOpen]);
+
+  // 切换到模型管理菜单时加载状态
+  useEffect(() => {
+    if (activeMenu === 'models' && models.length === 0) {
+      fetchModelsStatus();
+    }
+  }, [activeMenu]);
 
   const fetchSettings = async () => {
     try {
@@ -47,6 +72,90 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
     } catch (error) {
       console.error('加载设置失败:', error);
     }
+  };
+
+  const fetchModelsStatus = async () => {
+    setModelsLoading(true);
+    try {
+      const response = await axios.get('http://localhost:8000/api/models/status');
+      if (response.data.status === 'success') {
+        setModels(response.data.data);
+      }
+    } catch (error) {
+      console.error('获取模型状态失败:', error);
+      showToast('error', '无法获取模型状态');
+    } finally {
+      setModelsLoading(false);
+    }
+  };
+
+  const downloadModel = async (modelName: string) => {
+    setDownloadingModel(modelName);
+    setDownloadProgress(null);
+    setManualDownloadInfo(null);
+
+    try {
+      const response = await axios.post(
+        `http://localhost:8000/api/models/download/${modelName}`,
+        {},
+        { responseType: 'text' }
+      );
+    } catch (error: any) {
+      // 如果是 SSE 响应，需要解析 progress
+      console.log('下载响应:', error);
+    }
+
+    // 轮询检查进度（因为 SSE 可能被 axios 中断）
+    const progressInterval = setInterval(async () => {
+      try {
+        const statusResponse = await axios.get('http://localhost:8000/api/models/status');
+        if (statusResponse.data.status === 'success') {
+          const updatedModels = statusResponse.data.data;
+          const currentModel = updatedModels.find((m: ModelInfo) => m.name === modelName);
+
+          if (currentModel?.downloaded) {
+            // 下载完成
+            clearInterval(progressInterval);
+            setDownloadingModel(null);
+            setDownloadProgress(null);
+            setModels(updatedModels);
+            showToast('success', `${currentModel.display_name} 下载完成`);
+            return;
+          }
+        }
+      } catch (e) {
+        console.log('轮询进度中...');
+      }
+    }, 3000);
+
+    // 30 秒后停止轮询
+    setTimeout(() => {
+      clearInterval(progressInterval);
+      if (downloadingModel === modelName) {
+        setDownloadingModel(null);
+        showToast('error', '下载超时，请刷新页面检查状态或使用手动下载');
+      }
+    }, 30000);
+  };
+
+  const showManualDownload = async (modelName: string) => {
+    try {
+      const response = await axios.get(`http://localhost:8000/api/models/manual-download/${modelName}`);
+      if (response.data.status === 'success') {
+        setManualDownloadInfo({
+          url: response.data.data.url,
+          instructions: response.data.data.instructions
+        });
+      }
+    } catch (error) {
+      console.error('获取手动下载信息失败:', error);
+      showToast('error', '无法获取下载链接');
+    }
+  };
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+    showToast('info', '链接已复制到剪贴板');
   };
 
   const runDiagnostics = async () => {
@@ -121,6 +230,12 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
               className={`flex items-center gap-3 px-3 py-3 rounded-lg text-sm font-medium transition-colors ${activeMenu === 'engine' ? 'bg-slate-200 text-slate-900' : 'text-slate-600 hover:bg-slate-100'}`}
             >
               <IconCpu size={18} className={activeMenu === 'engine' ? 'text-[#00ADA6]' : ''} /> 转录引擎
+            </button>
+            <button
+              onClick={() => { setActiveMenu('models'); }}
+              className={`flex items-center gap-3 px-3 py-3 rounded-lg text-sm font-medium transition-colors ${activeMenu === 'models' ? 'bg-slate-200 text-slate-900' : 'text-slate-600 hover:bg-slate-100'}`}
+            >
+              <IconFile size={18} className={activeMenu === 'models' ? 'text-[#00ADA6]' : ''} /> 模型管理
             </button>
             <button
               onClick={() => setActiveMenu('diagnostics')}
@@ -293,6 +408,124 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
               >
                 保存并应用
               </button>
+            </div>
+          )}
+
+          {activeMenu === 'models' && (
+            <div className="space-y-6">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+                <h3 className="text-lg font-semibold">模型管理</h3>
+                <button
+                  onClick={fetchModelsStatus}
+                  className="text-sm text-[#00ADA6] hover:underline"
+                >
+                  刷新状态
+                </button>
+              </div>
+
+              {modelsLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <IconLoader2 className="animate-spin text-[#00ADA6]" size={24} />
+                  <span className="ml-2 text-slate-500">加载中...</span>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {models.map((model) => (
+                    <div key={model.name} className="border border-slate-200 rounded-lg p-4">
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2">
+                            <h4 className="font-medium text-slate-800">{model.display_name}</h4>
+                            {model.downloaded ? (
+                              <span className="text-xs bg-[#D1FAF5] text-[#00ADA6] px-2 py-0.5 rounded">
+                                已下载
+                              </span>
+                            ) : (
+                              <span className="text-xs bg-slate-100 text-slate-500 px-2 py-0.5 rounded">
+                                未下载
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-sm text-slate-500 mt-1">{model.description}</p>
+                          <p className="text-xs text-slate-400 mt-1">
+                            大小: {model.size_mb} MB
+                            {model.downloaded && model.local_size_mb > 0 && (
+                              <span className="ml-2 text-[#00ADA6]">
+                                (本地: {model.local_size_mb} MB)
+                              </span>
+                            )}
+                          </p>
+                        </div>
+
+                        <div className="ml-4">
+                          {downloadingModel === model.name ? (
+                            <div className="text-center">
+                              <IconLoader2 className="animate-spin text-[#00ADA6] mx-auto" size={20} />
+                              <span className="text-xs text-slate-500 mt-1 block">
+                                {downloadProgress?.percent || 0}%
+                              </span>
+                              {downloadProgress && (
+                                <span className="text-xs text-slate-400">
+                                  {downloadProgress.downloaded_mb} / {downloadProgress.total_mb} MB
+                                </span>
+                              )}
+                            </div>
+                          ) : model.downloaded ? (
+                            <span className="text-[#10B981]">
+                              <IconCircleCheck size={24} />
+                            </span>
+                          ) : (
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => downloadModel(model.name)}
+                                className="flex items-center gap-1 bg-[#00ADA6] hover:bg-[#009A94] text-white text-sm px-3 py-1.5 rounded-lg transition-colors"
+                              >
+                                <IconDownload size={16} />
+                                下载
+                              </button>
+                              <button
+                                onClick={() => showManualDownload(model.name)}
+                                className="text-sm text-slate-500 hover:text-slate-700 px-2 py-1.5 border border-slate-200 rounded-lg"
+                                title="手动下载"
+                              >
+                                ?
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* 手动下载信息 */}
+                      {manualDownloadInfo && (
+                        <div className="mt-4 p-3 bg-slate-50 border border-slate-200 rounded-lg">
+                          <div className="flex items-center justify-between mb-2">
+                            <p className="text-sm font-medium text-slate-700">手动下载链接</p>
+                            <button
+                              onClick={() => copyToClipboard(manualDownloadInfo.url)}
+                              className="text-xs text-[#00ADA6] hover:underline"
+                            >
+                              复制链接
+                            </button>
+                          </div>
+                          <p className="text-xs text-slate-600 bg-white px-2 py-1 rounded border break-all">
+                            {manualDownloadInfo.url}
+                          </p>
+                          <div className="mt-2 text-xs text-slate-500 whitespace-pre-line">
+                            {manualDownloadInfo.instructions}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="p-4 bg-[#EFF6FF] border border-[#3B82F6] rounded-lg">
+                <p className="text-sm text-[#64748B]">
+                  <strong>提示：</strong>如果自动下载经常中断，建议使用「?」按钮获取下载链接，
+                  然后用浏览器或下载工具（如 IDM、迅雷）下载，下载完成后刷新页面即可自动识别。
+                </p>
+              </div>
             </div>
           )}
 
