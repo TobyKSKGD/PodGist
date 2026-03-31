@@ -31,12 +31,6 @@ def parse_args():
         default=None,
         help='AI 模型目录路径'
     )
-    parser.add_argument(
-        '--port',
-        type=int,
-        default=8000,
-        help='服务端口'
-    )
     return parser.parse_args()
 
 
@@ -55,12 +49,12 @@ def main():
     # 启动 FastAPI 服务
     import uvicorn
 
-    print(f"[start_electron] 启动后端服务 on port {args.port}...")
+    print(f"[start_electron] 启动后端服务 on port 8000...")
 
     uvicorn.run(
         "api:app",
         host="127.0.0.1",
-        port=args.port,
+        port=8000,
         reload=False,
         log_level="info"
     )

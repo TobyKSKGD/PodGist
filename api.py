@@ -30,8 +30,6 @@ _parser.add_argument('--data-dir', type=str, default=None,
                      help='用户数据目录（archives, temp_audio, config, .env）')
 _parser.add_argument('--model-dir', type=str, default=None,
                      help='AI 模型目录路径')
-_parser.add_argument('--port', type=int, default=8000,
-                     help='服务端口')
 _cli_args = _parser.parse_args()
 
 # 设置环境变量供其他模块使用
