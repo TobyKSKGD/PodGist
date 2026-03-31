@@ -163,9 +163,10 @@ class BackendStarter {
     }
 
     // Electron 专用入口脚本
-    // __dirname 在 asar 中是 app.asar/src/，backend/ 和 src/ 同级
+    // 解包后的文件在 app.asar.unpacked/ 目录
     const startScript = path.join(
-      path.dirname(__dirname),
+      process.resourcesPath,
+      'app.asar.unpacked',
       'backend',
       'start_electron.py'
     );
@@ -184,12 +185,11 @@ class BackendStarter {
 
     this.pythonProcess = spawn(pythonPath, [
       startScript,
-      '--data-dir', this.userDataPath,
-      '--port', '8000'
+      '--data-dir', this.userDataPath
     ], {
       stdio: ['ignore', 'pipe', 'pipe'],
       env,
-      cwd: path.dirname(__dirname)
+      cwd: this.userDataPath
     });
 
     this.pythonProcess.stdout.on('data', (data) => {

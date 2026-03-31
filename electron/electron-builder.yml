@@ -56,10 +56,15 @@ directories:
 files:
   - src/**/*
   - package.json
-  - ../frontend/dist/**/*
-  - ../api.py
-  - ../backend/**/*
-  - ../requirements.txt
+  - backend/**/*
+  - api.py
+  - requirements.txt
+
+# 解包文件（从 asar 中提取出来以便执行）
+asarUnpack:
+  - backend/**/*
+  - api.py
+  - requirements.txt
 
 # 额外资源（不打包进 asar，直接复制到 resources）
 extraResources:
