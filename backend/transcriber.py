@@ -18,7 +18,7 @@ def get_whisper_model_dir():
 def get_sensevoice_cache_dir():
     """获取 SenseVoice (ModelScope) 模型目录"""
     if MODEL_CACHE_DIR:
-        return os.path.join(MODEL_CACHE_DIR, 'modelscope')
+        return os.path.join(MODEL_CACHE_DIR, 'modelscope', 'hub', 'models')
     return None  # 使用默认路径 ~/.cache/modelscope/
 
 def get_available_devices():

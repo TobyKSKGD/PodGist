@@ -10,8 +10,8 @@ interface ElectronAPI {
   // 获取应用版本
   getAppVersion: () => Promise<string>;
 
-  // 获取平台 (win32 / darwin / linux)
-  getPlatform: () => Promise<string>;
+  // 获取平台 (darwin / win32 / linux)
+  getPlatform: () => Promise<'darwin' | 'win32' | 'linux'>;
 
   // 是否为 Electron 环境
   isElectron: boolean;

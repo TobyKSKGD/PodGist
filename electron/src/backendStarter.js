@@ -163,8 +163,9 @@ class BackendStarter {
     }
 
     // Electron 专用入口脚本
+    // __dirname 在 asar 中是 app.asar/src/，backend/ 和 src/ 同级
     const startScript = path.join(
-      path.dirname(path.dirname(__dirname)),  // 项目根目录
+      path.dirname(__dirname),
       'backend',
       'start_electron.py'
     );
@@ -188,7 +189,7 @@ class BackendStarter {
     ], {
       stdio: ['ignore', 'pipe', 'pipe'],
       env,
-      cwd: path.dirname(path.dirname(__dirname))
+      cwd: path.dirname(__dirname)
     });
 
     this.pythonProcess.stdout.on('data', (data) => {
