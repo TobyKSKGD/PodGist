@@ -104,36 +104,10 @@ async function main() {
   // Step 2: Check environment
   checkDeps();
 
-  // Step 3: Start backend
-  const pythonCmd = getVenvPython();
-  const backendCmd = isWindows ? 'uvicorn' : 'uvicorn';
-
-  log(colors.backend, 'START', '启动后端 (FastAPI :8000)...');
-  const backend = spawn(pythonCmd, [
-    '-m', 'uvicorn', 'api:app',
-    '--reload', '--port', '8000', '--app-dir', '..'
-  ], {
-    cwd: '..',
-    shell: false,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-
-  backend.stdout.on('data', (data) => {
-    process.stdout.write(`${colors.backend}[backend]${colors.reset} ${data}`);
-  });
-  backend.stderr.on('data', (data) => {
-    process.stderr.write(`${colors.backend}[backend]${colors.reset} ${data}`);
-  });
-  backend.on('error', (err) => {
-    log(colors.backend, 'ERROR', err.message);
-  });
-
-  // Wait for backend to start
-  await new Promise(r => setTimeout(r, 3000));
-
-  // Step 4: Start frontend
-  log(colors.frontend, 'START', '启动前端 (Vite :5173)...');
-  const frontend = spawn('npm', ['run', 'dev', '--', '--host'], {
+  // Step 3: Start both frontend and backend using frontend's dev script
+  // (frontend/package.json 的 dev 命令已经包含了前后端启动)
+  log(colors.frontend, 'START', '启动前后端...');
+  const frontend = spawn('npm', ['run', 'dev'], {
     cwd: 'frontend',
     shell: true,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -158,7 +132,6 @@ async function main() {
   // Cleanup on exit
   process.on('SIGINT', () => {
     log('', 'SHUTDOWN', '正在停止服务...');
-    backend.kill();
     frontend.kill();
     process.exit(0);
   });
