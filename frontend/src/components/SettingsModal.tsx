@@ -41,6 +41,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
   const [modelsLoading, setModelsLoading] = useState(false);
   const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
   const [downloadProgress, setDownloadProgress] = useState<{percent: number, downloaded_mb: number, total_mb: number} | null>(null);
+  const [expandedManualModel, setExpandedManualModel] = useState<string | null>(null);
   const [manualDownloadInfo, setManualDownloadInfo] = useState<{url: string, instructions: string} | null>(null);
 
   // 当弹窗打开时，从后端加载设置
@@ -139,9 +140,17 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
   };
 
   const showManualDownload = async (modelName: string) => {
+    // 如果已经展开，则收起
+    if (expandedManualModel === modelName) {
+      setExpandedManualModel(null);
+      setManualDownloadInfo(null);
+      return;
+    }
+
     try {
       const response = await axios.get(`http://localhost:8000/api/models/manual-download/${modelName}`);
       if (response.data.status === 'success') {
+        setExpandedManualModel(modelName);
         setManualDownloadInfo({
           url: response.data.data.url,
           instructions: response.data.data.instructions
@@ -413,7 +422,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
 
           {activeMenu === 'models' && (
             <div className="space-y-6">
-              <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-4 pr-8">
                 <h3 className="text-lg font-semibold">模型管理</h3>
                 <button
                   onClick={fetchModelsStatus}
@@ -496,7 +505,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
                       </div>
 
                       {/* 手动下载信息 */}
-                      {manualDownloadInfo && (
+                      {expandedManualModel === model.name && manualDownloadInfo && (
                         <div className="mt-4 p-3 bg-slate-50 border border-slate-200 rounded-lg">
                           <div className="flex items-center justify-between mb-2">
                             <p className="text-sm font-medium text-slate-700">手动下载链接</p>
