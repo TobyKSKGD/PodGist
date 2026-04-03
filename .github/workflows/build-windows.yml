@@ -98,7 +98,7 @@ jobs:
 
       - name: Verify output
         run: ls release/1.0.0/win-unpacked/*.exe 2>/dev/null
-        working-directory: ${{ github.workspace }}/electron
+        working-directory: ${{ github.workspace }}
         shell: bash
         continue-on-error: true
 
@@ -108,7 +108,7 @@ jobs:
           echo === Windows executable ===
           find release/1.0.0/ -name "*.exe" 2>/dev/null
           ls -la release/1.0.0/win-unpacked/ 2>/dev/null
-        working-directory: ${{ github.workspace }}/electron
+        working-directory: ${{ github.workspace }}
         shell: bash
         continue-on-error: true
 
@@ -121,7 +121,7 @@ jobs:
         continue-on-error: true
 
       # ========== Step 7: 上传 .exe 到 v1.0.0-windows draft release ==========
-      # electron-builder 在 electron/ 子目录运行，输出到 ../release/（即 ${{ github.workspace }}/release/）
+      # electron-builder 输出到 ${{ github.workspace }}/release/（workspace 根目录）
       - name: Upload to Release
         run: |
           find release/1.0.0/win-unpacked/ -name "*.exe" -type f | while read f; do
@@ -133,7 +133,7 @@ jobs:
               "https://uploads.github.com/repos/TobyKSKGD/PodGist/releases/304960858/assets?name=$(basename $f)"
             echo ""
           done
-        working-directory: ${{ github.workspace }}/electron
+        working-directory: ${{ github.workspace }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
