@@ -64,8 +64,21 @@ jobs:
 
       # ========== Step 4: PyInstaller 打包后端 ==========
       - name: Package backend with PyInstaller
-        run: pyinstaller --noconsole --onedir backend/api.spec
+        run: |
+          pyinstaller --noconsole --onedir `
+            --log-level=DEBUG `
+            --exclude-module matplotlib `
+            --exclude-module tkinter `
+            --exclude-module PyQt5 `
+            backend/api.spec > pyinstaller_build.log 2>&1
         working-directory: ${{ github.workspace }}
+        continue-on-error: true
+
+      - name: Upload PyInstaller Log
+        uses: actions/upload-artifact@v4
+        with:
+          name: pyinstaller-log
+          path: pyinstaller_build.log
 
       - name: Verify PyInstaller output
         run: |
