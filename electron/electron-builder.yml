@@ -15,12 +15,12 @@ appId: com.podgist.desktop
 productName: PodGist
 copyright: Copyright © 2026 PodGist Team
 
-# 发布配置 - 自动发布到 GitHub Release
-publish:
-  provider: github
-  owner: TobyKSKGD
-  repo: PodGist
-  releaseType: draft
+# 发布配置 - 已禁用，改由 workflow 通过 gh CLI 手动上传
+# publish:
+#   provider: github
+#   owner: TobySKKGD
+#   repo: PodGist
+#   releaseType: draft
 
 # 构建产物输出目录
 directories:
@@ -107,4 +107,3 @@ win:
       to: api
       filter:
         - "**/*"
-
