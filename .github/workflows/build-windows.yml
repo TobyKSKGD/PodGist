@@ -63,14 +63,10 @@ jobs:
           node scripts/prebuild.js
 
       # ========== Step 4: PyInstaller 打包后端 ==========
+      # 注意：--onedir/--noconsole 等选项已在 .spec 文件中定义，命令行不能再传
       - name: Package backend with PyInstaller
         run: |
-          pyinstaller --noconsole --onedir `
-            --log-level=DEBUG `
-            --exclude-module matplotlib `
-            --exclude-module tkinter `
-            --exclude-module PyQt5 `
-            backend/api.spec > pyinstaller_build.log 2>&1
+          pyinstaller --log-level=DEBUG backend/api.spec > pyinstaller_build.log 2>&1
         working-directory: ${{ github.workspace }}
         continue-on-error: true
 
