@@ -80,11 +80,13 @@ jobs:
         run: echo "Verifying PyInstaller output exists"
         continue-on-error: true
 
-      # PyInstaller 输出到 dist/api，需要复制到 electron/ 下供 electron-builder 打包
+      # PyInstaller 输出到 dist/api（相对于 repo 根目录）
+      # 需要复制到 electron/dist/api（electron-builder 在 electron/ 子目录里跑）
       - name: Copy PyInstaller output to electron
         run: |
-          if not exist electron\dist mkdir electron\dist
-          xcopy /E /I /Y dist\api electron\dist\api
+          if not exist dist mkdir dist
+          xcopy /E /I /Y ..\dist\api dist\api
+        working-directory: ${{ github.workspace }}/electron
         continue-on-error: true
 
       # ========== Step 5: electron-builder 打包 Windows ==========
@@ -113,13 +115,17 @@ jobs:
           path: electron/release/
         continue-on-error: true
 
-      # ========== Step 7: 上传到 GitHub Release v1.0.0-windows ==========
+      # ========== Step 7: 上传 .exe 到 v1.0.0-windows draft release ==========
       - name: Upload to Release
-        uses: softprops/action-gh-release@v1
-        with:
-          draft: true
-          files: |
-            electron/release/1.0.0/win-unpacked/*.exe
-        continue-on-error: true
+        run: |
+          for %%f in (electron\release\1.0.0\win-unpacked\*.exe) do (
+            echo Uploading %%f
+            curl -sL -X POST ^
+              -H "Authorization: token %GITHUB_TOKEN%" ^
+              -H "Content-Type: application/octet-stream" ^
+              --data-binary @"%%f" ^
+              "https://uploads.github.com/repos/TobyKSKGD/PodGist/releases/304960858/assets?name=%%~nxf"
+          )
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
