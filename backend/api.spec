@@ -129,6 +129,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    exclude=['matplotlib', 'tkinter', 'PyQt5'],  # 排除不需要的巨大模块
 )
 
 coll = COLLECT(
