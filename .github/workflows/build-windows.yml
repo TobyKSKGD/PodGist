@@ -73,6 +73,13 @@ jobs:
           node scripts/prebuild.js
           npx electron-builder --win --dir
 
+      - name: Install GitHub CLI
+        shell: bash
+        run: |
+          curl -fsSL https://github.com/cli/cli/releases/download/v2.63.0/gh_2.63.0_windows_amd64.zip -o gh.zip
+          7z x gh.zip -o./gh_extracted
+          mv gh_extracted/gh_2.63.0_windows_amd64/gh.exe ./gh.exe
+
       - name: Upload to Release via GitHub CLI
         shell: bash
         env:
@@ -81,7 +88,7 @@ jobs:
           TAG_NAME="${{ github.event.inputs.target_tag || github.ref_name }}"
           echo "==== 准备上传到 Release: $TAG_NAME ===="
 
-          # 先创建（或覆盖）release，再用 --clobber 强制上传
-          gh release create "$TAG_NAME" --draft --title "Windows Build" --notes "Auto build"
-          gh release upload "$TAG_NAME" release/*.exe --clobber
+          # 先创建 release，再用 --clobber 强制上传
+          ./gh.exe release create "$TAG_NAME" --draft --title "Windows Build" --notes "Auto build"
+          ./gh.exe release upload "$TAG_NAME" release/*.exe --clobber
           echo "==== 上传完成！ ===="
