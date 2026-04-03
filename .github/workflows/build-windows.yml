@@ -119,7 +119,6 @@ jobs:
         with:
           draft: true
           files: |
-            electron/release/1.0.0/*.exe
             electron/release/1.0.0/win-unpacked/*.exe
         continue-on-error: true
         env:
