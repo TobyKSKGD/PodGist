@@ -2,8 +2,6 @@
 # PodGist 桌面应用打包配置
 
 # 打包目标平台
-# Windows: nsis 安装包
-# macOS: dmg 磁盘镜像
 target:
   - target: nsis
     arch:
@@ -13,16 +11,20 @@ target:
       - arm64
 
 # App 元数据
-appId: com.podgist.app
+appId: com.podgist.desktop
 productName: PodGist
-copyright: Copyright © 2024 PodGist Team
+copyright: Copyright © 2026 PodGist Team
 
 # 发布配置 - 自动发布到 GitHub Release
 publish:
   provider: github
   owner: TobyKSKGD
   repo: PodGist
-  releaseType: draft  # draft 表示先创建草稿，验证后再发布
+  releaseType: draft
+
+# 构建产物输出目录
+directories:
+  output: ../release/${version}
 
 # NSIS Windows 安装包配置
 nsis:
@@ -48,38 +50,7 @@ dmg:
       type: link
       path: /Applications
 
-# 构建产物输出目录
-directories:
-  output: ../release/${version}
-
-# 打包文件
-files:
-  - src/**/*
-  - package.json
-  - backend/**/*
-  - api.py
-  - requirements.txt
-  - frontend-dist/**/*
-
-# 解包文件（从 asar 中提取出来以便执行）
-asarUnpack:
-  - backend/**/*
-  - api.py
-  - requirements.txt
-  - frontend-dist/**/*
-
-# 额外资源（不打包进 asar，直接复制到 resources）
-extraResources:
-  - from: resources/ffmpeg
-    to: ffmpeg
-    filter:
-      - "**/*"
-  - from: resources/python_venv
-    to: python_venv
-    filter:
-      - "**/*"
-
-# macOS 配置
+# ================= macOS 配置 =================
 mac:
   category: public.app-category.productivity
   hardenedRuntime: true
@@ -88,8 +59,30 @@ mac:
   icon: assets/icon.icns
   target:
     - dmg
+  # macOS: 使用 Python venv（python_venv 在 prebuild 时已准备）
+  files:
+    - src/**/*
+    - package.json
+    - backend/**/*
+    - api.py
+    - requirements.txt
+    - frontend-dist/**/*
+  asarUnpack:
+    - backend/**/*
+    - api.py
+    - requirements.txt
+    - frontend-dist/**/*
+  extraResources:
+    - from: resources/ffmpeg
+      to: ffmpeg
+      filter:
+        - "**/*"
+    - from: resources/python_venv
+      to: python_venv
+      filter:
+        - "**/*"
 
-# Windows 配置
+# ================= Windows 配置 =================
 win:
   icon: assets/icon.ico
   forceCodeSigning: false
@@ -98,4 +91,20 @@ win:
     - target: nsis
       arch:
         - x64
+  # Windows: 使用 PyInstaller 打包的 api-engine（后端已编译为本地二进制）
+  files:
+    - src/**/*
+    - package.json
+    - frontend-dist/**/*
+  asarUnpack:
+    - frontend-dist/**/*
+  extraResources:
+    - from: resources/ffmpeg
+      to: ffmpeg
+      filter:
+        - "**/*"
+    - from: backend/dist/api
+      to: api
+      filter:
+        - "**/*"
 

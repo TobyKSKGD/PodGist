@@ -1,4 +1,4 @@
-const { spawn } = require('child_process');
+const { spawn, exec } = require('child_process');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('os');
@@ -154,24 +154,40 @@ class BackendStarter {
   async startPythonBackend() {
     const platform = process.platform;
 
-    // 确定 Python 路径
     let pythonPath;
+    let pythonArgs;
+    const backendUrl = 'http://127.0.0.1:8000';
+
+    // Windows: 使用 PyInstaller --onedir 打包的可执行文件（无控制台窗口）
+    // 路径: resources/api/api-engine.exe
+    // Linux/macOS: 使用 python_venv + start_electron.py
     if (platform === 'win32') {
-      pythonPath = path.join(this.pythonVenvPath, 'Scripts', 'python.exe');
+      const apiEngineExe = path.join(
+        process.resourcesPath,
+        'api',
+        'api-engine.exe'
+      );
+      pythonPath = apiEngineExe;
+      pythonArgs = [
+        '--data-dir', this.userDataPath,
+        '--resources-path', process.resourcesPath
+      ];
+      console.log('[BackendStarter] Windows 模式: 使用 PyInstaller 打包的后端');
     } else {
       pythonPath = path.join(this.pythonVenvPath, 'bin', 'python3');
+      const startScript = path.join(
+        process.resourcesPath,
+        'app.asar.unpacked',
+        'backend',
+        'start_electron.py'
+      );
+      pythonArgs = [
+        startScript,
+        '--data-dir', this.userDataPath,
+        '--resources-path', process.resourcesPath
+      ];
+      console.log('[BackendStarter] 启动 Python 后端:', startScript);
     }
-
-    // Electron 专用入口脚本
-    // 解包后的文件在 app.asar.unpacked/ 目录
-    const startScript = path.join(
-      process.resourcesPath,
-      'app.asar.unpacked',
-      'backend',
-      'start_electron.py'
-    );
-
-    const backendUrl = 'http://127.0.0.1:8000';
 
     const env = {
       ...process.env,
@@ -181,19 +197,29 @@ class BackendStarter {
       NODE_ENV: process.env.NODE_ENV || 'production'
     };
 
-    console.log('[BackendStarter] 启动 Python 后端:', startScript);
+    // Windows: 注入 FFmpeg/FFprobe 路径到 PATH 和环境变量
+    if (platform === 'win32') {
+      const ffmpegDir = path.join(process.resourcesPath, 'ffmpeg');
+      env.PATH = `${ffmpegDir};${env.PATH}`;
+      env.FFMPEG_BINARY = path.join(ffmpegDir, 'ffmpeg.exe');
+      env.FFPROBE_BINARY = path.join(ffmpegDir, 'ffprobe.exe');
+    }
+
     console.log('[BackendStarter] 用户数据目录:', this.userDataPath);
     console.log('[BackendStarter] 资源目录:', process.resourcesPath);
 
-    this.pythonProcess = spawn(pythonPath, [
-      startScript,
-      '--data-dir', this.userDataPath,
-      '--resources-path', process.resourcesPath
-    ], {
+    const spawnOptions = {
       stdio: ['ignore', 'pipe', 'pipe'],
       env,
       cwd: this.userDataPath
-    });
+    };
+
+    // Windows: 隐藏所有子进程窗口，防止闪黑框
+    if (platform === 'win32') {
+      spawnOptions.windowsHide = true;
+    }
+
+    this.pythonProcess = spawn(pythonPath, pythonArgs, spawnOptions);
 
     this.pythonProcess.stdout.on('data', (data) => {
       console.log('[Python]', data.toString().trim());
@@ -251,7 +277,12 @@ class BackendStarter {
   stop() {
     if (this.pythonProcess) {
       console.log('[BackendStarter] 停止 Python 后端...');
-      this.pythonProcess.kill();
+      if (process.platform === 'win32') {
+        // Windows: 使用 tree-kill 终止进程树，防止 Uvicorn worker 变僵尸进程
+        exec(`taskkill /pid ${this.pythonProcess.pid} /t /f`, () => {});
+      } else {
+        this.pythonProcess.kill('SIGKILL');
+      }
       this.pythonProcess = null;
     }
   }
