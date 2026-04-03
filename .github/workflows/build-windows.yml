@@ -1,11 +1,9 @@
 name: Build Windows Installer
 
 on:
-  # 支持推 Tag 自动触发
   push:
     tags:
       - 'v*'
-  # ✨ 核心升级：支持在 GitHub 网页上手动点击运行，并指定上传到哪个 Release
   workflow_dispatch:
     inputs:
       target_tag:
@@ -58,7 +56,6 @@ jobs:
 
       - name: Package backend with PyInstaller
         shell: bash
-        # 直接使用你的 spec 文件进行 onedir 打包
         run: pyinstaller --log-level=INFO backend/api.spec
 
       - name: Copy PyInstaller output to electron
@@ -79,19 +76,12 @@ jobs:
       - name: Upload to Release via GitHub CLI
         shell: bash
         env:
-          # 注入 Boss 提供的最高权限 Token
           GITHUB_TOKEN: ${{ secrets.PODGIST_PAT }}
         run: |
-          # 决定目标 Tag：如果是手动运行则用输入的 Tag，否则用触发的 Tag
           TAG_NAME="${{ github.event.inputs.target_tag || github.ref_name }}"
-          echo "==== 准备强行上传到 Release: $TAG_NAME ===="
+          echo "==== 准备上传到 Release: $TAG_NAME ===="
 
-          # 精准拦截：只抓 release 目录下的安装包 (屏蔽 win-unpacked 里的碎文件)
-          for file in release/*.exe; do
-            if [ -f "$file" ]; then
-              echo "正在上传: $file"
-              # --clobber: 如果线上已有同名文件，直接无情覆盖，绝不报 403 错误
-              gh release upload "$TAG_NAME" "$file" --clobber
-            fi
-          done
+          # 先创建（或覆盖）release，再用 --clobber 强制上传
+          gh release create "$TAG_NAME" --draft --title "Windows Build" --notes "Auto build"
+          gh release upload "$TAG_NAME" release/*.exe --clobber
           echo "==== 上传完成！ ===="
