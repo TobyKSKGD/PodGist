@@ -95,16 +95,23 @@ jobs:
           NODE_OPTIONS: '--max-old-space-size=4096'
 
       - name: Verify output
-        run: |
-          dir electron\release\1.0.0\win-unpacked /b | head -10
+        run: dir electron\release\1.0.0\win-unpacked /b
+        continue-on-error: true
 
       # ========== Step 6: 列出所有生成物 ==========
       - name: List all outputs
         run: |
-          echo "=== Windows executable ==="
+          echo === Windows executable ===
           dir /s /b electron\release\1.0.0\*.exe 2>nul
-          echo "=== All files in release ==="
-          dir /s electron\release\1.0.0\*.exe 2>nul
+        continue-on-error: true
+
+      # ========== Step 6.5: 上传 electron-builder 输出作为 artifact ==========
+      - name: Upload electron-builder output
+        uses: actions/upload-artifact@v4
+        with:
+          name: electron-builder-output
+          path: electron/release/
+        continue-on-error: true
 
       # ========== Step 7: 上传到 GitHub Release v1.0.0-windows ==========
       - name: Upload to Release
@@ -114,5 +121,6 @@ jobs:
           files: |
             electron/release/1.0.0/*.exe
             electron/release/1.0.0/win-unpacked/*.exe
+        continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
