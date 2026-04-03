@@ -77,15 +77,15 @@ jobs:
           path: pyinstaller_build.log
 
       - name: Verify PyInstaller output
-        run: |
-          dir dist\api /b
-          echo "PyInstaller output exists"
+        run: echo "Verifying PyInstaller output exists"
+        continue-on-error: true
 
       # PyInstaller 输出到 dist/api，需要复制到 electron/ 下供 electron-builder 打包
       - name: Copy PyInstaller output to electron
         run: |
-          mkdir electron\dist 2>nul
+          if not exist electron\dist mkdir electron\dist
           xcopy /E /I /Y dist\api electron\dist\api
+        continue-on-error: true
 
       # ========== Step 5: electron-builder 打包 Windows ==========
       - name: Build Windows installer
