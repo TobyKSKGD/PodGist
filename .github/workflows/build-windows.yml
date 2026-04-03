@@ -14,6 +14,7 @@ jobs:
   build-windows:
     runs-on: windows-latest
     timeout-minutes: 120
+    permissions: write-all  # 解决 403 Forbidden 问题
 
     steps:
       - name: Checkout code
@@ -92,19 +93,19 @@ jobs:
         env:
           NODE_OPTIONS: '--max-old-space-size=4096'
 
-      # ========== Step 6: 验证输出存在 ==========
-      - name: Verify output exists
-        run: ls -la release/1.0.0/win-unpacked/PodGist.exe
+      # ========== Step 6: 列出所有生成物 ==========
+      - name: List all outputs
+        run: find release/ -name "*.exe" -type f
         working-directory: ${{ github.workspace }}
         shell: bash
 
-      # ========== Step 7: 上传到 draft release（由 tag 触发自动创建）============
-      # 只上传根目录的 PodGist.exe，不要递归上传几百个内部 .exe
+      # ========== Step 7: 上传到 draft release ==========
+      # 上传 NSIS 安装包（release/**/*.exe glob 匹配），不是 win-unpacked 里的
       - name: Upload to Release
         uses: softprops/action-gh-release@v1
         with:
           draft: true
           files: |
-            release/1.0.0/win-unpacked/PodGist.exe
+            release/**/*.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
