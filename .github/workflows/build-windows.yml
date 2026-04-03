@@ -120,21 +120,13 @@ jobs:
           path: release/
         continue-on-error: true
 
-      # ========== Step 7: 上传 .exe 到 v1.0.0-windows draft release ==========
-      # electron-builder 输出到 ${{ github.workspace }}/release/（workspace 根目录）
+      # ========== Step 7: 上传到 v1.0.0-windows draft release ==========
+      # 只上传根目录的 PodGist.exe（不要递归上传几百个内部文件）
       - name: Upload to Release
-        run: |
-          find release/1.0.0/win-unpacked/ -name "*.exe" -type f | while read f; do
-            echo "Uploading $f"
-            curl -sL -X POST \
-              -H "Authorization: token $GITHUB_TOKEN" \
-              -H "Content-Type: application/octet-stream" \
-              --data-binary "@$f" \
-              "https://uploads.github.com/repos/TobyKSKGD/PodGist/releases/304960858/assets?name=$(basename $f)"
-            echo ""
-          done
-        working-directory: ${{ github.workspace }}
+        uses: softprops/action-gh-release@v1
+        with:
+          draft: true
+          files: |
+            release/1.0.0/win-unpacked/PodGist.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        continue-on-error: true
