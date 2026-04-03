@@ -76,10 +76,6 @@ jobs:
           name: pyinstaller-log
           path: pyinstaller_build.log
 
-      - name: Verify PyInstaller output
-        run: echo "Verifying PyInstaller output exists"
-        continue-on-error: true
-
       # PyInstaller 输出到 dist/api（repo 根目录），复制到 electron/dist/api 供 electron-builder 打包
       - name: Copy PyInstaller output to electron
         run: |
@@ -96,32 +92,14 @@ jobs:
         env:
           NODE_OPTIONS: '--max-old-space-size=4096'
 
-      - name: Verify output
-        run: ls release/1.0.0/win-unpacked/*.exe 2>/dev/null
+      # ========== Step 6: 验证输出存在 ==========
+      - name: Verify output exists
+        run: ls -la release/1.0.0/win-unpacked/PodGist.exe
         working-directory: ${{ github.workspace }}
         shell: bash
-        continue-on-error: true
 
-      # ========== Step 6: 列出所有生成物 ==========
-      - name: List all outputs
-        run: |
-          echo === Windows executable ===
-          find release/1.0.0/ -name "*.exe" 2>/dev/null
-          ls -la release/1.0.0/win-unpacked/ 2>/dev/null
-        working-directory: ${{ github.workspace }}
-        shell: bash
-        continue-on-error: true
-
-      # ========== Step 6.5: 上传 electron-builder 输出作为 artifact ==========
-      - name: Upload electron-builder output
-        uses: actions/upload-artifact@v4
-        with:
-          name: electron-builder-output
-          path: release/
-        continue-on-error: true
-
-      # ========== Step 7: 上传到 v1.0.0-windows draft release ==========
-      # 只上传根目录的 PodGist.exe（不要递归上传几百个内部文件）
+      # ========== Step 7: 上传到 draft release（由 tag 触发自动创建）============
+      # 只上传根目录的 PodGist.exe，不要递归上传几百个内部 .exe
       - name: Upload to Release
         uses: softprops/action-gh-release@v1
         with:
