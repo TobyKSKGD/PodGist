@@ -2,6 +2,9 @@ const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('node:path');
 const BackendStarter = require('./backendStarter');
 
+// 禁用 GPU 加速，防止 macOS 空闲时杀掉 GPU 进程导致崩溃
+app.disableHardwareAcceleration();
+
 let mainWindow;
 let backendStarter;
 
@@ -34,15 +37,35 @@ function createWindow() {
     backgroundColor: '#ffffff'
   });
 
-  // 开发模式加载 localhost:5173，生产模式加载构建后的文件
-  if (process.env.NODE_ENV === 'development') {
+  // 加载前端页面
+  if (app.isPackaged) {
+    // 打包模式：从 asar.unpacked 目录加载前端
+    const indexPath = path.join(
+      process.resourcesPath,
+      'app.asar.unpacked',
+      'frontend-dist',
+      'index.html'
+    );
+    console.log('[PodGist] 加载前端:', indexPath);
+    mainWindow.loadFile(indexPath);
+  } else {
+    // 开发模式
     mainWindow.loadURL('http://localhost:5173');
     mainWindow.webContents.openDevTools();
-  } else {
-    mainWindow.loadFile(path.join(__dirname, '../../frontend-dist/index.html'));
   }
+    // 2秒后强制显示窗口（如果还没显示）
+    setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.show();
+      }
+    }, 2000);
 
-  // 窗口准备好后显示，避免白屏闪烁
+  // 加载失败时记录错误
+  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDesc) => {
+    console.error('[PodGist] 前端加载失败:', errorCode, errorDesc);
+  });
+
+  // 窗口准备好后显示
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
   });
@@ -56,13 +79,13 @@ async function init() {
   try {
     console.log('[PodGist] 正在启动...');
 
-    // 初始化后端（Python 进程）
+    // 先创建窗口，立即显示 UI
+    createWindow();
+
+    // 再启动后端（不阻塞窗口显示）
     backendStarter = new BackendStarter();
     await backendStarter.start();
     console.log('[PodGist] 后端启动成功');
-
-    // 创建窗口
-    createWindow();
 
   } catch (error) {
     console.error('[PodGist] 启动失败:', error);
@@ -84,6 +107,10 @@ app.on('window-all-closed', () => {
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {
     createWindow();
+  } else {
+    // 已有窗口时，跳到最前
+    const win = BrowserWindow.getAllWindows()[0];
+    if (win) win.show();
   }
 });
 

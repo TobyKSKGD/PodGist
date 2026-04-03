@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
 import { IconX, IconKey, IconCpu, IconActivity, IconCircleCheck, IconCircleX, IconLoader2, IconHelp, IconDownload, IconFile, IconChevronDown, IconChevronRight, IconTrash } from '@tabler/icons-react';
 import ConfirmDialog from './ConfirmDialog';
@@ -7,6 +7,7 @@ interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   showToast: (type: 'success' | 'error' | 'info', message: string) => void;
+  onSaveSuccess?: () => void;
 }
 
 interface Device {
@@ -26,7 +27,7 @@ interface ModelInfo {
   group: string | null;
 }
 
-const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToast }) => {
+const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToast, onSaveSuccess }) => {
   const [activeMenu, setActiveMenu] = useState('core');
   const [diagnostics, setDiagnostics] = useState<Array<{name: string, success: boolean, message: string}>>([]);
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
@@ -61,6 +62,11 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
       fetchModelsStatus();
     }
   }, [activeMenu]);
+
+  // 缓存模型过滤结果，避免每次渲染重复计算
+  const whisperModels = useMemo(() => models.filter(m => m.group === 'whisper'), [models]);
+  const whisperDownloaded = useMemo(() => whisperModels.filter(m => m.downloaded).length, [whisperModels]);
+  const nonGroupModels = useMemo(() => models.filter(m => !m.group), [models]);
 
   const fetchSettings = async () => {
     try {
@@ -248,6 +254,10 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
       const response = await axios.post('http://localhost:8000/api/settings', formData);
       if (response.data.status === 'success') {
         showToast('success', '设置已保存并应用');
+        // 通知父组件刷新状态
+        onSaveSuccess?.();
+        // 保存成功后自动关闭模态框
+        setTimeout(() => onClose(), 500);
       } else {
         showToast('error', '保存失败: ' + response.data.message);
       }
@@ -263,7 +273,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
   const isWhisper = selectedEngine === 'Whisper';
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm transition-opacity">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 transition-opacity">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl h-[600px] flex overflow-hidden relative animate-in fade-in zoom-in-95 duration-200">
         {/* 关闭按钮 */}
         <button
@@ -502,7 +512,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
                             <div className="flex items-center gap-2">
                               <h4 className="font-medium text-slate-800">Whisper</h4>
                               <span className="text-xs text-slate-400">
-                                {models.filter(m => m.group === 'whisper' && m.downloaded).length} / {models.filter(m => m.group === 'whisper').length} 已下载
+                                {whisperDownloaded} / {whisperModels.length} 已下载
                               </span>
                             </div>
                             <p className="text-sm text-slate-500 mt-0.5">高精度语音转录模型 · 6 个版本</p>
@@ -514,7 +524,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
                     {/* 展开的版本列表 */}
                     {expandedWhisper && (
                       <div className="mt-4 space-y-3 pl-6 border-l-2 border-slate-100">
-                        {models.filter(m => m.group === 'whisper').map((model) => (
+                        {whisperModels.map((model) => (
                           <div key={model.name} className="flex items-center justify-between">
                             <div className="flex-1">
                               <div className="flex items-center gap-2">
@@ -596,7 +606,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
                   </div>
 
                   {/* 非 Whisper 模型 */}
-                  {models.filter(m => !m.group).map((model) => (
+                  {nonGroupModels.map((model) => (
                     <div key={model.name} className="border border-slate-200 rounded-lg p-4">
                       <div className="flex items-start justify-between">
                         <div className="flex-1">

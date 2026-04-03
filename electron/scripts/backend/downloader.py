@@ -4,7 +4,6 @@ import yt_dlp
 import re
 import requests
 from urllib.parse import urlparse
-from backend import get_ffmpeg_path
 
 
 class AudioDownloader:
@@ -168,7 +167,7 @@ class AudioDownloader:
                     try:
                         mp3_path = alt_path.replace(f".{ext}", ".mp3")
                         result = subprocess.run([
-                            get_ffmpeg_path(), '-i', alt_path,
+                            'ffmpeg', '-i', alt_path,
                             '-codec:a', 'libmp3lame',
                             '-q:a', '2', mp3_path,
                             '-y'
@@ -516,7 +515,7 @@ def download_xiaoyuzhou_audio(url, save_dir="temp_audio"):
                 import subprocess
                 mp3_path = file_path.replace(ext, '.mp3')
                 subprocess.run([
-                    get_ffmpeg_path(), '-i', file_path,
+                    'ffmpeg', '-i', file_path,
                     '-codec:a', 'libmp3lame',
                     '-q:a', '2', mp3_path,
                     '-y'
@@ -617,7 +616,7 @@ def download_netease_audio(raw_text, save_dir="temp_audio"):
                     mp3_path = file_path.replace(ext, '.mp3')
                     try:
                         subprocess.run([
-                            get_ffmpeg_path(), '-i', file_path,
+                            'ffmpeg', '-i', file_path,
                             '-codec:a', 'libmp3lame',
                             '-q:a', '2', mp3_path, '-y'
                         ], capture_output=True, check=True)
@@ -718,7 +717,7 @@ def download_ximalaya_audio(raw_text, save_dir="temp_audio"):
                     mp3_path = file_path.replace(ext, '.mp3')
                     try:
                         subprocess.run([
-                            get_ffmpeg_path(), '-i', file_path,
+                            'ffmpeg', '-i', file_path,
                             '-codec:a', 'libmp3lame',
                             '-q:a', '2', mp3_path, '-y'
                         ], capture_output=True, check=True)
@@ -813,7 +812,7 @@ def download_applepodcasts_audio(url, save_dir="temp_audio"):
         # 使用 ffmpeg 转换为标准 m4a 格式（重新编码）
         try:
             convert_cmd = [
-                get_ffmpeg_path(),
+                "ffmpeg",
                 "-y",
                 "-i", temp_path,
                 "-c:a", "aac",

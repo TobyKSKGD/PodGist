@@ -11,12 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 # 数据库文件路径
-# 优先使用 PODGIST_DATA_DIR（Electron 打包环境），否则回退到项目根目录
-_USER_DATA_DIR = os.environ.get('PODGIST_DATA_DIR')
-if _USER_DATA_DIR:
-    DB_DIR = os.path.join(_USER_DATA_DIR, "temp_audio")
-else:
-    DB_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "temp_audio")
+DB_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "temp_audio")
 DB_PATH = os.path.join(DB_DIR, "podgist_tasks.db")
 
 # 确保目录存在

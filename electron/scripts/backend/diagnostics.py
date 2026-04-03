@@ -13,7 +13,6 @@
 import os
 import subprocess
 import torch
-from backend import get_ffmpeg_path
 
 
 def test_api_key(api_key_file=".env"):
@@ -116,15 +115,10 @@ def test_sensevoice_model():
     返回:
         tuple: (成功与否, 消息/错误信息)
     """
-    cache_dir = os.path.expanduser("~/.cache/modelscope/hub/models/iic/SenseVoiceSmall")
-    # 先检查模型文件是否存在
-    if not os.path.isdir(cache_dir):
-        return False, "模型未下载，请到「模型管理」下载"
-
     try:
         from modelscope.pipelines import pipeline
         from modelscope.utils.constant import Tasks
-        # 尝试创建 pipeline
+        # 只测试 pipeline 创建，不实际处理音频
         pipeline(
             Tasks.auto_speech_recognition,
             model="iic/SenseVoiceSmall",
@@ -132,13 +126,9 @@ def test_sensevoice_model():
         )
         return True, "pipeline 初始化成功"
     except ImportError as e:
-        err_str = str(e)
-        if "funasr" in err_str.lower():
-            return False, f"FunASR 环境异常（模型文件已下载）: {err_str[:80]}"
-        return False, f"缺少依赖: {err_str[:80]}"
+        return False, f"缺少依赖: {str(e)[:50]}"
     except Exception as e:
-        err_str = str(e)[:100]
-        return False, f"FunASR 环境异常: {err_str}"
+        return False, f"加载失败: {str(e)[:50]}"
 
 
 def test_ffmpeg():
@@ -150,16 +140,15 @@ def test_ffmpeg():
     """
     try:
         result = subprocess.run(
-            [get_ffmpeg_path(), "-version"],
+            ["ffmpeg", "-version"],
             capture_output=True,
             text=True,
             timeout=5
         )
         if result.returncode == 0:
-            # 提取简短的版本号（取第二行，格式如 "ffmpeg version 8.1"）
-            lines = [l for l in result.stdout.split('\n') if l.strip()]
-            version_short = lines[1] if len(lines) > 1 else result.stdout.split('\n')[0].split('Copyright')[0].strip()
-            return True, version_short[:50]
+            # 提取版本号
+            version_line = result.stdout.split("\n")[0]
+            return True, version_line
         else:
             return False, "安装但无法运行"
     except FileNotFoundError:

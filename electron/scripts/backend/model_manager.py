@@ -365,20 +365,20 @@ def _get_download_instructions(model_name: str) -> str:
     # Whisper 系列统一处理
     if model_info.get("group") == "whisper":
         filename = model_info["filename"]
-        return ("""1. 复制上方链接
+        return f"""1. 复制上方链接
 2. 打开浏览器/迅雷/IDM 下载
 3. 下载完成后，将文件保存到:
-   Windows: %%USERPROFILE%%/.cache/whisper/
+   Windows: %USERPROFILE%\.cache\whisper\
    macOS: ~/.cache/whisper/
    Linux: ~/.cache/whisper/
-4. 文件命名为: %s
-5. 刷新此页面""" % filename)
+4. 文件命名为: {filename}
+5. 刷新此页面"""
 
     if model_name == "sensevoice":
         return """1. 复制上方链接
 2. 打开 ModelScope App 或浏览器下载
 3. 保存到以下目录:
-   Windows: %%USERPROFILE%%/.cache/modelscope/hub/models/iic/SenseVoiceSmall/
+   Windows: %USERPROFILE%\.cache\modelscope\hub\models\iic\SenseVoiceSmall\
    macOS: ~/.cache/modelscope/hub/models/iic/SenseVoiceSmall/
 4. 文件命名为: model.pt
 5. 刷新此页面"""
@@ -387,7 +387,7 @@ def _get_download_instructions(model_name: str) -> str:
         return """1. 复制上方链接
 2. 打开 HuggingFace 下载
 3. 保存到以下目录:
-   Windows: %%USERPROFILE%%/.cache/huggingface/hub/models--sentence-transformers--all-MiniLM-L6-v2/
+   Windows: %USERPROFILE%\.cache\huggingface\hub\models--sentence-transformers--all-MiniLM-L6-v2\
    macOS: ~/.cache/huggingface/hub/models--sentence-transformers--all-MiniLM-L6-v2/
 4. 刷新此页面"""
 
