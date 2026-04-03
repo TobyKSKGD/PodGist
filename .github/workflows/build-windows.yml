@@ -91,12 +91,11 @@ jobs:
           echo "=== All files in release ==="
           dir /s electron\release\1.0.0\*.exe 2>nul
 
-      # ========== Step 7: 上传到 GitHub Release v1.0.0 ==========
+      # ========== Step 7: 上传到 GitHub Release v1.0.0-windows ==========
       - name: Upload to Release
         uses: softprops/action-gh-release@v1
         with:
-          draft: false
-          tag_name: v1.0.0
+          draft: true
           files: |
             electron/release/1.0.0/*.exe
             electron/release/1.0.0/win-unpacked/*.exe
