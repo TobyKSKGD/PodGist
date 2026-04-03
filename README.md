@@ -6,7 +6,6 @@
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.104-009688?logo=fastapi)
-[![macOS](https://img.shields.io/badge/macOS-v1.0.0-Apple-black?logo=apple)](https://github.com/TobyKSKGD/PodGist/releases)
 
 ## 软件截图
 
