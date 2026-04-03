@@ -1,40 +1,40 @@
 name: Build Windows Installer
 
 on:
+  # 支持推 Tag 自动触发
   push:
     tags:
-      - 'v*-win*'
+      - 'v*'
+  # ✨ 核心升级：支持在 GitHub 网页上手动点击运行，并指定上传到哪个 Release
   workflow_dispatch:
     inputs:
-      tag:
-        description: 'Git tag to build'
-        required: false
+      target_tag:
+        description: '你要上传的目标 Release Tag (例如 v1.0.0)'
+        required: true
+        default: 'v1.0.0'
 
 jobs:
-  build-windows:
+  build-and-upload:
     runs-on: windows-latest
     timeout-minutes: 120
-    permissions: write-all  # 解决 403 Forbidden 问题
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ========== Step 1: 前端构建 ==========
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
       - name: Build frontend
+        env:
+          NODE_OPTIONS: '--max-old-space-size=4096'
         run: |
           cd frontend
           npm install
           npm run build
-        env:
-          NODE_OPTIONS: '--max-old-space-size=4096'
 
-      # ========== Step 2: 准备 Python 环境 ==========
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -43,12 +43,12 @@ jobs:
           cache-dependency-path: 'requirements.txt'
 
       - name: Download Windows FFmpeg
+        shell: bash
         run: |
           curl -L -o ffmpeg.zip https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip
           7z x ffmpeg.zip -o"ffmpeg_temp"
           mkdir -p electron/resources/ffmpeg
           cp ffmpeg_temp/ffmpeg-master-latest-win64-gpl/bin/*.exe electron/resources/ffmpeg/
-        shell: bash
 
       - name: Install Python dependencies
         run: |
@@ -56,56 +56,42 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      # ========== Step 3: 预构建 ==========
-      - name: Run prebuild
-        run: |
-          cd electron
-          npm install
-          node scripts/prebuild.js
-
-      # ========== Step 4: PyInstaller 打包后端 ==========
-      # 注意：--onedir/--noconsole 等选项已在 .spec 文件中定义，命令行不能再传
       - name: Package backend with PyInstaller
-        run: pyinstaller --log-level=DEBUG backend/api.spec > pyinstaller_build.log 2>&1
-        working-directory: ${{ github.workspace }}
         shell: bash
-        continue-on-error: true
+        # 直接使用你的 spec 文件进行 onedir 打包
+        run: pyinstaller --log-level=INFO backend/api.spec
 
-      - name: Upload PyInstaller Log
-        uses: actions/upload-artifact@v4
-        with:
-          name: pyinstaller-log
-          path: pyinstaller_build.log
-
-      # PyInstaller 输出到 dist/api（repo 根目录），复制到 electron/dist/api 供 electron-builder 打包
       - name: Copy PyInstaller output to electron
+        shell: bash
         run: |
           mkdir -p electron/dist
           cp -r dist/api electron/dist/api
-        working-directory: ${{ github.workspace }}
-        shell: bash
-        continue-on-error: true
 
-      # ========== Step 5: electron-builder 打包 Windows ==========
-      - name: Build Windows installer
-        run: npx electron-builder --win --dir
-        working-directory: ${{ github.workspace }}/electron
+      - name: Run prebuild & Build Windows installer
         env:
           NODE_OPTIONS: '--max-old-space-size=4096'
+        working-directory: ${{ github.workspace }}/electron
+        run: |
+          npm install
+          node scripts/prebuild.js
+          npx electron-builder --win --dir
 
-      # ========== Step 6: 列出所有生成物 ==========
-      - name: List all outputs
-        run: find release/ -name "*.exe" -type f
-        working-directory: ${{ github.workspace }}
+      - name: Upload to Release via GitHub CLI
         shell: bash
-
-      # ========== Step 7: 上传到 draft release ==========
-      # 上传 NSIS 安装包（release/**/*.exe glob 匹配），不是 win-unpacked 里的
-      - name: Upload to Release
-        uses: softprops/action-gh-release@v1
-        with:
-          draft: true
-          files: |
-            release/**/*.exe
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 注入 Boss 提供的最高权限 Token
+          GITHUB_TOKEN: ${{ secrets.PODGIST_PAT }}
+        run: |
+          # 决定目标 Tag：如果是手动运行则用输入的 Tag，否则用触发的 Tag
+          TAG_NAME="${{ github.event.inputs.target_tag || github.ref_name }}"
+          echo "==== 准备强行上传到 Release: $TAG_NAME ===="
+
+          # 精准拦截：只抓 release 目录下的安装包 (屏蔽 win-unpacked 里的碎文件)
+          for file in release/*.exe; do
+            if [ -f "$file" ]; then
+              echo "正在上传: $file"
+              # --clobber: 如果线上已有同名文件，直接无情覆盖，绝不报 403 错误
+              gh release upload "$TAG_NAME" "$file" --clobber
+            fi
+          done
+          echo "==== 上传完成！ ===="
