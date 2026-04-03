@@ -8,16 +8,20 @@
 import os
 import sys
 
+# SPECPATH 是 PyInstaller 自动注入的全局变量，指向 spec 文件所在目录（项目根目录）
+# 不依赖 os.getcwd()，避免 Windows cmd 下路径不确定问题
+project_root = SPECPATH
+
 block_cipher = None
 
 a = Analysis(
-    ['backend/start_electron.py'],
-    pathex=[os.path.abspath('.')],
+    [os.path.join(project_root, 'backend', 'start_electron.py')],
+    pathex=[project_root],
     binaries=[],
     datas=[
         # 打入 Python 源码目录（backend/ 下所有 .py 文件）
-        (os.path.join(os.getcwd(), 'backend'), 'backend'),
-        (os.path.join(os.getcwd(), 'api.py'), '.'),
+        (os.path.join(project_root, 'backend'), 'backend'),
+        (os.path.join(project_root, 'api.py'), '.'),
     ],
     hiddenimports=[
         # === FastAPI 核心 ===
