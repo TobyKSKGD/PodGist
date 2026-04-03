@@ -27,14 +27,9 @@ from backend.downloader import route_and_download
 # Worker 线程名称
 WORKER_THREAD_NAME = "PodGist_Batch_Worker"
 
-# 工作目录（优先使用 PODGIST_DATA_DIR，否则回退到项目根目录）
-_USER_DATA_DIR = os.environ.get('PODGIST_DATA_DIR')
-if _USER_DATA_DIR:
-    ARCHIVE_DIR = os.path.join(_USER_DATA_DIR, "archives")
-    TEMP_DIR = os.path.join(_USER_DATA_DIR, "temp_audio")
-else:
-    ARCHIVE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "archives")
-    TEMP_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "temp_audio")
+# 工作目录
+ARCHIVE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "archives")
+TEMP_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "temp_audio")
 os.makedirs(ARCHIVE_DIR, exist_ok=True)
 os.makedirs(TEMP_DIR, exist_ok=True)
 
@@ -123,21 +118,9 @@ def get_api_key():
     """
     从 .env 文件读取 API Key。
 
-    优先从 PODGIST_DATA_DIR 读取（Electron 打包环境），
-    其次回退到项目根目录（开发环境）。
-
     返回:
         str: API Key
     """
-    # 优先使用 PODGIST_DATA_DIR（打包环境）
-    data_dir = os.environ.get('PODGIST_DATA_DIR')
-    if data_dir:
-        env_path = os.path.join(data_dir, ".env")
-        if os.path.exists(env_path):
-            with open(env_path, "r") as f:
-                return f.read().strip()
-
-    # 回退到项目根目录（开发环境）
     env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
     if os.path.exists(env_path):
         with open(env_path, "r") as f:

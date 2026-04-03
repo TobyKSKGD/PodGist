@@ -260,7 +260,12 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
         created_at: new Date().toISOString()
       }]);
 
-      while (true) {
+      // 【核心修复】：将事件解析状态提升到循环外部
+      // 即使 TCP chunk 边界把一个 SSE 事件切成多段，解析器也不会失忆
+      let eventData: Record<string, string> = { event: '', data: '' };
+      let isStreamEnded = false;
+
+      while (!isStreamEnded) {
         let value: Uint8Array | undefined;
         let done = false;
         if (!reader) break;
@@ -269,30 +274,25 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
           value = result.value;
           done = result.done;
         } catch (readErr) {
-          // reader 出错（如网络中断），退出循环
-          break;
+          done = true;
         }
 
         if (value) {
           buffer += decoder.decode(value, { stream: true });
         }
 
-        // 逐行解析 SSE 事件
-        let eventData: Record<string, string> = { event: '', data: '' };
-        let prevEventType = '';
-
+        // 内层循环：只负责把 buffer 里的数据一行行吃掉
         while (true) {
           if (!buffer) break;
 
-          // 从 buffer 头部解析一行（行格式：field: value）
           const lfIdx = buffer.indexOf('\n');
-          if (lfIdx === -1) break; // 没有完整行，等待更多数据
+          if (lfIdx === -1) break; // 数据不够一行，等下一个 TCP Chunk
+
           const line = buffer.slice(0, lfIdx).replace(/\r$/, '');
           buffer = buffer.slice(lfIdx + 1);
 
-          // 空行（长度为0，或只有 \r）→ 事件结束
-          if (line === '' || line === '\r') {
-            // 处理当前已收集的 eventData
+          // 遇到空行，代表一个完整的 SSE 事件结束，开始处理
+          if (line === '') {
             if (eventData['event'] === 'token' && eventData['data']) {
               fullContent += eventData['data'];
               setMessages(prev =>
@@ -311,60 +311,32 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
               } else if (dataStr) {
                 fullContent = dataStr;
               }
+            } else if (eventData['event'] === 'end') {
+              isStreamEnded = true;
             }
-            // 如果遇到 end 事件，则退出事件消费循环
-            if (prevEventType === 'end') break;
-            // 重置事件数据，准备解析下一个事件
+
+            // 处理完毕，清空大脑，准备接收下一个事件
             eventData = { event: '', data: '' };
             continue;
           }
 
-          // 非空行：解析 field: value
+          // 非空行，解析 SSE 的 field: value
           const colonIdx = line.indexOf(':');
-          if (colonIdx === -1) continue; // 非法行，跳过
+          if (colonIdx === -1) continue;
+
           const field = line.slice(0, colonIdx).trim();
-          const fieldValue = line.slice(colonIdx + 1); // 不 trim，保留数据原样
+          // SSE 标准：冒号后的第一个空格要保留（是 fieldValue 的一部分）
+          const fieldValue = line.slice(colonIdx + 1).replace(/^ /, '');
 
           if (field === 'event') {
-            prevEventType = eventData['event'];
             eventData['event'] = fieldValue;
           } else if (field === 'data') {
-            // 拼接到已有 data（多条 data: 行组成一个完整 data 值）
             if (eventData['data']) eventData['data'] += '\n' + fieldValue;
             else eventData['data'] = fieldValue;
           }
         }
 
-        if (done) break; // reader 已无数据，退出主循环
-      }
-
-      // 处理流结束后 buffer 中可能残留的未结束事件（通常为空）
-      if (buffer.trim()) {
-        // 按同样的行解析逻辑处理
-        const eventData: Record<string, string> = { event: '', data: '' };
-        for (const line of buffer.split('\n')) {
-          const cleanLine = line.replace(/\r$/, '');
-          if (cleanLine === '') continue;
-          const colonIdx = cleanLine.indexOf(':');
-          if (colonIdx === -1) continue;
-          const field = cleanLine.slice(0, colonIdx).trim();
-          const fieldValue = cleanLine.slice(colonIdx + 1);
-          if (field === 'event') eventData['event'] = fieldValue;
-          else if (field === 'data') {
-            if (eventData['data']) eventData['data'] += '\n' + fieldValue;
-            else eventData['data'] = fieldValue;
-          }
-        }
-        if (eventData['event'] === 'done') {
-          const dataStr = eventData['data'] || '';
-          const nlIdx = dataStr.indexOf('\n');
-          if (nlIdx !== -1) {
-            try { receivedRefs = JSON.parse(dataStr.slice(0, nlIdx)); } catch {}
-            fullContent = dataStr.slice(nlIdx + 1);
-          } else if (dataStr) {
-            fullContent = dataStr;
-          }
-        }
+        if (done || isStreamEnded) break;
       }
 
       // 统一在 finally 前替换流式消息（无论成功结束还是 reader 出错）

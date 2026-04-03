@@ -6,6 +6,7 @@
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.104-009688?logo=fastapi)
+[![macOS](https://img.shields.io/badge/macOS-v1.0.0-Apple-black?logo=apple)](https://github.com/TobyKSKGD/PodGist/releases)
 
 ## 软件截图
 
@@ -13,80 +14,83 @@
 
 ## 简介
 
-**PodGist** 是一个基于本地算力与 AI 技术的音频内容结构化工具。它通过语音转录和大语言模型分析，将各类音频（播客、讲座、会议录音等）转化为带精确时间轴的结构化摘要，解决音频内容难以快速定位、检索和预览的核心痛点。
+**PodGist** 是一个基于本地算力与 AI 技术的音频内容结构化工具。它通过语音转录和大语言模型分析，将各类音频（播客、讲座，会议录音等）转化为带精确时间轴的结构化摘要，解决音频内容难以快速定位、检索和预览的核心痛点。
 
 > **注**：PodGist 最初为播客总结而设计，现已不局限于播客，可以提炼所有类型的音频。
 
-## 技术架构
+---
 
-PodGist v1.0.0 采用 **React + FastAPI** 分离架构：
+## 安装与使用
+
+> **面向用户** — 下载安装包即可使用，无需配置开发环境。
+
+### macOS 版本
+
+#### 系统要求
+
+- macOS 11.0 (Big Sur) 或更高版本
+- Apple Silicon (M1/M2/M3/M4) 或 Intel 芯片
+- 推荐 8GB 以上内存
+
+#### 安装步骤
+
+**1. 下载安装包**
+
+点击 [PodGist v1.0.0 macOS 安装包](https://github.com/TobyKSKGD/PodGist/releases) 下载 `.dmg` 文件。
+
+**2. 安装应用**
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                  React Frontend                     │
-│              (http://localhost:5173)               │
-│         Tabler Icons · Tailwind CSS v4              │
-└──────────────────────┬──────────────────────────────┘
-                       │ HTTP / REST
-                       ▼
-┌─────────────────────────────────────────────────────┐
-│                 FastAPI Backend                     │
-│               (http://localhost:8000)               │
-│     Whisper · SenseVoice · DeepSeek · yt-dlp        │
-└─────────────────────────────────────────────────────┘
+打开下载的 .dmg 文件
+将 PodGist.app 拖入 Applications（应用程序）文件夹
 ```
 
-### 前端 (`frontend/`)
+**3. 启动应用**
 
-- **React 19** + **TypeScript** + **Vite** — 极速开发体验
-- **Tailwind CSS v4** — 原子化样式方案
-- **Tabler Icons** — 简洁轮廓图标库
-- **Axios** — HTTP 客户端
+```
+在 Launchpad 或 Applications 文件夹中双击 PodGist
+首次启动时若提示"无法打开"，
+请前往 系统偏好设置 → 安全性与隐私 → 通用
+点击"仍要打开"
+```
 
-### 后端 (`api.py` + `backend/`)
+**4. 配置 API Key**
 
-| 模块 | 功能 |
+应用启动后，右侧边栏底部点击**偏好设置**，输入你的 DeepSeek API Key 并保存。
+
+> 没有 DeepSeek API Key？访问 [DeepSeek 开放平台](https://platform.deepseek.com/) 注册获取。
+
+**5. 开始使用**
+
+- **本地文件**：点击上传区域或拖拽 MP3、WAV、M4A 等音频文件
+- **播客链接**：粘贴小宇宙、Apple Podcasts、喜马拉雅等平台链接
+- **B站视频**：粘贴 Bilibili 视频链接
+- **智能对话**：向全部历史归档提问，基于 RAG 技术精准定位相关内容
+
+#### Windows 版本
+
+> 暂无，Windows 打包开发中。
+
+#### 功能概览
+
+| 功能 | 状态 |
 |------|------|
-| `api.py` | FastAPI 主服务，RESTful 接口，CORS 跨域支持 |
-| `backend/transcriber.py` | Whisper/SenseVoice 转录与硬件检测 |
-| `backend/llm_agent.py` | DeepSeek LLM API 封装与摘要生成 |
-| `backend/rag_db.py` | SQLite 表 + ChromaDB 向量库（RAG 存储） |
-| `backend/rag_retriever.py` | RAG 检索管道与流式生成 |
-| `backend/downloader.py` | 多平台在线音频解析与下载 |
-| `backend/worker.py` | 后台任务处理与队列管理 |
-| `backend/task_queue.py` | SQLite 任务队列状态管理 |
-| `backend/diagnostics.py` | 系统诊断与组件检测 |
+| 本地音频文件转录摘要 | ✅ 已支持 |
+| 播客链接解析（小宇宙/Apple/喜马拉雅/网易云） | ✅ 已支持 |
+| B站视频音频提取 | ✅ 已支持 |
+| SenseVoice 极速转录引擎 | ✅ 已支持 |
+| Whisper 高精度转录引擎 | ✅ 已支持 |
+| DeepSeek LLM 摘要生成 | ✅ 已支持 |
+| 智能对话与 RAG 语义搜索 | ✅ 已支持 |
+| 标签管理与归档整理 | ✅ 已支持 |
+| 批量处理 | ✅ 已支持 |
+| Windows 安装包 | 🔨 开发中 |
 
-## 核心功能
-
-- **双引擎转录**：支持 SenseVoice（极速）和 Whisper（高精度）两种转录引擎
-- **SenseVoice 极速模式**：基于阿里开源 FunAudioLLM/SenseVoiceSmall，极速转录（比 Whisper 快 10 倍以上），支持中文、英文、粤语等 50+ 语言
-- **精确时间轴**：生成带 `[MM:SS]` 或 `[HH:MM:SS]` 格式时间戳的逐字稿，实现音频内容到文本位置的精确映射
-- **结构化摘要生成**：通过大语言模型提取节目短标题、核心关键词、详细概述和密集高光时间轴
-- **语义搜索与定位**：基于 RAG 技术实现自然语言查询，直接向全部历史音频归档提问并精确定位相关时间段
-- **智能对话与标签管理**：与音频知识库对话，按标签筛选归档范围，双向溯源引用记录
-- **自动化归档**：处理完成后自动清理临时文件，将原始文本和结构化摘要以 Markdown 格式持久化保存
-- **多平台音频提取**：支持直接输入多个平台的播客/视频链接，自动提取音频并生成摘要
-- **批量处理**：支持批量上传多个音频文件，排队依次处理
-
-## 支持的平台
-
-### 播客平台
-
-| 平台 | 说明 |
-|------|------|
-| 小宇宙 | 自动解析 MP3 直链 |
-| 喜马拉雅 | 自动解析并下载音频 |
-| Apple Podcasts | 自动提取音频 |
-| 网易云音乐 | 支持播客单集链接 |
-
-### 视频平台
-
-| 平台 | 说明 |
-|------|------|
-| Bilibili | 提取视频音频，支持大会员（需配置 cookies） |
+---
 
 ## 快速开始
+
+> **面向开发人员** — 本地搭建开发环境。
 
 ### 前置要求
 
@@ -240,6 +244,102 @@ taskkill /PID <PID> /F
 **Q: 归档向量索引失败？**
 运行 `POST http://localhost:8000/api/chat/index-all` 手动触发存量归档索引。
 
+---
+
+## 技术架构
+
+PodGist v1.0.0 采用 **React + FastAPI** 分离架构：
+
+```
+┌─────────────────────────────────────────────────────┐
+│                  React Frontend                     │
+│              (http://localhost:5173)               │
+│         Tabler Icons · Tailwind CSS v4              │
+└──────────────────────┬──────────────────────────────┘
+                       │ HTTP / REST
+                       ▼
+┌─────────────────────────────────────────────────────┐
+│                 FastAPI Backend                     │
+│               (http://localhost:8000)              │
+│     Whisper · SenseVoice · DeepSeek · yt-dlp       │
+└─────────────────────────────────────────────────────┘
+```
+
+### 前端 (`frontend/`)
+
+- **React 19** + **TypeScript** + **Vite** — 极速开发体验
+- **Tailwind CSS v4** — 原子化样式方案
+- **Tabler Icons** — 简洁轮廓图标库
+- **Axios** — HTTP 客户端
+
+### 后端 (`api.py` + `backend/`)
+
+| 模块 | 功能 |
+|------|------|
+| `api.py` | FastAPI 主服务，RESTful 接口，CORS 跨域支持 |
+| `backend/transcriber.py` | Whisper/SenseVoice 转录与硬件检测 |
+| `backend/llm_agent.py` | DeepSeek LLM API 封装与摘要生成 |
+| `backend/rag_db.py` | SQLite 表 + ChromaDB 向量库（RAG 存储） |
+| `backend/rag_retriever.py` | RAG 检索管道与流式生成 |
+| `backend/downloader.py` | 多平台在线音频解析与下载 |
+| `backend/worker.py` | 后台任务处理与队列管理 |
+| `backend/task_queue.py` | SQLite 任务队列状态管理 |
+| `backend/diagnostics.py` | 系统诊断与组件检测 |
+
+---
+
+## 核心功能
+
+- **双引擎转录**：支持 SenseVoice（极速）和 Whisper（高精度）两种转录引擎
+- **SenseVoice 极速模式**：基于阿里开源 FunAudioLLM/SenseVoiceSmall，极速转录（比 Whisper 快 10 倍以上），支持中文、英文、粤语等 50+ 语言
+- **精确时间轴**：生成带 `[MM:SS]` 或 `[HH:MM:SS]` 格式时间戳的逐字稿，实现音频内容到文本位置的精确映射
+- **结构化摘要生成**：通过大语言模型提取节目短标题、核心关键词、详细概述和密集高光时间轴
+- **语义搜索与定位**：基于 RAG 技术实现自然语言查询，直接向全部历史音频归档提问并精确定位相关时间段
+- **智能对话与标签管理**：与音频知识库对话，按标签筛选归档范围，双向溯源引用记录
+- **自动化归档**：处理完成后自动清理临时文件，将原始文本和结构化摘要以 Markdown 格式持久化保存
+- **多平台音频提取**：支持直接输入多个平台的播客/视频链接，自动提取音频并生成摘要
+- **批量处理**：支持批量上传多个音频文件，排队依次处理
+
+---
+
+## 支持的平台
+
+### 播客平台
+
+| 平台 | 说明 |
+|------|------|
+| 小宇宙 | 自动解析 MP3 直链 |
+| 喜马拉雅 | 自动解析并下载音频 |
+| Apple Podcasts | 自动提取音频 |
+| 网易云音乐 | 支持播客单集链接 |
+
+### 视频平台
+
+| 平台 | 说明 |
+|------|------|
+| Bilibili | 提取视频音频，支持大会员（需配置 cookies） |
+
+---
+
+## 使用流程
+
+1. 启动应用：`npm run dev`（开发者模式）或双击 PodGist.app（安装用户）
+2. 在设置中输入 DeepSeek API Key 并保存
+3. 选择输入方式：
+   - **本地文件**：上传 MP3、WAV、M4A 等音频文件（支持拖拽）
+   - **播客直连**：粘贴小宇宙、喜马拉雅、Apple Podcasts、网易云音乐等平台链接
+   - **B站视频**：粘贴 Bilibili 视频链接
+   - **批量处理**：粘贴多个链接或本地音频路径，每行一个
+4. 选择转录引擎（SenseVoice 极速模式或 Whisper 高精度模式）
+5. 等待转录和摘要生成完成
+6. 查看生成的节目摘要、核心关键词和详细时间轴
+7. **智能对话**：与全部历史归档进行自然语言对话，支持按标签或指定归档筛选范围
+8. 为归档打标签整理，知识库越用越精准
+9. 通过 AI 模糊定位器输入自然语言问题，精确定位相关内容时间段
+10. 下载完整 Markdown 报告或查看历史归档
+
+---
+
 ## 项目结构
 
 ```
@@ -276,30 +376,47 @@ PodGist/
 └── README.md
 ```
 
-## 使用流程
+---
 
-1. 启动应用：`npm run dev`
-2. 在设置中输入 DeepSeek API Key 并保存
-3. 选择输入方式：
-   - **本地文件**：上传 MP3、WAV、M4A 等音频文件（支持拖拽）
-   - **播客直连**：粘贴小宇宙、喜马拉雅、Apple Podcasts、网易云音乐等平台链接
-   - **B站视频**：粘贴 Bilibili 视频链接
-   - **批量处理**：粘贴多个链接或本地音频路径，每行一个
-4. 选择转录引擎（SenseVoice 极速模式或 Whisper 高精度模式）
-5. 等待转录和摘要生成完成
-6. 查看生成的节目摘要、核心关键词和详细时间轴
-7. **智能对话**：与全部历史归档进行自然语言对话，支持按标签或指定归档筛选范围
-8. 为归档打标签整理，知识库越用越精准
-9. 通过 AI 模糊定位器输入自然语言问题，精确定位相关内容时间段
-10. 下载完整 Markdown 报告或查看历史归档
+## 更新日志
+
+所有重要变更都会记录在 [CHANGELOG.md](CHANGELOG.md) 中。
+
+### v1.0.0（2026-04-03）
+
+**首发版本 - macOS Lite**
+
+| 类型 | 描述 |
+|------|------|
+| ✨ 新增 | macOS 桌面应用（Electron + DMG 安装包） |
+| ✨ 新增 | 全局启动拦截与健康检查（后端就绪前显示加载动画） |
+| ✨ 新增 | API Key 配置持久化（Electron 环境下正确读写用户数据目录） |
+| ✨ 新增 | SenseVoice 极速转录引擎（比 Whisper 快 10 倍以上） |
+| ✨ 新增 | 双引擎支持（SenseVoice + Whisper） |
+| ✨ 新增 | 多平台播客链接解析（小宇宙/Apple Podcasts/喜马拉雅/网易云） |
+| ✨ 新增 | B站视频音频提取与转录摘要 |
+| ✨ 新增 | 智能对话（RAG 语义搜索，流式 SSE 响应） |
+| ✨ 新增 | 标签管理与归档整理 |
+| ✨ 新增 | 批量处理（多文件/多链接排队处理） |
+| 🐞 修复 | Worker 任务处理路径问题（`PODGIST_DATA_DIR` 环境变量） |
+| 🐞 修复 | API Key 读取路径问题（uvicorn 重导入导致 CLI 参数丢失） |
+| 🐞 修复 | SSE 流式解析 TCP chunk 边界截断问题（`eventData` 状态提升） |
+| 🐞 修复 | pydub ffprobe/ffmpeg 路径未设置问题 |
+| 🐞 修复 | Electron 打包后 yt-dlp/ffprobe 找不到的问题 |
+| 🔧 优化 | 前端加载动画（替代 DinoLoader 小恐龙） |
+| 🔧 优化 | Electron 后端启动流程（venv PATH 自动配置） |
+
+---
 
 ## 未来规划
 
-- [ ] **打包分发**：提供无需安装环境的可执行版本（PyInstaller + Electron）
+- [ ] **Windows 安装包**：提供 Windows 版可执行安装包
 - [ ] **多模型支持**：扩展支持更多大语言模型 API
 - [ ] **处理流程优化**：引入异步任务队列和进度中断功能
 - [x] **跨音频语义搜索（RAG）**：在全部历史归档中实现全局语义搜索（已完成）
 - [ ] **导出格式扩展**：支持导出为 JSON、PDF、Notion 等多种格式
+
+---
 
 ## 依赖
 
@@ -321,6 +438,8 @@ PodGist/
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp) - 音视频下载
 - [ChromaDB](https://www.trychroma.com/) - 本地向量数据库（RAG）
 - [Sentence Transformers](https://www.sbert.net/) - 文本向量化（RAG）
+
+---
 
 ## 许可证
 

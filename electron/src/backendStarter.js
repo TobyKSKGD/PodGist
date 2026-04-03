@@ -171,21 +171,24 @@ class BackendStarter {
       'start_electron.py'
     );
 
-    const backendUrl = 'http://localhost:8000';
+    const backendUrl = 'http://127.0.0.1:8000';
 
     const env = {
       ...process.env,
       PODGIST_DATA_DIR: this.userDataPath,
+      PODGIST_RESOURCES_PATH: process.resourcesPath,
       PODGIST_MODEL_DIR: process.env.PODGIST_MODEL_DIR || '',
       NODE_ENV: process.env.NODE_ENV || 'production'
     };
 
     console.log('[BackendStarter] 启动 Python 后端:', startScript);
     console.log('[BackendStarter] 用户数据目录:', this.userDataPath);
+    console.log('[BackendStarter] 资源目录:', process.resourcesPath);
 
     this.pythonProcess = spawn(pythonPath, [
       startScript,
-      '--data-dir', this.userDataPath
+      '--data-dir', this.userDataPath,
+      '--resources-path', process.resourcesPath
     ], {
       stdio: ['ignore', 'pipe', 'pipe'],
       env,
@@ -208,15 +211,17 @@ class BackendStarter {
       }
     });
 
-    // 等待后端就绪
-    await this.waitForBackend(backendUrl, 60000);
+    // 等待后端就绪（最多等 2 分钟，冷启动需要下载模型）
+    await this.waitForBackend(backendUrl, 120000);
   }
 
   async waitForBackend(url, timeout) {
     const start = Date.now();
     const http = require('http');
+    let attempt = 0;
 
     while (Date.now() - start < timeout) {
+      attempt++;
       try {
         await new Promise((resolve, reject) => {
           const req = http.get(url, (res) => {
@@ -227,15 +232,15 @@ class BackendStarter {
             }
           });
           req.on('error', reject);
-          req.setTimeout(1000, () => {
+          req.setTimeout(5000, () => {
             req.destroy();
-            reject(new Error('超时'));
+            reject(new Error('连接超时'));
           });
         });
-        console.log('[BackendStarter] 后端已就绪:', url);
+        console.log(`[BackendStarter] 后端已就绪: ${url} (尝试 ${attempt})`);
         return;
       } catch (error) {
-        // 忽略错误，继续等待
+        console.log(`[BackendStarter] 健康检查失败 (尝试 ${attempt}, ${error.message})，2秒后重试...`);
       }
       await new Promise(r => setTimeout(r, 2000));
     }

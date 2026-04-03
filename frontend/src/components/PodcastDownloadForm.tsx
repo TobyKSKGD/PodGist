@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { IconLink, IconLoader2, IconGlobe, IconRadio, IconVideo, IconMusic, IconChevronDown, IconChevronUp, IconHelpCircle } from '@tabler/icons-react';
 import axios from 'axios';
-import DinoLoader from './DinoLoader';
 
 interface PodcastDownloadFormProps {
   settings: {
@@ -143,7 +142,12 @@ export default function PodcastDownloadForm({ settings, downloadType, onSuccess 
 
         {/* 状态显示 */}
         {isProcessing ? (
-          <DinoLoader message={isBilibili ? "B站视频下载中，请稍候..." : "播客音频下载中，请稍候..."} />
+          <div className="flex items-center gap-3 p-4 bg-[#EFF6FF] rounded-lg">
+            <IconLoader2 className="animate-spin text-[#3B82F6]" size={20} />
+            <span className="text-sm text-[#64748B]">
+              {isBilibili ? "B站视频下载中，请稍候..." : "播客音频下载中，请稍候..."}
+            </span>
+          </div>
         ) : status && (
           <div className={`p-3 rounded-lg text-sm ${
             status.includes('完成')
@@ -220,7 +224,12 @@ export default function PodcastDownloadForm({ settings, downloadType, onSuccess 
 
       {/* 状态显示 */}
       {isProcessing ? (
-        <DinoLoader message={isBilibili ? "B站视频下载中，请稍候..." : "播客音频下载中，请稍候..."} />
+        <div className="flex items-center gap-3 p-4 bg-[#EFF6FF] rounded-lg">
+          <IconLoader2 className="animate-spin text-[#3B82F6]" size={20} />
+          <span className="text-sm text-[#64748B]">
+            {isBilibili ? "B站视频下载中，请稍候..." : "播客音频下载中，请稍候..."}
+          </span>
+        </div>
       ) : status && (
         <div className={`p-3 rounded-lg text-sm ${
           status.includes('完成')

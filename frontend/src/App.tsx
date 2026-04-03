@@ -1,13 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
-import { IconSettings, IconPlus, IconMessageCircle, IconCloudUpload, IconLayoutList, IconChevronLeft, IconChevronRight, IconLayersLinked, IconTrash, IconAlertTriangle, IconBell, IconX, IconCircleCheck, IconUpload, IconRadio, IconVideo, IconBrain } from '@tabler/icons-react';
+import { IconSettings, IconPlus, IconMessageCircle, IconCloudUpload, IconLayoutList, IconChevronLeft, IconChevronRight, IconLayersLinked, IconTrash, IconAlertTriangle, IconBell, IconX, IconCircleCheck, IconUpload, IconRadio, IconVideo, IconBrain, IconLoader2 } from '@tabler/icons-react';
 import SettingsModal from './components/SettingsModal';
 import ResultView from './components/ResultView';
 import PodcastDownloadForm from './components/PodcastDownloadForm';
 import TaskQueue from './components/TaskQueue';
 import BatchProcess from './components/BatchProcess';
 import Logo from './components/Logo';
-import DinoLoader from './components/DinoLoader';
 import { ToastProvider, useToast } from './components/Toast';
 import ConfirmDialog from './components/ConfirmDialog';
 import ChatView from './components/ChatView';
@@ -31,6 +30,7 @@ function AppContent() {
   const [currentView, setCurrentView] = useState<'upload' | 'result' | 'queue' | 'chat'>('upload');
   const [selectedArchiveId, setSelectedArchiveId] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [isBackendReady, setIsBackendReady] = useState(false);
   const [hasApiKey, setHasApiKey] = useState(false);
   const [deleteDialog, setDeleteDialog] = useState<{ open: boolean; archiveId: string; archiveName: string }>({
     open: false,
@@ -84,9 +84,10 @@ function AppContent() {
     }
   };
 
-  const fetchIconSettings = async () => {
+  // 暴露给子组件的全局刷新函数
+  const refreshGlobalSettings = async () => {
     try {
-      const res = await api.get('/api/settings');
+      const res = await axios.get('http://localhost:8000/api/settings');
       if (res.data.status === 'success') {
         setIconSettings({
           engine: res.data.data.engine || 'SenseVoice',
@@ -97,7 +98,7 @@ function AppContent() {
         setHasApiKey(!!res.data.data.api_key);
       }
     } catch (error) {
-      console.error("获取设置失败:", error);
+      console.error("[App] refreshGlobalSettings failed:", error);
     }
   };
 
@@ -110,6 +111,30 @@ function AppContent() {
     setCurrentView('result');
     removeNotification(id, taskId);
   };
+
+  // ========== 步骤一：全局启动拦截与心跳检测 ==========
+  useEffect(() => {
+    let checkInterval: ReturnType<typeof setInterval>;
+
+    const bootSequence = async () => {
+      try {
+        await axios.get('http://localhost:8000/');
+        // 后端终于活了！
+        setIsBackendReady(true);
+        clearInterval(checkInterval);
+        // 后端就绪后，一次性获取全局数据
+        await refreshGlobalSettings();
+        fetchArchives();
+      } catch (error) {
+        // 后端还在启动中，保持沉默
+      }
+    };
+
+    checkInterval = setInterval(bootSequence, 800);
+    bootSequence();
+
+    return () => clearInterval(checkInterval);
+  }, []);
 
   // 点击外部关闭铃铛菜单
   useEffect(() => {
@@ -125,12 +150,6 @@ function AppContent() {
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  // 1. 组件加载时，去后端拉取历史归档记录和设置
-  useEffect(() => {
-    fetchArchives();
-    fetchIconSettings();
   }, []);
 
   // App 级轮询：检测已完成任务并触发通知（与 TaskQueue 解耦）
@@ -271,7 +290,7 @@ function AppContent() {
             <p className="text-slate-500">支持本地文件、播客直连与 Bilibili 视频剥离</p>
           </div>
 
-          {!hasApiKey && (
+          {isBackendReady && !hasApiKey && (
             <div className="mb-6 p-4 bg-[#E1F5FE] border border-[#009A94] rounded-xl flex items-start gap-3">
               <IconAlertTriangle className="text-[#009A94] shrink-0 mt-0.5" size={20} />
               <div>
@@ -334,7 +353,10 @@ function AppContent() {
                 }`}
               >
                 {isIconUploading ? (
-                  <DinoLoader message="音频转录中，请先喝杯水..." />
+                  <div className="flex flex-col items-center gap-3 py-8">
+                    <IconLoader2 className="animate-spin text-[#00ADA6]" size={32} />
+                    <span className="text-sm text-slate-500">音频转录中，请先喝杯水...</span>
+                  </div>
                 ) : (
                   <>
                     <IconCloudUpload className="text-slate-400 mb-4" size={48} strokeWidth={1.5} />
@@ -378,6 +400,18 @@ function AppContent() {
       </main>
     );
   };
+
+  // ========== 关键拦截：后端未就绪时显示加载动画 ==========
+  if (!isBackendReady) {
+    return (
+      <div className="flex h-screen w-full items-center justify-center bg-[#F9F9F9]">
+        <div className="flex flex-col items-center gap-4">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#008080]"></div>
+          <p className="text-slate-500 font-medium">PodGist 核心引擎启动中...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen w-full bg-white text-slate-800 font-sans">
@@ -596,7 +630,7 @@ function AppContent() {
         </div>
       )}
 
-      <SettingsModal isOpen={isIconSettingsOpen} onClose={() => setIsIconSettingsOpen(false)} showToast={showToast} />
+      <SettingsModal isOpen={isIconSettingsOpen} onClose={() => setIsIconSettingsOpen(false)} showToast={showToast} onSaveSuccess={refreshGlobalSettings} />
 
       {/* 删除归档确认对话框 */}
       <ConfirmDialog

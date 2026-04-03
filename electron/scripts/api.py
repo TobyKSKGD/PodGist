@@ -50,18 +50,14 @@ async def startup_index():
 # 获取 api.py 所在目录作为项目根目录（默认）
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# 用户数据目录（优先使用环境变量，回退到命令行参数，再回退到脚本目录）
-# 优先级：PODGIST_DATA_DIR > _cli_args.data_dir > _SCRIPT_DIR
-_env_data_dir = os.environ.get('PODGIST_DATA_DIR')
-_cli_data_dir = _cli_args.data_dir
-print(f"[api.py] PODGIST_DATA_DIR={_env_data_dir}, _cli_args.data_dir={_cli_data_dir}, _SCRIPT_DIR={_SCRIPT_DIR}")
-_data_dir = _env_data_dir or _cli_data_dir or _SCRIPT_DIR
-BASE_DIR = _data_dir
-print(f"[api.py] BASE_DIR={BASE_DIR}")
+# 用户数据目录（Electron 模式或开发模式）
+if _cli_args.data_dir:
+    BASE_DIR = _cli_args.data_dir
+else:
+    BASE_DIR = _SCRIPT_DIR
 
 ENV_FILE = os.path.join(BASE_DIR, ".env")
 CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
-print(f"[api.py] ENV_FILE={ENV_FILE}")
 
 # ================= 安全配置：跨域 (CORS) =================
 # 极其关键：允许未来的 React 前端与这个后端通信
@@ -647,7 +643,7 @@ def get_devices():
 def get_settings():
     api_key = load_api_key()
     config = load_config()
-    print(f"[get_settings] ENV_FILE={ENV_FILE}, api_key_present={bool(api_key)}, api_key_prefix={api_key[:4] if api_key else 'None'}")
+    # 获取可用设备列表
     devices = get_available_devices()
     device_list = [{"key": k, "name": v} for k, v in devices.items()]
     return {
@@ -674,7 +670,6 @@ def save_settings(
 ):
     try:
         # 保存 API Key 到 .env 文件
-        print(f"[save_settings] Saving to ENV_FILE={ENV_FILE}")
         with open(ENV_FILE, "w", encoding="utf-8") as f:
             f.write(api_key.strip())
 
@@ -688,7 +683,6 @@ def save_settings(
 
         return {"status": "success", "message": "设置已保存"}
     except Exception as e:
-        print(f"[save_settings] Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

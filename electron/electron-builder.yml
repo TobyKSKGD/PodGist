@@ -66,6 +66,7 @@ asarUnpack:
   - backend/**/*
   - api.py
   - requirements.txt
+  - frontend-dist/**/*
 
 # 额外资源（不打包进 asar，直接复制到 resources）
 extraResources:
