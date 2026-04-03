@@ -64,36 +64,32 @@ jobs:
 
       # ========== Step 4: PyInstaller 打包后端 ==========
       - name: Package backend with PyInstaller
-        run: |
-          pyinstaller --noconsole --onedir backend/api.spec
-        shell: cmd
+        run: pyinstaller --noconsole --onedir backend/api.spec
+        working-directory: ${{ github.workspace }}
 
       - name: Verify PyInstaller output
         run: |
-          ls backend/dist/start_electron/
+          dir backend\dist\api /b
           echo "PyInstaller output exists"
 
       # ========== Step 5: electron-builder 打包 Windows ==========
       - name: Build Windows installer
-        run: |
-          cd electron
-          npx electron-builder --win --dir
+        run: npx electron-builder --win --dir
+        working-directory: ${{ github.workspace }}/electron
         env:
           NODE_OPTIONS: '--max-old-space-size=4096'
 
       - name: Verify output
         run: |
-          ls -la electron/release/1.0.0/win-unpacked/ | head -10
+          dir electron\release\1.0.0\win-unpacked /b | head -10
 
       # ========== Step 6: 列出所有生成物 ==========
       - name: List all outputs
         run: |
           echo "=== Windows executable ==="
-          ls -lh electron/release/1.0.0/win-unpacked/*.exe 2>/dev/null
-          echo "=== NSIS installer ==="
-          ls -lh electron/release/1.0.0/*.exe 2>/dev/null
+          dir /s /b electron\release\1.0.0\*.exe 2>nul
           echo "=== All files in release ==="
-          find electron/release/1.0.0/ -type f -name "*.exe" -o -name "*.msi" 2>/dev/null
+          dir /s electron\release\1.0.0\*.exe 2>nul
 
       # ========== Step 7: 上传到 GitHub Release v1.0.0 ==========
       - name: Upload to Release
