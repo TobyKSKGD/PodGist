@@ -1,0 +1,108 @@
+name: Build Windows Installer
+
+on:
+  push:
+    tags:
+      - 'v*-win*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Git tag to build'
+        required: false
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ========== Step 1: 前端构建 ==========
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm install
+          npm run build
+        env:
+          NODE_OPTIONS: '--max-old-space-size=4096'
+
+      # ========== Step 2: 准备 Python 环境 ==========
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+          cache-dependency-path: 'requirements.txt'
+
+      - name: Download Windows FFmpeg
+        run: |
+          curl -L -o ffmpeg.zip https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip
+          7z x ffmpeg.zip -o"ffmpeg_temp"
+          mkdir -p electron/resources/ffmpeg
+          cp ffmpeg_temp/ffmpeg-master-latest-win64-gpl/bin/*.exe electron/resources/ffmpeg/
+        shell: bash
+
+      - name: Install Python dependencies
+        run: |
+          pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      # ========== Step 3: 预构建 ==========
+      - name: Run prebuild
+        run: |
+          cd electron
+          npm install
+          node scripts/prebuild.js
+
+      # ========== Step 4: PyInstaller 打包后端 ==========
+      - name: Package backend with PyInstaller
+        run: |
+          pyinstaller --noconsole --onedir backend/api.spec
+        shell: cmd
+
+      - name: Verify PyInstaller output
+        run: |
+          ls backend/dist/start_electron/
+          echo "PyInstaller output exists"
+
+      # ========== Step 5: electron-builder 打包 Windows ==========
+      - name: Build Windows installer
+        run: |
+          cd electron
+          npx electron-builder --win --dir
+        env:
+          NODE_OPTIONS: '--max-old-space-size=4096'
+
+      - name: Verify output
+        run: |
+          ls -la electron/release/1.0.0/win-unpacked/ | head -10
+
+      # ========== Step 6: 列出所有生成物 ==========
+      - name: List all outputs
+        run: |
+          echo "=== Windows executable ==="
+          ls -lh electron/release/1.0.0/win-unpacked/*.exe 2>/dev/null
+          echo "=== NSIS installer ==="
+          ls -lh electron/release/1.0.0/*.exe 2>/dev/null
+          echo "=== All files in release ==="
+          find electron/release/1.0.0/ -type f -name "*.exe" -o -name "*.msi" 2>/dev/null
+
+      # ========== Step 7: 上传到 GitHub Release ==========
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          draft: true
+          files: |
+            electron/release/1.0.0/*.exe
+            electron/release/1.0.0/win-unpacked/*.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

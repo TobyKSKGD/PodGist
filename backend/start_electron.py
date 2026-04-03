@@ -10,6 +10,7 @@ import sys
 import os
 import argparse
 import platform
+import multiprocessing
 
 # 将项目根目录添加到 Python 路径
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -84,4 +85,7 @@ def main():
 
 
 if __name__ == "__main__":
+    # Windows 专用：防止 PyTorch/Uvicorn 多进程无限递归启动
+    # 必须在所有业务逻辑之前调用，且放在 if __name__ == '__main__' 内
+    multiprocessing.freeze_support()
     main()
