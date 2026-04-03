@@ -103,7 +103,7 @@ win:
       to: ffmpeg
       filter:
         - "**/*"
-    - from: backend/dist/api
+    - from: dist/api
       to: api
       filter:
         - "**/*"
