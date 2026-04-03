@@ -65,9 +65,9 @@ jobs:
       # ========== Step 4: PyInstaller 打包后端 ==========
       # 注意：--onedir/--noconsole 等选项已在 .spec 文件中定义，命令行不能再传
       - name: Package backend with PyInstaller
-        run: |
-          pyinstaller --log-level=DEBUG backend/api.spec > pyinstaller_build.log 2>&1
+        run: pyinstaller --log-level=DEBUG backend/api.spec > pyinstaller_build.log 2>&1
         working-directory: ${{ github.workspace }}
+        shell: bash
         continue-on-error: true
 
       - name: Upload PyInstaller Log
@@ -80,13 +80,13 @@ jobs:
         run: echo "Verifying PyInstaller output exists"
         continue-on-error: true
 
-      # PyInstaller 输出到 dist/api（相对于 repo 根目录）
-      # 需要复制到 electron/dist/api（electron-builder 在 electron/ 子目录里跑）
+      # PyInstaller 输出到 dist/api（repo 根目录），复制到 electron/dist/api 供 electron-builder 打包
       - name: Copy PyInstaller output to electron
         run: |
-          if not exist dist mkdir dist
-          xcopy /E /I /Y ..\dist\api dist\api
-        working-directory: ${{ github.workspace }}/electron
+          mkdir -p electron/dist
+          cp -r dist/api electron/dist/api
+        working-directory: ${{ github.workspace }}
+        shell: bash
         continue-on-error: true
 
       # ========== Step 5: electron-builder 打包 Windows ==========
@@ -97,14 +97,18 @@ jobs:
           NODE_OPTIONS: '--max-old-space-size=4096'
 
       - name: Verify output
-        run: dir electron\release\1.0.0\win-unpacked /b
+        run: ls electron/release/1.0.0/win-unpacked/*.exe 2>/dev/null || dir electron\\release\\1.0.0\\win-unpacked\\*.exe /b 2>nul
+        working-directory: ${{ github.workspace }}/electron
+        shell: bash
         continue-on-error: true
 
       # ========== Step 6: 列出所有生成物 ==========
       - name: List all outputs
         run: |
           echo === Windows executable ===
-          dir /s /b electron\release\1.0.0\*.exe 2>nul
+          find electron/release/1.0.0/ -name "*.exe" 2>/dev/null || ls -la electron/release/1.0.0/win-unpacked/ 2>/dev/null
+        working-directory: ${{ github.workspace }}/electron
+        shell: bash
         continue-on-error: true
 
       # ========== Step 6.5: 上传 electron-builder 输出作为 artifact ==========
@@ -118,14 +122,15 @@ jobs:
       # ========== Step 7: 上传 .exe 到 v1.0.0-windows draft release ==========
       - name: Upload to Release
         run: |
-          for %%f in (electron\release\1.0.0\win-unpacked\*.exe) do (
-            echo Uploading %%f
-            curl -sL -X POST ^
-              -H "Authorization: token %GITHUB_TOKEN%" ^
-              -H "Content-Type: application/octet-stream" ^
-              --data-binary @"%%f" ^
-              "https://uploads.github.com/repos/TobyKSKGD/PodGist/releases/304960858/assets?name=%%~nxf"
-          )
+          for f in electron/release/1.0.0/win-unpacked/*.exe; do
+            echo "Uploading $f"
+            curl -sL -X POST \
+              -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary "@$f" \
+              "https://uploads.github.com/repos/TobyKSKGD/PodGist/releases/304960858/assets?name=$(basename $f)"
+          done
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
         continue-on-error: true
