@@ -8,9 +8,9 @@
 import os
 import sys
 
-# SPECPATH 是 PyInstaller 自动注入的全局变量，指向 spec 文件所在目录（项目根目录）
-# 不依赖 os.getcwd()，避免 Windows cmd 下路径不确定问题
-project_root = SPECPATH
+# SPECPATH 指向 spec 文件所在目录（backend/）
+# project_root 是 SPECPATH 的上一级（项目根目录）
+project_root = os.path.dirname(os.path.abspath(SPECPATH))
 
 block_cipher = None
 
