@@ -97,7 +97,7 @@ jobs:
           NODE_OPTIONS: '--max-old-space-size=4096'
 
       - name: Verify output
-        run: ls electron/release/1.0.0/win-unpacked/*.exe 2>/dev/null || dir electron\\release\\1.0.0\\win-unpacked\\*.exe /b 2>nul
+        run: ls release/1.0.0/win-unpacked/*.exe 2>/dev/null
         working-directory: ${{ github.workspace }}/electron
         shell: bash
         continue-on-error: true
@@ -106,7 +106,8 @@ jobs:
       - name: List all outputs
         run: |
           echo === Windows executable ===
-          find electron/release/1.0.0/ -name "*.exe" 2>/dev/null || ls -la electron/release/1.0.0/win-unpacked/ 2>/dev/null
+          find release/1.0.0/ -name "*.exe" 2>/dev/null
+          ls -la release/1.0.0/win-unpacked/ 2>/dev/null
         working-directory: ${{ github.workspace }}/electron
         shell: bash
         continue-on-error: true
@@ -116,20 +117,23 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: electron-builder-output
-          path: electron/release/
+          path: release/
         continue-on-error: true
 
       # ========== Step 7: 上传 .exe 到 v1.0.0-windows draft release ==========
+      # electron-builder 在 electron/ 子目录运行，输出到 ../release/（即 ${{ github.workspace }}/release/）
       - name: Upload to Release
         run: |
-          for f in electron/release/1.0.0/win-unpacked/*.exe; do
+          find release/1.0.0/win-unpacked/ -name "*.exe" -type f | while read f; do
             echo "Uploading $f"
             curl -sL -X POST \
               -H "Authorization: token $GITHUB_TOKEN" \
               -H "Content-Type: application/octet-stream" \
               --data-binary "@$f" \
               "https://uploads.github.com/repos/TobyKSKGD/PodGist/releases/304960858/assets?name=$(basename $f)"
+            echo ""
           done
+        working-directory: ${{ github.workspace }}/electron
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
