@@ -104,6 +104,13 @@ class BackendStarter {
 
   async preparePythonVenv() {
     const platform = process.platform;
+
+    // Windows: 使用 PyInstaller 打包的 api-engine.exe，不需要 python_venv
+    if (platform === 'win32') {
+      console.log('[BackendStarter] Windows 模式: 跳过虚拟环境检查');
+      return;
+    }
+
     const bundledVenv = this.getResourcePath('python_venv');
 
     if (!fs.existsSync(bundledVenv)) {

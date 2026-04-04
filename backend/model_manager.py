@@ -5,6 +5,7 @@
 """
 
 import os
+import platform
 import requests
 import hashlib
 from typing import Dict, List, Optional
@@ -116,7 +117,7 @@ def get_cache_dir() -> str:
 
     if os.name == 'nt':  # Windows
         return os.path.join(home, ".cache")
-    elif os.uname().sysname == 'Darwin':  # macOS
+    elif platform.system() == 'Darwin':  # macOS
         return os.path.join(home, ".cache")
     else:  # Linux
         return os.path.join(home, ".cache")

@@ -127,7 +127,7 @@ def _merge_summaries(part_summaries, client):
 
     ----
 
-    {chr(10).join(f'【Part {i+1}】\n{s}' for i, s in enumerate(part_summaries))}
+    '\n'.join(f'【Part {i+1}】\n{s}' for i, s in enumerate(part_summaries))
     """
 
     messages = [

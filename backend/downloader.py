@@ -209,7 +209,7 @@ def download_audio_from_url(url, save_dir="temp_audio", cookies_path=None):
         dict: 包含 success, file_path, title, error 键的字典
     """
     downloader = AudioDownloader(save_dir=save_dir)
-    return downloader.bilibili_audio(url, cookies_path=cookies_path)
+    return downloader.download_bilibili_audio(url, cookies_path=cookies_path)
 
 
 # 为保持向后兼容，保留原函数名

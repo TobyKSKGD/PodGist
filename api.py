@@ -65,9 +65,15 @@ print(f"[api.py] ENV_FILE={ENV_FILE}")
 
 # ================= 安全配置：跨域 (CORS) =================
 # 极其关键：允许未来的 React 前端与这个后端通信
+is_dev = os.environ.get('NODE_ENV') == 'development'
+allow_origins = (
+    ["http://localhost:5173", "http://127.0.0.1:5173"]
+    if is_dev
+    else ["*"]
+)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=allow_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

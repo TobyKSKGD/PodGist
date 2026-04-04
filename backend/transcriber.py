@@ -3,6 +3,7 @@ import torch
 import subprocess
 import re
 import os
+import platform
 
 # ================= 模型路径配置（支持 Electron 打包）=================
 # 通过环境变量 PODGIST_MODEL_DIR 指定模型根目录
@@ -37,9 +38,12 @@ def get_available_devices():
 
     elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         try:
-            # 通过系统命令获取 Apple Silicon 芯片型号
-            chip_name = subprocess.check_output(["sysctl", "-n", "machdep.cpu.brand_string"]).strip().decode("utf-8")
-            devices["mps"] = f"Apple Silicon ({chip_name})"
+            # sysctl 是 macOS 特有命令，Windows/Linux 上不存在
+            if platform.system() == 'Darwin':
+                chip_name = subprocess.check_output(["sysctl", "-n", "machdep.cpu.brand_string"]).strip().decode("utf-8")
+                devices["mps"] = f"Apple Silicon ({chip_name})"
+            else:
+                devices["mps"] = "Apple M系芯片 (Mac 专属加速)"
         except Exception:
             # 若系统调用失败，使用默认描述
             devices["mps"] = "Apple M系芯片 (Mac 专属加速)"
