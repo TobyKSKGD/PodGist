@@ -89,7 +89,11 @@ jobs:
           TAG_NAME="${{ github.event.inputs.target_tag || github.ref_name }}"
           echo "==== 准备上传到 Release: $TAG_NAME ===="
 
-          # 先创建 release，再用 --clobber 强制上传
+          # 先创建 release
           ./gh.exe release create "$TAG_NAME" --draft --title "Windows Build" --notes "Auto build"
-          ./gh.exe release upload "$TAG_NAME" release/*.exe --clobber
+          # Windows bash 不支持 glob，用 find 遍历
+          find release/ -name "*.exe" -type f | while read -r file; do
+            echo "上传: $file"
+            ./gh.exe release upload "$TAG_NAME" "$file" --clobber
+          done
           echo "==== 上传完成！ ===="
