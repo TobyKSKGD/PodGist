@@ -15,6 +15,10 @@ appId: com.podgist.desktop
 productName: PodGist
 copyright: Copyright © 2026 PodGist Team
 
+# 应用图标
+build:
+  icon: assets/icon
+
 # 发布配置 - 已禁用，改由 workflow 通过 gh CLI 手动上传
 # publish:
 #   provider: github
@@ -35,6 +39,7 @@ nsis:
   createStartMenuShortcut: true
   shortcutName: PodGist
   artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+  installerIcon: assets/icon.ico
 
 # DMG macOS 安装包配置
 dmg:
