@@ -37,6 +37,7 @@ nsis:
   shortcutName: PodGist
   artifactName: ${productName}-${version}-${os}-${arch}.${ext}
   installerIcon: assets/icon.ico
+  uninstallerIcon: assets/icon.ico
 
 # DMG macOS 安装包配置
 dmg:
