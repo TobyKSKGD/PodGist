@@ -58,7 +58,7 @@ mac:
   hardenedRuntime: true
   entitlements: assets/entitlements.plist
   entitlementsInherit: assets/entitlements.plist
-  icon: assets/icon.icns
+  icon: assets/Icon.icns
   target:
     - dmg
   # macOS: 使用 Python venv（python_venv 在 prebuild 时已准备）
