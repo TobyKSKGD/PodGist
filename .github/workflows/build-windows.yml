@@ -56,9 +56,11 @@ jobs:
           pip install pyinstaller
 
       - name: Clean model cache
+        shell: bash
         run: |
           rm -rf ~/.cache/modelscope
           rm -rf ~/AppData/Local/modelscope
+          echo "Model cache cleaned"
 
       - name: Package backend with PyInstaller
         shell: bash
