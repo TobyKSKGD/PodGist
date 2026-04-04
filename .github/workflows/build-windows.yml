@@ -86,15 +86,75 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG_NAME="${{ github.event.inputs.target_tag || github.ref_name }}"
+          # 目标固定为 v1.0.0（已包含 macOS DMG）
+          TAG_NAME="v1.0.0"
           echo "==== 准备上传到 Release: $TAG_NAME ===="
 
-          # 先创建 release
-          ./gh.exe release create "$TAG_NAME" --draft --title "Windows Build" --notes "Auto build"
+          # 直接上传，跳过 create（release 已存在）
           # Windows bash 不支持 glob，用 find 遍历
           # 只上传 NSIS 安装包（PodGist-*.exe），不传零散文件
           find release/ -name "PodGist-*.exe" -type f | while read -r file; do
             echo "上传: $file"
             ./gh.exe release upload "$TAG_NAME" "$file" --clobber
           done
+
+          # 更新 release 描述，补上 Windows 下载说明
+          ./gh.exe release edit "$TAG_NAME" --notes "\
+# PodGist v1.0.0
+
+PodGist 正式发布！无需配置 Python/Node.js 环境，下载安装包即可使用。
+
+## 功能更新
+
+- macOS / Windows 桌面应用（Electron + 安装包）
+- 全局启动拦截，后端就绪前显示加载动画
+- SenseVoice 极速转录引擎（比 Whisper 快 10 倍，支持 50+ 语言）
+- 多平台播客解析（小宇宙 / Apple Podcasts / 喜马拉雅 / 网易云）
+- B站视频音频提取
+- 智能对话 RAG + 标签管理
+- 批量处理
+
+详细更新日志：https://github.com/TobyKSKGD/PodGist/blob/main/CHANGELOG.md
+
+---
+
+## macOS
+
+**下载：PodGist-1.0.0-mac-arm64.dmg**
+
+### 系统要求
+
+- macOS 11.0 (Big Sur) 或更高版本
+- Apple Silicon (M1/M2/M3/M4) 或 Intel 芯片
+- 推荐 8GB 以上内存
+
+### 安装步骤
+
+1. 下载并打开 .dmg 文件
+2. 将 PodGist.app 拖入 Applications 文件夹
+3. 首次启动若提示\"无法打开\"，前往系统偏好设置 → 安全性与隐私 → 通用，点击\"仍要打开\"
+4. 在偏好设置中配置 DeepSeek API Key
+
+> 没有 API Key？访问 https://platform.deepseek.com/ 注册获取。
+
+---
+
+## Windows
+
+**下载：PodGist-1.0.0-win-x64.exe**
+
+### 系统要求
+
+- Windows 10 或更高版本
+- 推荐 8GB 以上内存
+
+### 安装步骤
+
+1. 下载并运行 .exe 安装包
+2. 选择安装目录（建议默认）
+3. 安装完成后启动 PodGist
+4. 在偏好设置中配置 DeepSeek API Key
+
+> 没有 API Key？访问 https://platform.deepseek.com/ 注册获取。
+"
           echo "==== 上传完成！ ===="
