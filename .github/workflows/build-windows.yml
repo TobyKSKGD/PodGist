@@ -83,7 +83,7 @@ jobs:
       - name: Upload to Release via GitHub CLI
         shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.PODGIST_PAT }}
+          GH_TOKEN: ${{ secrets.PODGIST_PAT }}
         run: |
           TAG_NAME="${{ github.event.inputs.target_tag || github.ref_name }}"
           echo "==== 准备上传到 Release: $TAG_NAME ===="
