@@ -104,6 +104,8 @@ a = Analysis(
         'triton',
         'safetensors',
         'tokenizers',
+        'sse_starlette',
+        'sse_starlette.sse',
     ],
     win_no_prefer_redirects=False,
     cipher=block_cipher,
