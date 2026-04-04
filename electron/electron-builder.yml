@@ -10,14 +10,11 @@ target:
     arch:
       - arm64
 
-# App 元数据
+# App 元数据（icon 必须在根层级，build key 已废弃）
 appId: com.podgist.desktop
 productName: PodGist
 copyright: Copyright © 2026 PodGist Team
-
-# 应用图标
-build:
-  icon: assets/icon
+icon: assets/icon
 
 # 发布配置 - 已禁用，改由 workflow 通过 gh CLI 手动上传
 # publish:
