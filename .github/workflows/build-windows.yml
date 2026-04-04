@@ -78,7 +78,7 @@ jobs:
         run: |
           curl -fsSL https://github.com/cli/cli/releases/download/v2.63.0/gh_2.63.0_windows_amd64.zip -o gh.zip
           7z x gh.zip -o./gh_extracted
-          mv gh_extracted/gh_2.63.0_windows_amd64/gh.exe ./gh.exe
+          find gh_extracted -name "gh.exe" -exec mv {} ./gh.exe \;
 
       - name: Upload to Release via GitHub CLI
         shell: bash
