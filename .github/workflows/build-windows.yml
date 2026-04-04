@@ -15,6 +15,7 @@ jobs:
   build-and-upload:
     runs-on: windows-latest
     timeout-minutes: 120
+    permissions: write-all
 
     steps:
       - name: Checkout code
