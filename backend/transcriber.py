@@ -5,6 +5,16 @@ import re
 import os
 import platform
 
+# 显式导入 FunASR / ModelScope 以辅助 PyInstaller 检测依赖
+try:
+    import funasr
+    import funasr.auto
+    import funasr.pipelines
+    import modelscope
+    import modelscope.pipelines
+except ImportError:
+    pass  # 开发环境中这些包可能未安装
+
 # ================= 模型路径配置（支持 Electron 打包）=================
 # 通过环境变量 PODGIST_MODEL_DIR 指定模型根目录
 

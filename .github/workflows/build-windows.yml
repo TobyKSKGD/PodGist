@@ -55,6 +55,11 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
+      - name: Clean model cache
+        run: |
+          rm -rf ~/.cache/modelscope
+          rm -rf ~/AppData/Local/modelscope
+
       - name: Package backend with PyInstaller
         shell: bash
         run: pyinstaller --log-level=INFO backend/api.spec
