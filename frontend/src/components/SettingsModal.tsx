@@ -38,6 +38,8 @@ interface PackageInfo {
   installed: boolean;
   version: string | null;
   category: string;
+  is_gpu_torch?: boolean;
+  cuda_url?: string;
 }
 
 const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToast, onSaveSuccess }) => {
@@ -831,7 +833,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
                     <p className="text-sm font-medium text-slate-700 mb-1">一键安装核心依赖</p>
                     <p className="text-xs text-slate-500 mb-3">
                       安装所有必需的核心依赖包（不含 PyTorch GPU 版）。
-                      GPU 用户请手动下载 CUDA 版本的 PyTorch。
+                      NVIDIA 显卡用户可在下方单独安装 CUDA 版 PyTorch。
                     </p>
                     <button
                       onClick={handleInstallCorePackages}
@@ -861,69 +863,81 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {packages.map((pkg) => (
-                    <div key={pkg.id} className="border border-slate-200 rounded-lg p-4">
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-medium text-slate-800">{pkg.name}</span>
-                            {pkg.required && (
-                              <span className="text-xs bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded">必需</span>
-                            )}
-                            {pkg.is_cuda_separate && (
-                              <span className="text-xs bg-[#FFF7ED] text-[#C2410C] px-1.5 py-0.5 rounded">GPU 专用</span>
-                            )}
-                          </div>
-                          <p className="text-xs text-slate-500 mt-0.5">{pkg.description}</p>
-                          <div className="flex items-center gap-3 mt-1">
-                            <span className="text-xs text-slate-400">大小: {pkg.size_mb}</span>
-                            {pkg.installed && pkg.version && (
-                              <span className="text-xs text-[#00ADA6]">v{pkg.version}</span>
-                            )}
-                          </div>
-                          {pkg.is_cuda_separate && pkg.cuda_note && (
-                            <p className="text-xs text-[#C2410C] mt-1">{pkg.cuda_note}</p>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-2 ml-4">
-                          {pkg.installed ? (
+                  {packages.map((pkg) => {
+                    const isGpuTorch = pkg.is_gpu_torch === true;
+                    const cudaUrl = pkg.cuda_url;
+                    return (
+                      <div key={pkg.id} className={`border rounded-lg p-4 ${isGpuTorch ? 'border-orange-200 bg-orange-50/30' : 'border-slate-200'}`}>
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
                             <div className="flex items-center gap-2">
-                              <span className="text-xs text-[#00ADA6] flex items-center gap-1">
-                                <IconCircleCheck size={16} /> 已安装
-                              </span>
-                              {!pkg.required && (
-                                <button
-                                  onClick={() => handleUninstallPackage(pkg.id)}
-                                  className="text-xs text-slate-400 hover:text-red-500 transition-colors"
-                                  title="卸载"
-                                >
-                                  <IconTrash size={16} />
-                                </button>
+                              <span className="text-sm font-medium text-slate-800">{pkg.name}</span>
+                              {pkg.required ? (
+                                <span className="text-xs bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded">必需</span>
+                              ) : (
+                                <span className="text-xs bg-orange-100 text-orange-600 px-1.5 py-0.5 rounded">非必须</span>
+                              )}
+                              {(pkg.is_cuda_separate || isGpuTorch) && (
+                                <span className="text-xs bg-[#FFF7ED] text-[#C2410C] px-1.5 py-0.5 rounded">GPU 专用</span>
                               )}
                             </div>
-                          ) : (
-                            <button
-                              onClick={() => handleInstallPackage(pkg.id)}
-                              disabled={installingPackage !== null}
-                              className="bg-[#00ADA6] hover:bg-[#009A94] text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 flex items-center gap-1"
-                            >
-                              {installingPackage === pkg.id ? (
-                                <>
-                                  <IconLoader2 size={14} className="animate-spin" />
-                                  安装中
-                                </>
-                              ) : (
-                                <>
-                                  <IconDownload size={14} />
-                                  安装
-                                </>
+                            <p className="text-xs text-slate-500 mt-0.5">{pkg.description}</p>
+                            <div className="flex items-center gap-3 mt-1">
+                              <span className="text-xs text-slate-400">大小: {pkg.size_mb}</span>
+                              {pkg.installed && pkg.version && (
+                                <span className="text-xs text-[#00ADA6]">v{pkg.version}</span>
                               )}
-                            </button>
-                          )}
+                            </div>
+                            {cudaUrl && !pkg.installed && (
+                              <p className="text-xs text-orange-600 mt-1">
+                                需要 NVIDIA 显卡 + CUDA 驱动。
+                                <a href={cudaUrl} target="_blank" rel="noopener noreferrer" className="underline ml-1">查看安装说明 →</a>
+                              </p>
+                            )}
+                            {(pkg.is_cuda_separate || isGpuTorch) && pkg.cuda_note && (
+                              <p className="text-xs text-[#C2410C] mt-1">{pkg.cuda_note}</p>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 ml-4">
+                            {pkg.installed ? (
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs text-[#00ADA6] flex items-center gap-1">
+                                  <IconCircleCheck size={16} /> 已安装
+                                </span>
+                                {!pkg.required && (
+                                  <button
+                                    onClick={() => handleUninstallPackage(pkg.id)}
+                                    className="text-xs text-slate-400 hover:text-red-500 transition-colors"
+                                    title="卸载"
+                                  >
+                                    <IconTrash size={16} />
+                                  </button>
+                                )}
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => handleInstallPackage(pkg.id)}
+                                disabled={installingPackage !== null}
+                                className={`${isGpuTorch ? 'bg-orange-500 hover:bg-orange-600' : 'bg-[#00ADA6] hover:bg-[#009A94]'} text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 flex items-center gap-1`}
+                              >
+                                {installingPackage === pkg.id ? (
+                                  <>
+                                    <IconLoader2 size={14} className="animate-spin" />
+                                    安装中
+                                  </>
+                                ) : (
+                                  <>
+                                    <IconDownload size={14} />
+                                    安装
+                                  </>
+                                )}
+                              </button>
+                            )}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
