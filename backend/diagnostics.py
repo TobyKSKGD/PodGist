@@ -12,7 +12,6 @@
 
 import os
 import subprocess
-import torch
 from backend import get_ffmpeg_path
 
 
@@ -83,12 +82,18 @@ def test_hardware():
         tuple: (成功与否, 硬件状态消息)
     """
     hw_status = []
-    if torch.cuda.is_available():
-        hw_status.append("CUDA 可用")
-    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        hw_status.append("MPS 可用")
-    if not hw_status:
-        hw_status.append("仅 CPU")
+    try:
+        import torch
+        if torch.cuda.is_available():
+            hw_status.append("CUDA 可用")
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            hw_status.append("MPS 可用")
+        if not hw_status:
+            hw_status.append("仅 CPU")
+    except ImportError:
+        hw_status.append("PyTorch 未安装")
+    except Exception:
+        hw_status.append("硬件检测异常")
 
     return True, ", ".join(hw_status)
 
@@ -159,7 +164,7 @@ def test_ffmpeg():
             # 提取简短的版本号（取第二行，格式如 "ffmpeg version 8.1"）
             lines = [l for l in result.stdout.split('\n') if l.strip()]
             version_short = lines[1] if len(lines) > 1 else result.stdout.split('\n')[0].split('Copyright')[0].strip()
-            return True, version_short[:50]
+            return True, version_short[:60]
         else:
             return False, "安装但无法运行"
     except FileNotFoundError:

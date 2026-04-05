@@ -1,5 +1,4 @@
 import whisper
-import torch
 import subprocess
 import re
 import os
@@ -14,6 +13,14 @@ try:
     import modelscope.pipelines
 except ImportError:
     pass  # 开发环境中这些包可能未安装
+
+def _torch():
+    """Lazy import torch，只在真正需要时加载"""
+    try:
+        import torch
+        return torch
+    except ImportError:
+        raise ImportError("PyTorch 未安装，请在「偏好设置」中下载 PyTorch 依赖项")
 
 # ================= 模型路径配置（支持 Electron 打包）=================
 # 通过环境变量 PODGIST_MODEL_DIR 指定模型根目录
@@ -42,11 +49,16 @@ def get_available_devices():
     """
     devices = {"cpu": "CPU (基础处理器)"}
 
-    if torch.cuda.is_available():
-        device_name = torch.cuda.get_device_name(0)
+    try:
+        torch_local = _torch()
+    except ImportError:
+        return devices  # 只有 CPU，无 torch
+
+    if torch_local.cuda.is_available():
+        device_name = torch_local.cuda.get_device_name(0)
         devices["cuda"] = f"GPU: {device_name}"
 
-    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+    elif hasattr(torch_local.backends, "mps") and torch_local.backends.mps.is_available():
         try:
             # sysctl 是 macOS 特有命令，Windows/Linux 上不存在
             if platform.system() == 'Darwin':
@@ -71,18 +83,19 @@ def get_whisper_model(model_name="small", device_key="cpu"):
     返回:
         whisper.Whisper: 加载的 Whisper 模型实例
     """
+    torch_local = _torch()  # 确保 torch 已加载
     whisper_model_dir = get_whisper_model_dir()
 
     if whisper_model_dir:
         # 确保目录存在
         os.makedirs(whisper_model_dir, exist_ok=True)
         # 临时修改 torch hub 缓存目录
-        original_dir = torch.hub.get_dir()
+        original_dir = torch_local.hub.get_dir()
         try:
-            torch.hub.set_dir(whisper_model_dir)
+            torch_local.hub.set_dir(whisper_model_dir)
             model = whisper.load_model(model_name, device=device_key)
         finally:
-            torch.hub.set_dir(original_dir)
+            torch_local.hub.set_dir(original_dir)
         return model
     else:
         return whisper.load_model(model_name, device=device_key)
