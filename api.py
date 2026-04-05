@@ -4,13 +4,7 @@ import os
 import shutil
 import json
 import re
-def _torch():
-    """Lazy import torch，只在 GPU 检测时加载"""
-    try:
-        import torch
-        return torch
-    except ImportError:
-        raise ImportError("PyTorch 未安装，请在「偏好设置」中下载 PyTorch 依赖项")
+import torch
 import argparse
 from datetime import datetime
 from backend.diagnostics import run_all_diagnostics
@@ -171,10 +165,9 @@ async def transcribe_local(
 
         # 2. 选择计算设备
         if device == "auto":
-            torch_local = _torch()
-            if torch_local.cuda.is_available():
+            if torch.cuda.is_available():
                 device_key = "cuda"
-            elif hasattr(torch_local.backends, "mps") and torch_local.backends.mps.is_available():
+            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
                 device_key = "mps"
             else:
                 device_key = "cpu"
@@ -307,10 +300,9 @@ async def transcribe_url(
     try:
         # 3. 选择计算设备
         if device == "auto":
-            torch_local = _torch()
-            if torch_local.cuda.is_available():
+            if torch.cuda.is_available():
                 device_key = "cuda"
-            elif hasattr(torch_local.backends, "mps") and torch_local.backends.mps.is_available():
+            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
                 device_key = "mps"
             else:
                 device_key = "cpu"
