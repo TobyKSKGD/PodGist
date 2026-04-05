@@ -8,6 +8,7 @@
 import os
 import re
 import time
+import requests
 from typing import Optional
 
 # DashScope ASR API 配置
@@ -41,13 +42,6 @@ def clean_asr_text(text: str) -> str:
 def _upload_to_dashscope(audio_file_path: str, api_key: str) -> Optional[str]:
     """
     将本地音频文件上传到 DashScope，返回可访问的 URL。
-
-    参数:
-        audio_file_path: 本地音频文件路径
-        api_key: DashScope API Key
-
-    返回:
-        str: DashScope 上的文件 URL，失败返回 None
     """
     from dashscope import Files
 
@@ -64,8 +58,6 @@ def _upload_to_dashscope(audio_file_path: str, api_key: str) -> Optional[str]:
             return None
 
         file_id = upload_response.output['uploaded_files'][0]['file_id']
-
-        # 获取文件的访问 URL
         file_info = Files.get(file_id)
         if file_info.status_code != 200:
             print(f"[DashScope ASR] Get file info failed: {file_info.output}")
@@ -78,23 +70,83 @@ def _upload_to_dashscope(audio_file_path: str, api_key: str) -> Optional[str]:
         return None
 
 
+def _fetch_transcription_from_url(transcription_url: str) -> dict:
+    """
+    从 transcription_url 获取转录结果。
+    返回包含 text 和 sentences 的字典。
+    """
+    try:
+        resp = requests.get(transcription_url, timeout=30)
+        if resp.status_code != 200:
+            print(f"[DashScope ASR] Failed to fetch transcription: {resp.status_code}")
+            return {"text": "", "sentences": []}
+
+        data = resp.json()
+
+        # 解析 transcripts 结构
+        transcripts = data.get("transcripts", [])
+        if not transcripts:
+            return {"text": "", "sentences": []}
+
+        transcript = transcripts[0]  # 取第一个 channel
+        full_text = transcript.get("text", "")
+
+        # 提取句子级别时间戳（如果有的话）
+        sentences_data = transcript.get("sentences", [])
+        sentences = []
+
+        if sentences_data:
+            # sentences 格式: [{"begin_time": ..., "end_time": ..., "text": "..."}]
+            for sent in sentences_data:
+                sentences.append({
+                    "begin_time": sent.get("begin_time", 0),
+                    "end_time": sent.get("end_time", 0),
+                    "text": sent.get("text", "")
+                })
+        else:
+            # 没有句子级别时间戳，按固定间隔分段
+            # 尝试从 text 和 duration 估算
+            duration_ms = data.get("properties", {}).get("original_duration_in_milliseconds", 0)
+            if full_text and duration_ms > 0:
+                # 粗略分段：每 30 秒一个时间戳
+                chunk_duration = 30000
+                current_pos = 0
+                text_len = len(full_text)
+                chunk_size = text_len // (duration_ms // chunk_duration + 1)
+
+                while current_pos < text_len:
+                    end_pos = min(current_pos + chunk_size, text_len)
+                    # 找最后一个句号或逗号切分
+                    cut_pos = end_pos
+                    for p in range(min(end_pos, text_len - 1), current_pos, -1):
+                        if full_text[p] in '。！？，、':
+                            cut_pos = p + 1
+                            break
+
+                    chunk_text = full_text[current_pos:cut_pos].strip()
+                    if chunk_text:
+                        sentences.append({
+                            "begin_time": (current_pos * duration_ms) // text_len,
+                            "end_time": (cut_pos * duration_ms) // text_len,
+                            "text": chunk_text
+                        })
+                    current_pos = cut_pos
+
+        return {"text": full_text, "sentences": sentences}
+
+    except Exception as e:
+        print(f"[DashScope ASR] Error fetching transcription: {e}")
+        return {"text": "", "sentences": []}
+
+
 def _call_dashscope_asr(audio_url: str, api_key: str, model: str = DASHSCOPE_ASR_MODEL) -> dict:
     """
     调用 DashScope ASR API 进行语音识别。
-
-    参数:
-        audio_url: 音频文件的公开访问 URL
-        api_key: DashScope API Key
-        model: ASR 模型名称
-
-    返回:
-        dict: 包含 'text'（完整文本）和 'sentences'（分段时间戳）的字典
     """
     from dashscope import Transcription
 
     os.environ['DASHSCOPE_API_KEY'] = api_key
 
-    # 先尝试 qwen3-asr-flash
     task = Transcription.async_call(
         model=model,
         file_urls=[audio_url],
@@ -102,7 +154,6 @@ def _call_dashscope_asr(audio_url: str, api_key: str, model: str = DASHSCOPE_ASR
     )
 
     if task.status_code != 200:
-        # 如果 qwen3-asr-flash 失败，尝试 paraformer-v1
         if model == DASHSCOPE_ASR_MODEL:
             print(f"[DashScope ASR] {model} failed, trying {FALLBACK_ASR_MODEL}...")
             return _call_dashscope_asr(audio_url, api_key, model=FALLBACK_ASR_MODEL)
@@ -110,33 +161,23 @@ def _call_dashscope_asr(audio_url: str, api_key: str, model: str = DASHSCOPE_ASR
 
     task_id = task.output['task_id']
 
-    # 轮询等待结果
-    for _ in range(60):  # 最多等2分钟
+    for _ in range(60):
         result = Transcription.wait(task_id)
         status = result.output.task_status
 
         if status == 'SUCCEEDED':
-            # 解析结果
-            transcription_text = ""
-            sentences = []
+            # 从 transcription_url 获取实际转录内容
+            transcription_url = result.output.results[0].get('transcription_url')
+            if transcription_url:
+                return _fetch_transcription_from_url(transcription_url)
+            return {"text": "", "sentences": []}
 
-            for r in result.output.results:
-                transcription_text += r.get('transcription', '')
-                sentences.extend(r.get('sentences', []))
-
-            return {
-                "text": transcription_text,
-                "sentences": sentences
-            }
         elif status == 'FAILED':
             error_msg = result.output.message
             print(f"[DashScope ASR] Task failed: {error_msg}")
-
-            # 如果 qwen3-asr-flash 失败，尝试 paraformer-v1
             if model == DASHSCOPE_ASR_MODEL:
                 print(f"[DashScope ASR] Retrying with {FALLBACK_ASR_MODEL}...")
                 return _call_dashscope_asr(audio_url, api_key, model=FALLBACK_ASR_MODEL)
-
             return {"error": error_msg}
 
         time.sleep(2)
@@ -147,18 +188,10 @@ def _call_dashscope_asr(audio_url: str, api_key: str, model: str = DASHSCOPE_ASR
 def transcribe_with_dashscope(audio_file_path: str, api_key: str) -> str:
     """
     使用 DashScope ASR API 转录音频文件，返回带时间戳的文本。
-
-    参数:
-        audio_file_path: 音频文件路径
-        api_key: DashScope API Key
-
-    返回:
-        str: 带 [MM:SS] 格式时间戳的转录文本
     """
     if not api_key:
         raise ValueError("未配置 DashScope API Key，请在设置中添加 DASHSCOPE_API_KEY")
 
-    # 1. 上传文件到 DashScope
     print(f"[DashScope ASR] Uploading {audio_file_path}...")
     audio_url = _upload_to_dashscope(audio_file_path, api_key)
     if not audio_url:
@@ -170,10 +203,10 @@ def transcribe_with_dashscope(audio_file_path: str, api_key: str) -> str:
     if "error" in result:
         raise RuntimeError(f"ASR 转录失败: {result['error']}")
 
-    # 2. 解析结果，生成带时间戳的文本
+    # 生成带时间戳的文本
     lines = []
     for sent in result.get("sentences", []):
-        begin_time = int(sent.get('begin_time', 0))  # 毫秒
+        begin_time = int(sent.get('begin_time', 0))
         text = clean_asr_text(sent.get('text', ''))
 
         if text:
@@ -182,7 +215,6 @@ def transcribe_with_dashscope(audio_file_path: str, api_key: str) -> str:
             lines.append(f"[{minutes:02d}:{seconds:02d}] {text}")
 
     if not lines:
-        # 没有时间戳句子，尝试用完整文本
         text = clean_asr_text(result.get('text', ''))
         if text:
             lines.append(f"[00:00] {text}")
@@ -202,17 +234,13 @@ def get_available_devices():
 def transcribe_with_sensevoice(audio_file_path: str, device_key: str = "cpu") -> str:
     """
     兼容层：将 SenseVoice 接口重定向到 DashScope ASR。
-    device_key 参数被忽略（始终使用云端 API）。
     """
     api_key = get_dashscope_api_key()
     return transcribe_with_dashscope(audio_file_path, api_key)
 
 
 def transcribe_audio_to_timestamped_text(model, audio_file_path: str, device_key: str) -> str:
-    """
-    兼容层：将 Whisper 接口重定向到 DashScope ASR。
-    model 和 device_key 参数被忽略。
-    """
+    """兼容层：Whisper 接口重定向到 DashScope ASR。"""
     api_key = get_dashscope_api_key()
     return transcribe_with_dashscope(audio_file_path, api_key)
 
