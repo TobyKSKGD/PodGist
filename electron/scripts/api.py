@@ -151,7 +151,7 @@ async def transcribe_local(
         if not api_key:
             api_key = load_api_key()
         if not api_key:
-            raise HTTPException(status_code=400, detail="请提供 DeepSeek API Key")
+            raise HTTPException(status_code=400, detail="请提供 DashScope API Key")
 
         # 2. 选择计算设备
         if device == "auto":
@@ -254,7 +254,7 @@ async def transcribe_url(
     if not api_key:
         api_key = load_api_key()
     if not api_key:
-        raise HTTPException(status_code=400, detail="请提供 DeepSeek API Key")
+        raise HTTPException(status_code=400, detail="请提供 DashScope API Key")
 
     # 2. 根据类型选择下载方式
     if type == "bilibili":
@@ -966,7 +966,7 @@ async def search_podcast(request: dict):
         if not api_key:
             api_key = load_api_key()
         if not api_key:
-            raise HTTPException(status_code=400, detail="请先配置 DeepSeek API Key")
+            raise HTTPException(status_code=400, detail="请先配置 DashScope API Key")
 
         # 获取归档的转录文本
         archive_path = os.path.join(ARCHIVE_DIR, archive_id)
@@ -1124,7 +1124,7 @@ async def chat_stream(session_id: str, request: dict):
 
         api_key = load_api_key()
         if not api_key:
-            raise HTTPException(status_code=400, detail="请先配置 DeepSeek API Key")
+            raise HTTPException(status_code=400, detail="请先配置 DashScope API Key")
 
         # 保存用户消息
         add_chat_message(session_id, "user", query)
