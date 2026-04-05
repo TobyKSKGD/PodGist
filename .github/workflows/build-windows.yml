@@ -58,7 +58,7 @@ jobs:
           Write-Host "Backend scripts copied"
 
       - name: Build backend with PyInstaller
-        run: pyinstaller --noconsole --onedir backend/api.spec
+        run: pyinstaller backend/api.spec
         env:
           PYTHONOPTIMIZE: '1'
 
@@ -122,7 +122,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
         run: |
-          $tag = if ("${{ github.event.inputs.tag }}") { "${{ github.event.inputs.tag }}" } else { "${{ github.ref_name }}" }
+          # 固定上传到 v1.0.0
+          $tag = "v1.0.0"
           $installer = Get-ChildItem -Path "electron/release" -Filter "*.exe" -Recurse | Select-Object -First 1
           if (-not $installer) {
               Write-Host "ERROR: No installer found"
