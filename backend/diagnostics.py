@@ -159,7 +159,7 @@ def test_ffmpeg():
             # 提取简短的版本号（取第二行，格式如 "ffmpeg version 8.1"）
             lines = [l for l in result.stdout.split('\n') if l.strip()]
             version_short = lines[1] if len(lines) > 1 else result.stdout.split('\n')[0].split('Copyright')[0].strip()
-            return True, version_short[:50]
+            return True, version_short[:60]
         else:
             return False, "安装但无法运行"
     except FileNotFoundError:
