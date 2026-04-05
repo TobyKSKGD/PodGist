@@ -46,13 +46,13 @@ def test_dashscope_asr(api_key=None):
 
     try:
         from dashscope import Transcription
-        os.environ['DASHSCOPE_API_KEY'] = api_key
 
         # 用一个简单的测试音频 URL（DashScope 官方测试样本）
         response = Transcription.call(
             model='qwen3-asr-flash-2026-02-10',
             file_urls=['https://modelscope.cn/models/modelscope/speech_nlp_s3gru_asr_nat-zh8k/raw/main/nls_ms_zh_v3.flac'],
-            timestamp_alignment_enabled=True
+            timestamp_alignment_enabled=True,
+            api_key=api_key
         )
 
         # 注意：这个 URL 可能已失效，所以不依赖返回内容

@@ -1,9 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
-# PyInstaller spec for PodGist backend
+# PyInstaller spec for PodGist backend (云端 ASR 版)
 # 用于在 Windows Runner 上构建 Windows 后端可执行目录
 #
 # 构建命令: pyinstaller --noconsole --onedir backend/api.spec
-# 产物目录: backend/dist/start_electron/
+# 产物目录: backend/dist/api/
 
 import os
 import sys
@@ -24,14 +24,7 @@ a = Analysis(
         (os.path.join(project_root, 'api.py'), '.'),
     ],
     hiddenimports=[
-        # === FastAPI 核心 ===
-        'fastapi',
-        'fastapi.responses',
-        'fastapi.middleware.cors',
-        'starlette',
-        'starlette.responses',
-        'starlette.middleware',
-        'starlette.middleware.cors',
+        # === FastAPI / Uvicorn 核心 ===
         'uvicorn',
         'uvicorn.logging',
         'uvicorn.loops',
@@ -44,13 +37,22 @@ a = Analysis(
         'uvicorn.lifespan',
         'uvicorn.lifespan.on',
         'uvicorn.config',
+        'fastapi',
+        'fastapi.responses',
+        'fastapi.middleware.cors',
+        'starlette',
+        'starlette.responses',
+        'starlette.middleware',
+        'starlette.middleware.cors',
         # === Pydantic ===
         'pydantic',
         'pydantic.deprecated',
         'pydantic.deprecated.base',
-        'pydantic.deprecated.class_validators',
         'pydantic.v1',
         'pydantic_settings',
+        # === SSE ===
+        'sse_starlette',
+        'sse_starlette.sse',
         # === 核心依赖 ===
         'dashscope',
         'httpx',
@@ -60,65 +62,33 @@ a = Analysis(
         'jinja2',
         'itsdangerous',
         'sniffio',
-        # === AI / 语音 ===
-        'whisper',
-        'torch',
-        'torchaudio',
-        'modelscope',
-        'modelscope.pipelines',
-        'modelscope.pipelines.builder',
-        'modelscope.utils',
-        'modelscope.utils.constant',
-        'modelscope.utils.download',
-        'funaudio',
-        'funasr',
-        'funasr.auto',
-        'funasr.pipelines',
-        'funasr.models',
-        'funasr.models.sense_voice',
-        'funasr-pipeline',
-        'funasr.utils',
-        'funasr.utils.download',
-        'funasr.bin',
-        'modelscope.pipelines.audio',
-        'modelscope.pipelines.auto_speech_recognition',
         'pydub',
-        # === RAG / 向量 ===
+        # === RAG / 向量数据库 ===
         'chromadb',
         'chromadb.api',
         'chromadb.config',
         'chromadb.client',
         'chromadb.collection',
-        'sentence_transformers',
-        'sentence_transformers.cross_encoder',
+        'chromadb.rust_bindings',
+        'grpcio',
+        'opentelemetry',
+        'opentelemetry.api',
+        'opentelemetry.sdk',
+        'opentelemetry.exporter.otlp.proto.grpc',
         # === 下载器 ===
         'yt_dlp',
         'yt_dlp.utils',
         'yt_dlp.compat',
-        # === 数据库 ===
-        'sqlite3',
+        # === 其他工具 ===
+        'tokenizers',
+        'numpy',
         'json',
+        'sqlite3',
         'hashlib',
         'datetime',
         'uuid',
-        # === 其他 ===
-        'numpy',
-        'nvidia',
-        'nvidia.cudnn',
-        'nvidia.cuda_runtime',
-        'nvidia.cuda_runtime.driver',
-        'nvidia.cuda_runtime.events',
-        'nvidia.cufft',
-        'nvidia.curand',
-        'nvidia.cublas',
-        'nvidia.cusolver',
-        'nvidia.cusparse',
-        'nvidia.nccl',
-        'triton',
-        'safetensors',
-        'tokenizers',
-        'sse_starlette',
-        'sse_starlette.sse',
+        'struct',
+        'asyncio',
     ],
     win_no_prefer_redirects=False,
     cipher=block_cipher,
@@ -143,7 +113,6 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    exclude=['matplotlib', 'tkinter', 'PyQt5'],  # 排除不需要的巨大模块
 )
 
 coll = COLLECT(
@@ -156,3 +125,15 @@ coll = COLLECT(
     upx_exclude=[],
     name='api',
 )
+
+import shutil
+import os
+# 将 dist/api 复制到项目根目录的 dist/api（供 electron-builder 使用）
+src = os.path.join(project_root, 'backend', 'dist', 'api')
+dst = os.path.join(project_root, 'dist', 'api')
+if os.path.exists(src):
+    shutil.rmtree(dst, ignore_errors=True)
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    shutil.copytree(src, dst)
+    print(f"Copied {src} -> {dst}")
+
