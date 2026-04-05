@@ -48,7 +48,6 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
   const [diagnosticsError, setDiagnosticsError] = useState('');
   const [apiIconKey, setApiIconKey] = useState('');
-  const [dashscopeApiKey, setDashscopeApiKey] = useState('');
   const [selectedEngine, setSelectedEngine] = useState('SenseVoice');
   const [whisperModel, setWhisperModel] = useState('small');
   const [selectedDevice, setSelectedDevice] = useState('auto');
@@ -103,7 +102,6 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
       if (response.data.status === 'success') {
         const data = response.data.data;
         setApiIconKey(data.api_key || '');
-        setDashscopeApiKey(data.dashscope_api_key || '');
         setSelectedEngine(data.engine || 'SenseVoice');
         setWhisperModel(data.whisper_model || 'small');
         setSelectedDevice(data.device || 'auto');
@@ -346,7 +344,6 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
     try {
       const formData = new FormData();
       formData.append('api_key', apiIconKey);
-      formData.append('dashscope_api_key', dashscopeApiKey);
       formData.append('engine', selectedEngine);
       formData.append('whisper_model', whisperModel);
       formData.append('device', selectedDevice);
@@ -451,33 +448,6 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
                   className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#00ADA6]/50 focus:border-[#00ADA6] transition-all"
                 />
                 <p className="text-xs text-slate-400">您的密钥仅保存在本地 .env 文件中，绝不上传。</p>
-              </div>
-
-              {/* DashScope API Key */}
-              <div className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <label className="text-sm font-medium text-slate-700">DashScope API Key（语音识别）</label>
-                  <div className="relative group">
-                    <IconHelp size={16} className="text-slate-400 cursor-help" />
-                    <div className="absolute left-0 top-6 w-72 p-3 bg-slate-800 text-white text-xs rounded-lg shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 space-y-2">
-                      <p className="font-medium text-white">如何获取 DashScope API Key？</p>
-                      <ol className="list-decimal list-inside space-y-1 text-slate-300">
-                        <li>访问 <a href="https://dashscope.console.aliyun.com/apiKey" target="_blank" rel="noopener noreferrer" className="text-[#00ADA6] hover:underline">阿里云 DashScope</a></li>
-                        <li>创建 API Key（支持通义千问系列模型）</li>
-                        <li>复制密钥（sk-...）并粘贴到下方</li>
-                      </ol>
-                      <p className="text-slate-400 text-[10px] pt-1 border-t border-slate-600">用于云端语音转文字（Qwen3-ASR-Flash）</p>
-                    </div>
-                  </div>
-                </div>
-                <input
-                  type="password"
-                  placeholder="sk-..."
-                  value={dashscopeApiKey}
-                  onChange={(e) => setDashscopeApiKey(e.target.value)}
-                  className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#00ADA6]/50 focus:border-[#00ADA6] transition-all"
-                />
-                <p className="text-xs text-slate-400">云端语音识别，无需本地模型。密钥仅保存在本地。</p>
               </div>
               <button
                 onClick={saveSettings}

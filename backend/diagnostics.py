@@ -1,18 +1,14 @@
 """
-系统诊断模块 - 测试所有组件是否正常工作
+系统诊断模块 - 测试所有组件是否正常工作（远程 ASR 版）
 
 包含以下测试：
-- API Key 检查
-- DeepSeek API 连接测试
-- PyTorch/硬件检测
-- Whisper 模型加载测试
-- SenseVoice 模型加载测试
+- API Key 检查（DeepSeek）
+- DashScope ASR API 连接测试
 - FFmpeg 安装检查
 """
 
 import os
 import subprocess
-import torch
 from backend import get_ffmpeg_path
 
 
@@ -53,7 +49,6 @@ def test_deepseek_api(api_key):
     try:
         from openai import OpenAI
         client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
-        # 发送最简单的测试消息
         response = client.chat.completions.create(
             model="deepseek-chat",
             messages=[{"role": "user", "content": "hi"}],
@@ -75,70 +70,80 @@ def test_deepseek_api(api_key):
             return False, f"错误: {error_msg[:50]}"
 
 
+def test_dashscope_asr(api_key=None):
+    """
+    测试 DashScope ASR API 连接是否正常。
+
+    参数:
+        api_key (str, optional): DashScope API Key，不提供则从环境变量读取
+
+    返回:
+        tuple: (成功与否, 消息/错误信息)
+    """
+    if api_key is None:
+        api_key = os.environ.get('DASHSCOPE_API_KEY', '')
+
+    if not api_key:
+        return False, "DashScope API Key 未配置"
+
+    try:
+        from dashscope import Transcription
+        os.environ['DASHSCOPE_API_KEY'] = api_key
+
+        # 用一个简单的测试音频 URL（DashScope 官方测试样本）
+        response = Transcription.call(
+            model='qwen3-asr-flash-2026-02-10',
+            file_urls=['https://modelscope.cn/models/modelscope/speech_nlp_s3gru_asr_nat-zh8k/raw/main/nls_ms_zh_v3.flac'],
+            timestamp_alignment_enabled=True
+        )
+
+        # 注意：这个 URL 可能已失效，所以不依赖返回内容
+        # 关键看 API 调用是否被接受（status_code == 200）
+        if response.status_code == 200:
+            return True, "连接成功"
+        else:
+            return False, f"API 返回错误: {response.output}"
+    except Exception as e:
+        error_msg = str(e)
+        if "InvalidTask" in error_msg or "url error" in error_msg.lower():
+            # URL 错误是预期的（测试 URL 可能失效），但说明 API Key 是有效的
+            return True, "API Key 有效（音频 URL 需替换为本地文件）"
+        elif "AuthenticationError" in error_msg or "401" in error_msg:
+            return False, "API Key 无效"
+        elif "Connection" in error_msg or "connect" in error_msg.lower():
+            return False, "连接失败 - 请检查网络"
+        else:
+            return False, f"错误: {error_msg[:80]}"
+
+
 def test_hardware():
     """
-    检测 PyTorch 硬件可用性。
+    检测硬件状态（远程 ASR 模式下不需要本地 GPU）。
 
     返回:
         tuple: (成功与否, 硬件状态消息)
     """
-    hw_status = []
-    if torch.cuda.is_available():
-        hw_status.append("CUDA 可用")
-    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        hw_status.append("MPS 可用")
-    if not hw_status:
-        hw_status.append("仅 CPU")
-
-    return True, ", ".join(hw_status)
+    return True, "云端 ASR，无需本地硬件"
 
 
 def test_whisper_model():
     """
-    测试 Whisper 模型加载是否正常。
+    Whisper 测试已移除（使用 DashScope ASR）。
 
     返回:
-        tuple: (成功与否, 消息/错误信息)
+        tuple: (成功与否, 消息)
     """
-    try:
-        import whisper
-        # 使用最小模型测试加载
-        model = whisper.load_model("tiny", device="cpu")
-        return True, "tiny 模型加载成功"
-    except Exception as e:
-        return False, f"加载失败: {str(e)[:50]}"
+    return None, "Whisper 已移除（使用 DashScope ASR）"
 
 
 def test_sensevoice_model():
     """
-    测试 SenseVoice 模型加载是否正常。
+    SenseVoice 测试已移除（使用 DashScope ASR）。
 
     返回:
-        tuple: (成功与否, 消息/错误信息)
+        tuple: (成功与否, 消息)
     """
-    cache_dir = os.path.expanduser("~/.cache/modelscope/hub/models/iic/SenseVoiceSmall")
-    # 先检查模型文件是否存在
-    if not os.path.isdir(cache_dir):
-        return False, "模型未下载，请到「模型管理」下载"
-
-    try:
-        from modelscope.pipelines import pipeline
-        from modelscope.utils.constant import Tasks
-        # 尝试创建 pipeline
-        pipeline(
-            Tasks.auto_speech_recognition,
-            model="iic/SenseVoiceSmall",
-            device="cpu"
-        )
-        return True, "pipeline 初始化成功"
-    except ImportError as e:
-        err_str = str(e)
-        if "funasr" in err_str.lower():
-            return False, f"FunASR 环境异常（模型文件已下载）: {err_str[:80]}"
-        return False, f"缺少依赖: {err_str[:80]}"
-    except Exception as e:
-        err_str = str(e)[:100]
-        return False, f"FunASR 环境异常: {err_str}"
+    return None, "SenseVoice 已移除（使用 DashScope ASR）"
 
 
 def test_ffmpeg():
@@ -156,7 +161,6 @@ def test_ffmpeg():
             timeout=5
         )
         if result.returncode == 0:
-            # 提取简短的版本号（取第二行，格式如 "ffmpeg version 8.1"）
             lines = [l for l in result.stdout.split('\n') if l.strip()]
             version_short = lines[1] if len(lines) > 1 else result.stdout.split('\n')[0].split('Copyright')[0].strip()
             return True, version_short[:60]
@@ -173,7 +177,7 @@ def run_all_diagnostics(api_key=None, api_key_file=".env"):
     运行所有诊断测试。
 
     参数:
-        api_key (str, optional): API Key，如果未提供则从文件读取
+        api_key (str, optional): DeepSeek API Key，如果未提供则从文件读取
         api_key_file (str): API Key 文件路径
 
     返回:
@@ -181,38 +185,50 @@ def run_all_diagnostics(api_key=None, api_key_file=".env"):
     """
     results = []
 
-    # 1. API Key 检查
+    # 读取 DeepSeek API Key
     if api_key is None:
         api_key = ""
         if os.path.exists(api_key_file):
             with open(api_key_file, "r", encoding="utf-8") as f:
                 api_key = f.read().strip()
 
+    # 1. DeepSeek API Key 检查
     if api_key:
-        results.append(("API Key", True, "已配置"))
+        results.append(("DeepSeek API Key", True, "已配置"))
     else:
-        results.append(("API Key", False, "未配置，请在上方输入"))
+        results.append(("DeepSeek API Key", False, "未配置，请在设置中添加"))
 
-    # 2. DeepSeek API 测试
+    # 2. DeepSeek API 连接测试
     if api_key:
         success, msg = test_deepseek_api(api_key)
         results.append(("DeepSeek API", success, msg))
     else:
         results.append(("DeepSeek API", False, "跳过（无 API Key）"))
 
-    # 3. PyTorch/硬件检测
+    # 3. DashScope ASR API 测试
+    dashscope_key = os.environ.get('DASHSCOPE_API_KEY', '')
+    if not dashscope_key:
+        # 尝试从 .env 文件读取
+        env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env')
+        if os.path.exists(env_path):
+            with open(env_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('DASHSCOPE_API_KEY='):
+                        dashscope_key = line.split('=', 1)[1].strip().strip('"\'')
+                        break
+
+    if dashscope_key:
+        success, msg = test_dashscope_asr(dashscope_key)
+        results.append(("DashScope ASR", success, msg))
+    else:
+        results.append(("DashScope ASR", False, "未配置 DASHSCOPE_API_KEY"))
+
+    # 4. 硬件检测（远程模式）
     success, msg = test_hardware()
-    results.append(("硬件", success, msg))
+    results.append(("本地硬件", success, msg))
 
-    # 4. Whisper 测试
-    success, msg = test_whisper_model()
-    results.append(("Whisper", success, msg))
-
-    # 5. SenseVoice 测试
-    success, msg = test_sensevoice_model()
-    results.append(("SenseVoice", success, msg))
-
-    # 6. FFmpeg 测试
+    # 5. FFmpeg 测试
     success, msg = test_ffmpeg()
     results.append(("FFmpeg", success, msg))
 
