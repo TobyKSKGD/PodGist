@@ -45,16 +45,17 @@ jobs:
         run: pip install pyinstaller
 
       - name: Copy clean backend scripts
-        shell: bash
+        shell: pwsh
         run: |
-          cp electron/scripts/backend/transcriber.py backend/transcriber.py
-          cp electron/scripts/backend/llm_agent.py backend/llm_agent.py
-          cp electron/scripts/backend/rag_retriever.py backend/rag_retriever.py
-          cp electron/scripts/backend/diagnostics.py backend/diagnostics.py
-          cp electron/scripts/backend/worker.py backend/worker.py
-          cp electron/scripts/backend/__init__.py backend/__init__.py
-          cp electron/scripts/backend/start_electron.py backend/start_electron.py
-          cp electron/scripts/api.py api.py
+          Copy-Item "electron/scripts/backend/transcriber.py" "backend/transcriber.py" -Force
+          Copy-Item "electron/scripts/backend/llm_agent.py" "backend/llm_agent.py" -Force
+          Copy-Item "electron/scripts/backend/rag_retriever.py" "backend/rag_retriever.py" -Force
+          Copy-Item "electron/scripts/backend/diagnostics.py" "backend/diagnostics.py" -Force
+          Copy-Item "electron/scripts/backend/worker.py" "backend/worker.py" -Force
+          Copy-Item "electron/scripts/backend/__init__.py" "backend/__init__.py" -Force
+          Copy-Item "electron/scripts/backend/start_electron.py" "backend/start_electron.py" -Force
+          Copy-Item "electron/scripts/api.py" "api.py" -Force
+          Write-Host "Backend scripts copied"
 
       - name: Build backend with PyInstaller
         run: pyinstaller --noconsole --onedir backend/api.spec
@@ -62,10 +63,17 @@ jobs:
           PYTHONOPTIMIZE: '1'
 
       - name: Copy api dist to electron/dist
-        shell: bash
+        shell: pwsh
         run: |
-          mkdir -p electron/dist
-          cp -r backend/dist/api electron/dist/api
+          New-Item -ItemType Directory -Force -Path "electron/dist" | Out-Null
+          if (Test-Path "backend/dist/api") {
+            Copy-Item "backend/dist/api/*" "electron/dist/api/" -Recurse -Force
+            Write-Host "Copied backend/dist/api -> electron/dist/api"
+          } else {
+            Write-Host "ERROR: backend/dist/api not found!"
+            Get-ChildItem "backend/dist" -Recurse
+            exit 1
+          }
 
       - name: Download ffmpeg for Windows
         shell: pwsh
