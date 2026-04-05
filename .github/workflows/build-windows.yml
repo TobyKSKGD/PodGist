@@ -24,8 +24,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: electron/package-lock.json
+
+      - name: Build frontend
+        run: |
+          npm install
+          npm run build
+        working-directory: frontend
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -40,10 +44,9 @@ jobs:
       - name: Install PyInstaller
         run: pip install pyinstaller
 
-      - name: Copy backend scripts to electron/scripts
+      - name: Copy clean backend scripts
         shell: bash
         run: |
-          # electron/scripts 已经是干净版本，直接用
           cp electron/scripts/backend/transcriber.py backend/transcriber.py
           cp electron/scripts/backend/llm_agent.py backend/llm_agent.py
           cp electron/scripts/backend/rag_retriever.py backend/rag_retriever.py
