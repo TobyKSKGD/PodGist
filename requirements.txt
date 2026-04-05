@@ -20,6 +20,9 @@ sse-starlette>=1.8.0
 Pillow>=10.0.0
 typer>=0.9.0
 
+# ================= RAG 向量数据库 =================
+chromadb>=1.5.5
+
 # ================= 开发与调试 =================
 # 注意：移除 torch/whisper/modelscope/funasr 等本地模型依赖
 # 安装方式：pip install -r requirements.txt

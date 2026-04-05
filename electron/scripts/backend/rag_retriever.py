@@ -76,6 +76,7 @@ def generate_chat_response(
     )
 
     # Step 3: 提取引用信息（包含 archive_name 和 timestamp）
+    # 构建 {archive_id: {archive_name, timestamp}} 映射，取每个归档的第一个时间戳
     archive_refs: dict[str, dict] = {}
     for c in chunks:
         aid = c["archive_id"]
@@ -108,7 +109,9 @@ def generate_chat_response(
         prev_content = ""
         for chunk in stream_response:
             if chunk.status_code == HTTPStatus.OK:
+                # incremental_output=True 时，content 是累积的增量
                 content = chunk.output.choices[0].message.content or ""
+                # 提取得新增的部分
                 token = content[len(prev_content):] if content.startswith(prev_content) else content
                 full_content += token
                 prev_content = content
@@ -155,15 +158,18 @@ def extract_references_from_response(content: str, referenced_archives: list[str
     archive_name_to_id = {}
 
     for archive_name, timestamp in matches:
+        # 惰性获取 archive_id（需要查表或前端传）
         if archive_name not in archive_name_to_id:
             from backend.rag_db import get_db_connection
             conn = get_db_connection()
             cursor = conn.cursor()
+            # 模糊匹配（归档目录名通常包含原始名）
             cursor.execute(
                 "SELECT id FROM chat_references WHERE archive_id LIKE ? LIMIT 1",
                 (f"%{archive_name}%",)
             )
-            archive_name_to_id[archive_name] = archive_name
+            # 实际上需要通过 ChromaDB metadata 反查，这里暂时用名称匹配
+            archive_name_to_id[archive_name] = archive_name  # 降级：存名称
 
         refs.append({
             "archive_name": archive_name,

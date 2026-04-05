@@ -19,7 +19,7 @@ sys.path.insert(0, current_dir)
 
 # 导入项目模块
 from backend import task_queue
-from backend.transcriber import transcribe_with_sensevoice, transcribe_audio_to_timestamped_text, get_whisper_model
+from backend.transcriber import transcribe_with_sensevoice
 from backend.llm_agent import get_podcast_summary_robust
 from backend.downloader import route_and_download
 
@@ -227,37 +227,13 @@ def process_single_task(task, api_key):
         task_queue.update_task_name(task_id, title)
         task_queue.update_progress_status(task_id, "音频获取成功")
 
-        # 步骤 2: 转录
+        # 步骤 2: 转录（使用 DashScope 云端 ASR）
         print(f"[Worker] 转录中: {title}")
-        engine_name = "SenseVoice" if engine == "sensevoice" else "Whisper"
-        task_queue.update_progress_status(task_id, f"正在调用 {engine_name} 转录...")
+        task_queue.update_progress_status(task_id, "正在调用 DashScope ASR 转录...")
 
-        if engine == "sensevoice":
-            # 选择设备
-            import torch
-            if torch.cuda.is_available():
-                device_key = "cuda"
-            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                device_key = "mps"
-            else:
-                device_key = "cpu"
+        podcast_text = transcribe_with_sensevoice(audio_file_path)
 
-            podcast_text = transcribe_with_sensevoice(audio_file_path, device_key)
-        else:
-            # Whisper
-            import whisper
-            import torch
-            if torch.cuda.is_available():
-                device_key = "cuda"
-            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                device_key = "mps"
-            else:
-                device_key = "cpu"
-
-            model = get_whisper_model("small", device_key)
-            podcast_text = transcribe_audio_to_timestamped_text(model, audio_file_path, device_key)
-
-        task_queue.update_progress_status(task_id, f"{engine_name} 转录完成")
+        task_queue.update_progress_status(task_id, "DashScope ASR 转录完成")
 
         # 步骤 3: 清理音频文件
         if os.path.exists(audio_file_path) and task_type != "local":
@@ -444,14 +420,8 @@ def worker_loop():
                 task_queue.mark_failed(task_id, error_msg)
                 print(f"[Worker] 任务 {task_id[:8]} 失败: {error_msg[:100]}")
 
-            # 显存清理
+            # 显存清理（DashScope 模式无需 GPU 显存管理）
             gc.collect()
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            except:
-                pass
 
         except KeyboardInterrupt:
             print("[Worker] 收到中断信号，退出")

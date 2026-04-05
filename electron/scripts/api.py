@@ -4,11 +4,10 @@ import os
 import shutil
 import json
 import re
-import torch
 import argparse
 from datetime import datetime
 from backend.diagnostics import run_all_diagnostics
-from backend.transcriber import transcribe_with_sensevoice, transcribe_audio_to_timestamped_text, get_whisper_model, get_available_devices
+from backend.transcriber import transcribe_with_sensevoice, get_available_devices
 from backend.llm_agent import get_podcast_summary_robust, search_in_podcast
 from backend.downloader import route_and_download, detect_platform, AudioDownloader
 from backend.task_queue import add_task, get_task, get_all_tasks, get_queue_stats, update_task_status, delete_task, clear_completed
@@ -20,7 +19,6 @@ from backend.rag_db import (
     index_archive, delete_archive_vectors, get_archives_by_tag, init_db as init_rag_db
 )
 from backend.rag_retriever import generate_chat_response
-from backend.model_manager import get_all_models_status, download_model, get_manual_download_info, get_model_path
 from sse_starlette.sse import EventSourceResponse
 import asyncio
 
@@ -153,25 +151,8 @@ async def transcribe_local(
         if not api_key:
             raise HTTPException(status_code=400, detail="请提供 DashScope API Key")
 
-        # 2. 选择计算设备
-        if device == "auto":
-            if torch.cuda.is_available():
-                device_key = "cuda"
-            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                device_key = "mps"
-            else:
-                device_key = "cpu"
-        else:
-            device_key = device
-
-        # 3. 转录（根据选择的引擎）
-        if engine == "SenseVoice":
-            # SenseVoice 转录
-            podcast_text = transcribe_with_sensevoice(file_path, device_key)
-        else:
-            # Whisper 转录 - 使用前端指定的模型规模
-            model = get_whisper_model(whisper_model, device_key)
-            podcast_text = transcribe_audio_to_timestamped_text(model, file_path, device_key)
+        # 2. 转录（使用 DashScope 云端 ASR）
+        podcast_text = transcribe_with_sensevoice(file_path)
 
         # 4. 调用大模型生成摘要（使用前端指定的时间轴上限）
         summary = get_podcast_summary_robust(api_key, podcast_text, max_timeline_items=max_timeline_items)
@@ -288,23 +269,8 @@ async def transcribe_url(
     title = download_result.get('title', 'unknown')
 
     try:
-        # 3. 选择计算设备
-        if device == "auto":
-            if torch.cuda.is_available():
-                device_key = "cuda"
-            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                device_key = "mps"
-            else:
-                device_key = "cpu"
-        else:
-            device_key = device
-
-        # 4. 转录（根据选择的引擎）
-        if engine == "SenseVoice":
-            podcast_text = transcribe_with_sensevoice(file_path, device_key)
-        else:
-            model = get_whisper_model(whisper_model, device_key)
-            podcast_text = transcribe_audio_to_timestamped_text(model, file_path, device_key)
+        # 3. 转录（使用 DashScope 云端 ASR）
+        podcast_text = transcribe_with_sensevoice(file_path)
 
         # 5. 调用大模型生成摘要
         summary = get_podcast_summary_robust(api_key, podcast_text, max_timeline_items=max_timeline_items)
@@ -496,123 +462,20 @@ def run_diagnostics():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ================= 模型管理 API =================
+# ================= 模型管理 API（云端模式，无需本地模型）=================
 
-# 4.1 获取所有模型状态
 @app.get("/api/models/status")
 def get_models_status():
-    """获取所有模型的状态"""
-    try:
-        return {"status": "success", "data": get_all_models_status()}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    """本地模型已停用，统一使用 DashScope 云端 ASR"""
+    return {"status": "success", "data": []}
 
-# 4.2 获取手动下载信息
 @app.get("/api/models/manual-download/{model_name}")
 def get_manual_download(model_name: str):
-    """获取手动下载链接和说明"""
-    try:
-        info = get_manual_download_info(model_name)
-        if "error" in info:
-            raise HTTPException(status_code=404, detail=info["error"])
-        return {"status": "success", "data": info}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    raise HTTPException(status_code=404, detail="本地模型已停用，使用 DashScope 云端 ASR")
 
-# 4.3 删除模型
 @app.delete("/api/models/{model_name}")
 def delete_model(model_name: str):
-    """删除指定模型"""
-    try:
-        # 验证模型名称
-        valid_models = [
-            "whisper-tiny", "whisper-base", "whisper-small", "whisper-medium",
-            "whisper-large-v3", "whisper-large-v3-turbo",
-            "sensevoice", "all-MiniLM-L6-v2"
-        ]
-        if model_name not in valid_models:
-            raise HTTPException(status_code=400, detail=f"未知模型: {model_name}")
-
-        model_path = get_model_path(model_name)
-        if os.path.exists(model_path):
-            if os.path.isdir(model_path):
-                import shutil
-                shutil.rmtree(model_path)
-            else:
-                os.remove(model_path)
-            return {"status": "success", "message": f"{model_name} 已删除", "path": model_path}
-        else:
-            raise HTTPException(status_code=404, detail="模型文件不存在")
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# 4.4 下载模型（SSE 流式进度）
-@app.get("/api/models/download/{model_name}")
-async def download_model_stream(model_name: str):
-    """
-    下载指定模型，通过 SSE 流式返回进度
-    """
-    try:
-        # 验证模型名称
-        valid_models = [
-            "whisper-tiny", "whisper-base", "whisper-small", "whisper-medium",
-            "whisper-large-v3", "whisper-large-v3-turbo",
-            "sensevoice", "all-MiniLM-L6-v2"
-        ]
-        if model_name not in valid_models:
-            raise HTTPException(status_code=400, detail=f"未知模型: {model_name}")
-
-        # 进度收集器（线程安全）
-        import threading
-        progress_lock = threading.Lock()
-        progress_data = {"type": "starting", "downloaded_mb": 0, "total_mb": 0, "percent": 0}
-        download_done = False
-        download_result = None
-
-        def progress_callback(event):
-            nonlocal download_done, download_result
-            with progress_lock:
-                progress_data.update(event)
-            if event.get("type") in ("error", "success"):
-                download_done = True
-                download_result = event
-
-        async def event_generator():
-            nonlocal download_done, download_result
-
-            # 先发送一个起始事件
-            yield {"event": "progress", "data": json.dumps(progress_data)}
-
-            # 在线程池中执行下载
-            import concurrent.futures
-            loop = asyncio.get_event_loop()
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(download_model, model_name, progress_callback)
-                # 等待下载完成，每 0.5 秒 yield 一次进度
-                while not future.done():
-                    await asyncio.sleep(0.5)
-                    with progress_lock:
-                        data = dict(progress_data)
-                    yield {"event": "progress", "data": json.dumps(data)}
-
-                # 下载完成，获取最终结果
-                final_result = future.result()
-                with progress_lock:
-                    if download_result:
-                        final_result = download_result
-
-                yield {"event": "done", "data": json.dumps(final_result)}
-
-        return EventSourceResponse(event_generator())
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    raise HTTPException(status_code=404, detail="本地模型已停用，使用 DashScope 云端 ASR")
 
 
 # 5. 获取可用硬件设备列表
@@ -643,18 +506,11 @@ def get_devices():
 def get_settings():
     api_key = load_api_key()
     config = load_config()
-    # 获取可用设备列表
-    devices = get_available_devices()
-    device_list = [{"key": k, "name": v} for k, v in devices.items()]
     return {
         "status": "success",
         "data": {
             "api_key": api_key,
-            "engine": config.get("engine", "SenseVoice"),
-            "whisper_model": config.get("whisper_model", "small"),
-            "device": config.get("device", "auto"),
-            "max_timeline_items": config.get("max_timeline_items", 15),
-            "available_devices": device_list
+            "max_timeline_items": config.get("max_timeline_items", 15)
         }
     }
 
@@ -663,9 +519,6 @@ def get_settings():
 @app.post("/api/settings")
 def save_settings(
     api_key: str = Form(""),
-    engine: str = Form("SenseVoice"),
-    whisper_model: str = Form("small"),
-    device: str = Form("auto"),
     max_timeline_items: int = Form(15)
 ):
     try:
@@ -673,11 +526,8 @@ def save_settings(
         with open(ENV_FILE, "w", encoding="utf-8") as f:
             f.write(api_key.strip())
 
-        # 保存所有配置到 config.json
+        # 保存配置到 config.json
         config = load_config()
-        config["engine"] = engine
-        config["whisper_model"] = whisper_model
-        config["device"] = device
         config["max_timeline_items"] = max_timeline_items
         save_config(config)
 
@@ -751,7 +601,6 @@ def get_single_task(task_id: str):
 async def create_task(
     source: str = Form(...),
     task_type: str = Form(...),
-    engine: str = Form("SenseVoice"),
     max_timeline_items: int = Form(15),
     name: str = Form("")
 ):
@@ -761,13 +610,9 @@ async def create_task(
         if not is_worker_running():
             start_worker()
 
-        # 转换引擎名称
-        engine_key = "sensevoice" if engine == "SenseVoice" else "whisper"
-
         task_id = add_task(
             source=source,
             task_type=task_type,
-            engine=engine_key,
             max_timeline_items=max_timeline_items,
             name=name if name else None
         )
