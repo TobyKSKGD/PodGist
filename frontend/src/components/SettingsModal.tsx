@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
-import { IconX, IconKey, IconCpu, IconActivity, IconCircleCheck, IconCircleX, IconLoader2, IconHelp, IconDownload, IconFile, IconChevronDown, IconChevronRight, IconTrash } from '@tabler/icons-react';
+import { IconX, IconKey, IconCpu, IconActivity, IconCircleCheck, IconCircleX, IconLoader2, IconHelp, IconDownload, IconFile, IconChevronDown, IconChevronRight, IconTrash, IconPackage, IconSparkles } from '@tabler/icons-react';
 import ConfirmDialog from './ConfirmDialog';
 
 interface SettingsModalProps {
@@ -27,6 +27,19 @@ interface ModelInfo {
   group: string | null;
 }
 
+interface PackageInfo {
+  id: string;
+  name: string;
+  description: string;
+  size_mb: string;
+  required: boolean;
+  is_cuda_separate: boolean;
+  cuda_note: string;
+  installed: boolean;
+  version: string | null;
+  category: string;
+}
+
 const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToast, onSaveSuccess }) => {
   const [activeMenu, setActiveMenu] = useState('core');
   const [diagnostics, setDiagnostics] = useState<Array<{name: string, success: boolean, message: string}>>([]);
@@ -49,6 +62,12 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
   const [expandedWhisper, setExpandedWhisper] = useState(false);
   const [deleteConfirmModel, setDeleteConfirmModel] = useState<{name: string, displayName: string} | null>(null);
 
+  // 依赖管理状态
+  const [packages, setPackages] = useState<PackageInfo[]>([]);
+  const [packagesLoading, setPackagesLoading] = useState(false);
+  const [installingPackage, setInstallingPackage] = useState<string | null>(null);
+  const [installingAll, setInstallingAll] = useState(false);
+
   // 当弹窗打开时，从后端加载设置
   useEffect(() => {
     if (isOpen) {
@@ -60,6 +79,13 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
   useEffect(() => {
     if (activeMenu === 'models' && models.length === 0) {
       fetchModelsStatus();
+    }
+  }, [activeMenu]);
+
+  // 切换到依赖管理菜单时加载状态
+  useEffect(() => {
+    if (activeMenu === 'packages' && packages.length === 0) {
+      fetchPackagesStatus();
     }
   }, [activeMenu]);
 
@@ -194,6 +220,75 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
     setDeleteConfirmModel(null);
   };
 
+  // ================= 依赖管理函数 =================
+
+  const fetchPackagesStatus = async () => {
+    setPackagesLoading(true);
+    try {
+      const response = await axios.get('http://localhost:8000/api/packages/status');
+      if (response.data.status === 'success') {
+        setPackages(response.data.data);
+      }
+    } catch (error) {
+      console.error('获取依赖状态失败:', error);
+      showToast('error', '无法获取依赖状态');
+    } finally {
+      setPackagesLoading(false);
+    }
+  };
+
+  const handleInstallPackage = async (pkgId: string) => {
+    setInstallingPackage(pkgId);
+    try {
+      const response = await axios.post('http://localhost:8000/api/packages/install', { package_id: pkgId });
+      if (response.data.status === 'success') {
+        showToast('success', response.data.message);
+        fetchPackagesStatus();
+      } else {
+        showToast('error', response.data.message);
+      }
+    } catch (error: any) {
+      showToast('error', error.response?.data?.detail || '安装失败');
+    } finally {
+      setInstallingPackage(null);
+    }
+  };
+
+  const handleInstallCorePackages = async () => {
+    setInstallingAll(true);
+    try {
+      const response = await axios.post('http://localhost:8000/api/packages/install-core');
+      if (response.data.status === 'success' || response.data.status === 'partial') {
+        const results = response.data.results;
+        const failed = results.filter((r: any) => !r.success);
+        if (failed.length === 0) {
+          showToast('success', '所有核心依赖安装成功');
+        } else {
+          showToast('error', `${failed.length} 个包安装失败，请查看详情`);
+        }
+        fetchPackagesStatus();
+      }
+    } catch (error: any) {
+      showToast('error', error.response?.data?.detail || '安装失败');
+    } finally {
+      setInstallingAll(false);
+    }
+  };
+
+  const handleUninstallPackage = async (pkgId: string) => {
+    try {
+      const response = await axios.post('http://localhost:8000/api/packages/uninstall', { package_id: pkgId });
+      if (response.data.status === 'success') {
+        showToast('success', response.data.message);
+        fetchPackagesStatus();
+      } else {
+        showToast('error', response.data.message);
+      }
+    } catch (error: any) {
+      showToast('error', error.response?.data?.detail || '卸载失败');
+    }
+  };
+
   const showManualDownload = async (modelName: string) => {
     // 如果已经展开，则收起
     if (expandedManualModel === modelName) {
@@ -304,6 +399,12 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
               className={`flex items-center gap-3 px-3 py-3 rounded-lg text-sm font-medium transition-colors ${activeMenu === 'models' ? 'bg-slate-200 text-slate-900' : 'text-slate-600 hover:bg-slate-100'}`}
             >
               <IconFile size={18} className={activeMenu === 'models' ? 'text-[#00ADA6]' : ''} /> 模型管理
+            </button>
+            <button
+              onClick={() => { setActiveMenu('packages'); }}
+              className={`flex items-center gap-3 px-3 py-3 rounded-lg text-sm font-medium transition-colors ${activeMenu === 'packages' ? 'bg-slate-200 text-slate-900' : 'text-slate-600 hover:bg-slate-100'}`}
+            >
+              <IconPackage size={18} className={activeMenu === 'packages' ? 'text-[#00ADA6]' : ''} /> 依赖管理
             </button>
             <button
               onClick={() => setActiveMenu('diagnostics')}
@@ -707,6 +808,124 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
                   然后用浏览器或下载工具（如 IDM、迅雷）下载，下载完成后刷新页面即可自动识别。
                 </p>
               </div>
+            </div>
+          )}
+
+          {activeMenu === 'packages' && (
+            <div className="space-y-6">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+                <h3 className="text-lg font-semibold">依赖管理</h3>
+                <button
+                  onClick={fetchPackagesStatus}
+                  className="text-sm text-[#00ADA6] hover:underline"
+                >
+                  刷新状态
+                </button>
+              </div>
+
+              {/* 一键安装按钮 */}
+              <div className="bg-[#EFF6FF] border border-[#3B82F6] rounded-lg p-4">
+                <div className="flex items-start gap-3">
+                  <IconSparkles size={20} className="text-[#3B82F6] mt-0.5 flex-shrink-0" />
+                  <div className="flex-1">
+                    <p className="text-sm font-medium text-slate-700 mb-1">一键安装核心依赖</p>
+                    <p className="text-xs text-slate-500 mb-3">
+                      安装所有必需的核心依赖包（不含 PyTorch GPU 版）。
+                      GPU 用户请手动下载 CUDA 版本的 PyTorch。
+                    </p>
+                    <button
+                      onClick={handleInstallCorePackages}
+                      disabled={installingAll}
+                      className="bg-[#3B82F6] hover:bg-[#2563EB] text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 flex items-center gap-2"
+                    >
+                      {installingAll ? (
+                        <>
+                          <IconLoader2 size={16} className="animate-spin" />
+                          安装中...
+                        </>
+                      ) : (
+                        <>
+                          <IconDownload size={16} />
+                          一键安装核心依赖
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* 依赖列表 */}
+              {packagesLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <IconLoader2 size={24} className="animate-spin text-slate-400" />
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {packages.map((pkg) => (
+                    <div key={pkg.id} className="border border-slate-200 rounded-lg p-4">
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium text-slate-800">{pkg.name}</span>
+                            {pkg.required && (
+                              <span className="text-xs bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded">必需</span>
+                            )}
+                            {pkg.is_cuda_separate && (
+                              <span className="text-xs bg-[#FFF7ED] text-[#C2410C] px-1.5 py-0.5 rounded">GPU 专用</span>
+                            )}
+                          </div>
+                          <p className="text-xs text-slate-500 mt-0.5">{pkg.description}</p>
+                          <div className="flex items-center gap-3 mt-1">
+                            <span className="text-xs text-slate-400">大小: {pkg.size_mb}</span>
+                            {pkg.installed && pkg.version && (
+                              <span className="text-xs text-[#00ADA6]">v{pkg.version}</span>
+                            )}
+                          </div>
+                          {pkg.is_cuda_separate && pkg.cuda_note && (
+                            <p className="text-xs text-[#C2410C] mt-1">{pkg.cuda_note}</p>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 ml-4">
+                          {pkg.installed ? (
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-[#00ADA6] flex items-center gap-1">
+                                <IconCircleCheck size={16} /> 已安装
+                              </span>
+                              {!pkg.required && (
+                                <button
+                                  onClick={() => handleUninstallPackage(pkg.id)}
+                                  className="text-xs text-slate-400 hover:text-red-500 transition-colors"
+                                  title="卸载"
+                                >
+                                  <IconTrash size={16} />
+                                </button>
+                              )}
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => handleInstallPackage(pkg.id)}
+                              disabled={installingPackage !== null}
+                              className="bg-[#00ADA6] hover:bg-[#009A94] text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 flex items-center gap-1"
+                            >
+                              {installingPackage === pkg.id ? (
+                                <>
+                                  <IconLoader2 size={14} className="animate-spin" />
+                                  安装中
+                                </>
+                              ) : (
+                                <>
+                                  <IconDownload size={14} />
+                                  安装
+                                </>
+                              )}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 

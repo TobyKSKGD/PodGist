@@ -21,6 +21,7 @@ from backend.rag_db import (
 )
 from backend.rag_retriever import generate_chat_response
 from backend.model_manager import get_all_models_status, download_model, get_manual_download_info, get_model_path
+from backend.package_manager import get_all_packages_status, install_package, install_core_packages, uninstall_package
 from sse_starlette.sse import EventSourceResponse
 import asyncio
 
@@ -695,6 +696,59 @@ def save_settings(
         return {"status": "success", "message": "设置已保存"}
     except Exception as e:
         print(f"[save_settings] Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ================= 依赖管理 API =================
+
+@app.get("/api/packages/status")
+def get_packages_status():
+    """获取所有依赖包的状态"""
+    try:
+        return {"status": "success", "data": get_all_packages_status()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/packages/install")
+def api_install_package(body: dict = None):
+    """安装指定的依赖包"""
+    try:
+        pkg_id = body.get("package_id") if body else None
+        if not pkg_id:
+            raise HTTPException(status_code=400, detail="package_id 不能为空")
+
+        success, message = install_package(pkg_id)
+        return {"status": "success" if success else "error", "message": message}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/packages/install-core")
+def api_install_core_packages():
+    """一键安装所有核心依赖（不含 torch GPU 版）"""
+    try:
+        success, results = install_core_packages()
+        return {"status": "success" if success else "partial", "results": results}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/packages/uninstall")
+def api_uninstall_package(body: dict = None):
+    """卸载指定的依赖包"""
+    try:
+        pkg_id = body.get("package_id") if body else None
+        if not pkg_id:
+            raise HTTPException(status_code=400, detail="package_id 不能为空")
+
+        success, message = uninstall_package(pkg_id)
+        return {"status": "success" if success else "error", "message": message}
+    except HTTPException:
+        raise
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
