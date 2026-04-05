@@ -7,7 +7,6 @@ interface PodcastDownloadFormProps {
     engine: string;
     whisper_model: string;
     device: string;
-    max_timeline_items: number;
   };
   downloadType: 'podcast' | 'bilibili';
   onSuccess: (archiveId: string) => void;
@@ -71,7 +70,6 @@ export default function PodcastDownloadForm({ settings, downloadType, onSuccess 
       formData.append('source', url.trim());
       formData.append('task_type', taskType);
       formData.append('engine', settings.engine);
-      formData.append('max_timeline_items', String(settings.max_timeline_items));
       formData.append('name', taskName);
 
       const taskRes = await api.post('/api/tasks', formData);

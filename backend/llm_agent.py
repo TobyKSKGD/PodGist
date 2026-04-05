@@ -1,5 +1,6 @@
-from openai import OpenAI
 import time
+from dashscope import Generation
+from http import HTTPStatus
 
 
 def get_podcast_summary(api_key, podcast_text, max_timeline_items=15, temperature=0.3):
@@ -15,7 +16,6 @@ def get_podcast_summary(api_key, podcast_text, max_timeline_items=15, temperatur
     返回:
         str: 结构化的 Markdown 格式摘要，包含短标题、关键词、节目概述和详细时间轴
     """
-    client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
     prompt_text = f"""
     请阅读以下【带有时间戳】的音频逐字稿，严格按照以下Markdown格式输出你的分析。
 
@@ -23,7 +23,7 @@ def get_podcast_summary(api_key, podcast_text, max_timeline_items=15, temperatur
     请直接在第1行输出15字以内的短标题（纯文本，不要任何标点、前缀或Markdown符号）。
     从第2行开始，严格按照以下模板排版：
 
-    > **总结引擎**：DeepSeek
+    > **总结引擎**：通义千问
     > **🏷️ 核心关键词**：[提取3-5个核心关键词，用逗号隔开]
 
     ### 节目总体概述
@@ -38,23 +38,31 @@ def get_podcast_summary(api_key, podcast_text, max_timeline_items=15, temperatur
     音频全文如下：\n{podcast_text}
     """
 
-    response = client.chat.completions.create(
-        model="deepseek-chat",
-        messages=[
-            {"role": "system", "content": "你是一个严谨且专业的音频内容分析专家，擅长结构化总结长文本，并且绝对服从格式和排版要求。"},
-            {"role": "user", "content": prompt_text}
-        ],
-        temperature=temperature
+    messages = [
+        {"role": "system", "content": "你是一个严谨且专业的音频内容分析专家，擅长结构化总结长文本，并且绝对服从格式和排版要求。"},
+        {"role": "user", "content": prompt_text}
+    ]
+
+    response = Generation.call(
+        model="qwen-plus",
+        messages=messages,
+        result_format="message",
+        temperature=temperature,
+        api_key=api_key
     )
-    return response.choices[0].message.content
+
+    if response.status_code == HTTPStatus.OK:
+        return response.output.choices[0].message.content
+    else:
+        raise Exception(f"LLM 调用失败: {response.code} - {response.message}")
 
 
-def _call_llm_with_retry(client, messages, max_retries=2, temperature=0.3):
+def _call_llm_with_retry(api_key, messages, max_retries=2, temperature=0.3):
     """
-    带重试机制的 LLM 调用。
+    带重试机制的 LLM 调用（使用 DashScope Qwen）。
 
     参数:
-        client: OpenAI 客户端
+        api_key: DashScope API 密钥
         messages: 消息列表
         max_retries: 最大重试次数
         temperature: 温度参数
@@ -67,12 +75,17 @@ def _call_llm_with_retry(client, messages, max_retries=2, temperature=0.3):
     """
     for attempt in range(max_retries):
         try:
-            response = client.chat.completions.create(
-                model="deepseek-chat",
+            response = Generation.call(
+                model="qwen-plus",
                 messages=messages,
-                temperature=temperature
+                result_format="message",
+                temperature=temperature,
+                api_key=api_key
             )
-            return response.choices[0].message.content
+            if response.status_code == HTTPStatus.OK:
+                return response.output.choices[0].message.content
+            else:
+                raise Exception(f"LLM error: {response.code} - {response.message}")
         except Exception as e:
             if attempt < max_retries - 1:
                 # 第一次失败后，等待 2 秒再试
@@ -105,18 +118,18 @@ def _split_text_into_chunks(podcast_text, chunk_size=2000):
     return chunks
 
 
-def _merge_summaries(part_summaries, client):
+def _merge_summaries(part_summaries, api_key):
     """
     合并多个部分的摘要。
 
     参数:
         part_summaries (list): 各部分的摘要
-        client: OpenAI 客户端
+        api_key: DashScope API 密钥
 
     返回:
         str: 合并后的摘要
     """
-    merge_prompt = f"""
+    merge_prompt = """
     请将以下多个部分的摘要合并成一个完整的摘要。
 
     要求：
@@ -127,20 +140,25 @@ def _merge_summaries(part_summaries, client):
 
     ----
 
-    '\n'.join(f'【Part {i+1}】\n{s}' for i, s in enumerate(part_summaries))
-    """
+    """ + '\n'.join(f'【Part {i+1}】\n{s}' for i, s in enumerate(part_summaries))
 
     messages = [
         {"role": "system", "content": "你是一个严谨且专业的音频内容分析专家，擅长合并和整理摘要。"},
         {"role": "user", "content": merge_prompt}
     ]
 
-    response = client.chat.completions.create(
-        model="deepseek-chat",
+    response = Generation.call(
+        model="qwen-plus",
         messages=messages,
-        temperature=0.3
+        result_format="message",
+        temperature=0.3,
+        api_key=api_key
     )
-    return response.choices[0].message.content
+
+    if response.status_code == HTTPStatus.OK:
+        return response.output.choices[0].message.content
+    else:
+        raise Exception(f"LLM merge error: {response.code} - {response.message}")
 
 
 def get_podcast_summary_robust(api_key, podcast_text, max_timeline_items=15):
@@ -151,15 +169,13 @@ def get_podcast_summary_robust(api_key, podcast_text, max_timeline_items=15):
     3. 策略 B：Map-Reduce（分块处理）
 
     参数:
-        api_key (str): 大语言模型 API 密钥
+        api_key (str): 大语言模型 API 密钥（DashScope API Key）
         podcast_text (str): 带时间戳的音频转录文本
         max_timeline_items (int): 时间轴最大条目数，默认 15
 
     返回:
         str: 结构化的 Markdown 格式摘要
     """
-    client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
-
     # ========== 策略 A：Prompt Throttling ==========
     # 构建带有输出限制的 prompt
     prompt_text = f"""
@@ -169,7 +185,7 @@ def get_podcast_summary_robust(api_key, podcast_text, max_timeline_items=15):
     请直接在第1行输出15字以内的短标题（纯文本，不要任何标点、前缀或Markdown符号）。
     从第2行开始，严格按照以下模板排版：
 
-    > **总结引擎**：DeepSeek
+    > **总结引擎**：通义千问
     > **🏷️ 核心关键词**：[提取3-5个核心关键词，用逗号隔开]
 
     ### 节目总体概述
@@ -192,7 +208,7 @@ def get_podcast_summary_robust(api_key, podcast_text, max_timeline_items=15):
     # ========== 策略 C：Retry 机制 ==========
     # 第一次尝试：使用策略 A
     try:
-        result = _call_llm_with_retry(client, messages, max_retries=2, temperature=0.3)
+        result = _call_llm_with_retry(api_key, messages, max_retries=2, temperature=0.3)
         return result
     except Exception as e:
         print(f"第一次调用失败: {e}")
@@ -206,7 +222,7 @@ def get_podcast_summary_robust(api_key, podcast_text, max_timeline_items=15):
     messages[1]["content"] = prompt_text_v2
 
     try:
-        result = _call_llm_with_retry(client, messages, max_retries=2, temperature=0.5)
+        result = _call_llm_with_retry(api_key, messages, max_retries=2, temperature=0.5)
         return result
     except Exception as e:
         print(f"第二次调用失败: {e}")
@@ -238,7 +254,7 @@ def get_podcast_summary_robust(api_key, podcast_text, max_timeline_items=15):
             ]
 
             try:
-                part_result = _call_llm_with_retry(client, chunk_messages, max_retries=1, temperature=0.4)
+                part_result = _call_llm_with_retry(api_key, chunk_messages, max_retries=1, temperature=0.4)
                 part_summaries.append(part_result)
             except Exception as e:
                 print(f"块 {i+1} 处理失败: {e}")
@@ -247,7 +263,7 @@ def get_podcast_summary_robust(api_key, podcast_text, max_timeline_items=15):
         # 合并结果
         if part_summaries:
             try:
-                merged = _merge_summaries(part_summaries, client)
+                merged = _merge_summaries(part_summaries, api_key)
                 return merged
             except Exception as e:
                 print(f"合并失败: {e}")
@@ -276,22 +292,29 @@ def search_in_podcast(api_key, search_query, podcast_text):
     在音频转录文本中搜索相关内容，返回匹配的时间段和描述。
 
     参数:
-        api_key (str): 大语言模型 API 密钥
+        api_key (str): 大语言模型 API 密钥（DashScope API Key）
         search_query (str): 用户搜索查询
         podcast_text (str): 带时间戳的音频转录文本
 
     返回:
         str: 搜索结果描述，包含匹配的时间段和内容简述
     """
-    client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
     search_prompt = f"""
     用户想在这期音频中寻找关于"{search_query}"的内容。
     请你在以下带有时间戳的音频全文中寻找。如果找到了，请告诉用户该内容大致在哪个时间段 [MM:SS]，并简述他们聊了什么。如果没提到，请如实回答。
     音频全文：\n{podcast_text}
     """
-    response = client.chat.completions.create(
-        model="deepseek-chat",
-        messages=[{"role": "user", "content": search_prompt}],
-        temperature=0.2
+    messages = [{"role": "user", "content": search_prompt}]
+
+    response = Generation.call(
+        model="qwen-plus",
+        messages=messages,
+        result_format="message",
+        temperature=0.2,
+        api_key=api_key
     )
-    return response.choices[0].message.content
+
+    if response.status_code == HTTPStatus.OK:
+        return response.output.choices[0].message.content
+    else:
+        raise Exception(f"LLM search error: {response.code} - {response.message}")

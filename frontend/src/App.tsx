@@ -24,8 +24,7 @@ function AppContent() {
   const [settings, setIconSettings] = useState({
     engine: 'SenseVoice',
     whisper_model: 'small',
-    device: 'auto',
-    max_timeline_items: 15
+    device: 'auto'
   });
   const [currentView, setCurrentView] = useState<'upload' | 'result' | 'queue' | 'chat'>('upload');
   const [selectedArchiveId, setSelectedArchiveId] = useState<string | null>(null);
@@ -92,10 +91,9 @@ function AppContent() {
         setIconSettings({
           engine: res.data.data.engine || 'SenseVoice',
           whisper_model: res.data.data.whisper_model || 'small',
-          device: res.data.data.device || 'auto',
-          max_timeline_items: res.data.data.max_timeline_items || 15
+          device: res.data.data.device || 'auto'
         });
-        setHasApiKey(!!res.data.data.api_key);
+        setHasApiKey(!!res.data.data.dashscope_api_key);
       }
     } catch (error) {
       console.error("[App] refreshGlobalSettings failed:", error);
@@ -194,7 +192,6 @@ function AppContent() {
     formData.append('engine', settings.engine);
     formData.append('whisper_model', settings.whisper_model);
     formData.append('device', settings.device);
-    formData.append('max_timeline_items', settings.max_timeline_items.toString());
 
     try {
       const res = await api.post('/api/transcribe/local', formData, {
@@ -294,8 +291,8 @@ function AppContent() {
             <div className="mb-6 p-4 bg-[#E1F5FE] border border-[#009A94] rounded-xl flex items-start gap-3">
               <IconAlertTriangle className="text-[#009A94] shrink-0 mt-0.5" size={20} />
               <div>
-                <p className="text-sm font-medium text-[#E11D48]">尚未配置 DeepSeek API Key</p>
-                <p className="text-xs text-[#009A94] mt-0.5">请点击左侧底部「偏好设置」配置 API Key，否则无法使用提炼功能</p>
+                <p className="text-sm font-medium text-[#E11D48]">尚未配置 DashScope API Key</p>
+                <p className="text-xs text-[#009A94] mt-0.5">请点击左侧底部「偏好设置」配置 DashScope API Key，否则无法使用提炼功能</p>
               </div>
             </div>
           )}

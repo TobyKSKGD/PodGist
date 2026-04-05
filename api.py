@@ -7,7 +7,7 @@ import re
 import argparse
 from datetime import datetime
 from backend.diagnostics import run_all_diagnostics
-from backend.transcriber import transcribe_with_sensevoice, transcribe_audio_to_timestamped_text, get_whisper_model, get_available_devices
+from backend.transcriber import transcribe_with_sensevoice
 from backend.llm_agent import get_podcast_summary_robust, search_in_podcast
 from backend.downloader import route_and_download, detect_platform, AudioDownloader
 from backend.task_queue import add_task, get_task, get_all_tasks, get_queue_stats, update_task_status, delete_task, clear_completed
@@ -79,30 +79,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def load_api_key():
-    """
-    从 .env 文件加载 DeepSeek API Key。
-    支持两种格式：
-    1. 单行：sk-xxxxxx（兼容旧格式）
-    2. 多行：DEEPSEEK_API_KEY=sk-xxxxxx
-    """
-    try:
-        if os.path.exists(ENV_FILE):
-            with open(ENV_FILE, "r", encoding="utf-8") as f:
-                content = f.read().strip()
-                # 尝试解析多行格式
-                lines = content.split('\n')
-                for line in lines:
-                    line = line.strip()
-                    if line.startswith('DEEPSEEK_API_KEY='):
-                        return line.split('=', 1)[1].strip().strip('"\'')
-                # 回退：单行格式（旧兼容）
-                if content and not '=' in content:
-                    return content
-                return ""
-        return ""
-    except Exception:
-        return ""
 
 
 def load_dashscope_api_key():
@@ -187,16 +163,16 @@ async def transcribe_local(
 
         # 1. 获取 API Key（优先使用前端传的，否则从 .env 读取）
         if not api_key:
-            api_key = load_api_key()
+            api_key = load_dashscope_api_key()
         if not api_key:
-            raise HTTPException(status_code=400, detail="请提供 DeepSeek API Key")
+            raise HTTPException(status_code=400, detail="请提供 DashScope API Key")
 
         # 2. 统一使用 DashScope ASR（远程 API，无需本地设备）
         # engine/device 参数保留兼容性，但始终使用 DashScope
         podcast_text = transcribe_with_sensevoice(file_path, "cloud")
 
         # 4. 调用大模型生成摘要（使用前端指定的时间轴上限）
-        summary = get_podcast_summary_robust(api_key, podcast_text, max_timeline_items=max_timeline_items)
+        summary = get_podcast_summary_robust(api_key, podcast_text, max_timeline_items=15)
 
         # 5. 提取第一行作为标题
         lines = summary.strip().split('\n')
@@ -274,9 +250,9 @@ async def transcribe_url(
 
     # 1. 获取 API Key
     if not api_key:
-        api_key = load_api_key()
+        api_key = load_dashscope_api_key()
     if not api_key:
-        raise HTTPException(status_code=400, detail="请提供 DeepSeek API Key")
+        raise HTTPException(status_code=400, detail="请提供 DashScope API Key")
 
     # 2. 根据类型选择下载方式
     if type == "bilibili":
@@ -315,7 +291,7 @@ async def transcribe_url(
         podcast_text = transcribe_with_sensevoice(file_path, "cloud")
 
         # 5. 调用大模型生成摘要
-        summary = get_podcast_summary_robust(api_key, podcast_text, max_timeline_items=max_timeline_items)
+        summary = get_podcast_summary_robust(api_key, podcast_text, max_timeline_items=15)
 
         # 6. 创建归档目录
         date_str = datetime.now().strftime("%Y%m%d_%H%M")
@@ -489,7 +465,7 @@ def get_archive_detail(archive_id: str):
 @app.get("/api/diagnostics")
 def run_diagnostics():
     try:
-        api_key = load_api_key()
+        api_key = load_dashscope_api_key()
         results = run_all_diagnostics(api_key=api_key)
         # 转换结果为前端易用的格式
         formatted_results = []
@@ -649,22 +625,13 @@ def get_devices():
 # 6. 获取偏好设置
 @app.get("/api/settings")
 def get_settings():
-    api_key = load_api_key()
     dashscope_api_key = load_dashscope_api_key()
     config = load_config()
-    print(f"[get_settings] ENV_FILE={ENV_FILE}, api_key_present={bool(api_key)}, dashscope_present={bool(dashscope_api_key)}")
-    devices = get_available_devices()
-    device_list = [{"key": k, "name": v} for k, v in devices.items()]
     return {
         "status": "success",
         "data": {
-            "api_key": api_key,
             "dashscope_api_key": dashscope_api_key,
-            "engine": config.get("engine", "cloud"),
-            "whisper_model": config.get("whisper_model", "small"),
-            "device": config.get("device", "auto"),
-            "max_timeline_items": config.get("max_timeline_items", 15),
-            "available_devices": device_list
+            "max_timeline_items": 15
         }
     }
 
@@ -672,38 +639,21 @@ def get_settings():
 # 7. 保存偏好设置
 @app.post("/api/settings")
 def save_settings(
-    api_key: str = Form(""),
-    dashscope_api_key: str = Form(""),
-    engine: str = Form("cloud"),
-    whisper_model: str = Form("small"),
-    device: str = Form("auto"),
-    max_timeline_items: int = Form(15)
+    dashscope_api_key: str = Form("")
 ):
     try:
-        # 保存 API Keys 到 .env 文件（支持多行格式）
-        print(f"[save_settings] Saving to ENV_FILE={ENV_FILE}")
+        # 保存 DashScope API Key 到 .env 文件
         lines = []
-        deepseek_key = api_key.strip()
         dashscope_key = dashscope_api_key.strip()
-        if deepseek_key:
-            lines.append(f"DEEPSEEK_API_KEY={deepseek_key}")
         if dashscope_key:
             lines.append(f"DASHSCOPE_API_KEY={dashscope_key}")
 
         with open(ENV_FILE, "w", encoding="utf-8") as f:
             f.write('\n'.join(lines))
 
-        # 同时设置到环境变量供 DashScope SDK 使用
+        # 设置到环境变量供 DashScope SDK 使用
         if dashscope_key:
             os.environ['DASHSCOPE_API_KEY'] = dashscope_key
-
-        # 保存所有配置到 config.json
-        config = load_config()
-        config["engine"] = engine
-        config["whisper_model"] = whisper_model
-        config["device"] = device
-        config["max_timeline_items"] = max_timeline_items
-        save_config(config)
 
         return {"status": "success", "message": "设置已保存"}
     except Exception as e:
@@ -890,9 +840,9 @@ def clear_finished_tasks():
 def retry_tasks():
     """重试所有失败的任务"""
     try:
-        api_key = load_api_key()
+        api_key = load_dashscope_api_key()
         if not api_key:
-            raise HTTPException(status_code=400, detail="请先配置 API Key")
+            raise HTTPException(status_code=400, detail="请先配置 DashScope API Key")
 
         success_count = retry_failed_tasks(api_key)
         return {"status": "success", "message": f"成功重试 {success_count} 个任务"}
@@ -932,9 +882,9 @@ def retry_task_llm(task_id: str):
     """
     try:
         # 获取 API Key
-        api_key = load_api_key()
+        api_key = load_dashscope_api_key()
         if not api_key:
-            raise HTTPException(status_code=400, detail="请先配置 API Key")
+            raise HTTPException(status_code=400, detail="请先配置 DashScope API Key")
 
         # 获取任务信息
         task = get_task(task_id)
@@ -957,12 +907,11 @@ def retry_task_llm(task_id: str):
             raise HTTPException(status_code=400, detail="转录文本为空")
 
         # 获取任务参数
-        max_timeline_items = task.get("max_timeline_items", 15)
         title = task.get("name", "未知任务")
 
         # 调用 LLM 生成摘要
         print(f"[Retry-LLM] 正在为任务 {task_id} 生成摘要...")
-        raw_summary = get_podcast_summary_robust(api_key, podcast_text, max_timeline_items)
+        raw_summary = get_podcast_summary_robust(api_key, podcast_text, max_timeline_items=15)
 
         # 提取第一行作为标题
         lines = raw_summary.strip().split('\n')
@@ -1042,9 +991,9 @@ async def search_podcast(request: dict):
 
         # 获取 API Key
         if not api_key:
-            api_key = load_api_key()
+            api_key = load_dashscope_api_key()
         if not api_key:
-            raise HTTPException(status_code=400, detail="请先配置 DeepSeek API Key")
+            raise HTTPException(status_code=400, detail="请先配置 DashScope API Key")
 
         # 获取归档的转录文本
         archive_path = os.path.join(ARCHIVE_DIR, archive_id)
@@ -1200,9 +1149,9 @@ async def chat_stream(session_id: str, request: dict):
         archive_ids = request.get("archive_ids") or None
         tag_ids = request.get("tag_ids") or None
 
-        api_key = load_api_key()
+        api_key = load_dashscope_api_key()
         if not api_key:
-            raise HTTPException(status_code=400, detail="请先配置 DeepSeek API Key")
+            raise HTTPException(status_code=400, detail="请先配置 DashScope API Key")
 
         # 保存用户消息
         add_chat_message(session_id, "user", query)
@@ -1230,10 +1179,10 @@ async def chat_stream(session_id: str, request: dict):
                 elif event["type"] == "done":
                     referenced_archives = event["referenced_archives"]
                     full_content = event["content"]
-                    # JSON 放前面（JSON 不以 \n 开头，保证 split 只匹配分隔符）
+                    # 使用紧凑 JSON（无多余空格和换行），确保第一个 \n 是 JSON 与内容的分隔符
                     yield {
                         "event": "done",
-                        "data": f"{json.dumps(referenced_archives, ensure_ascii=False)}\n{full_content}"
+                        "data": f"{json.dumps(referenced_archives, ensure_ascii=False, separators=(',', ':'))}\n{full_content}"
                     }
 
             # 保存助手消息

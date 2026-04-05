@@ -8,7 +8,6 @@ interface BatchProcessProps {
     engine: string;
     whisper_model: string;
     device: string;
-    max_timeline_items: number;
   };
 }
 
@@ -82,7 +81,6 @@ export default function BatchProcess({ settings }: BatchProcessProps) {
           formData.append('source', task.source);
           formData.append('task_type', task.task_type);
           formData.append('engine', settings.engine);
-          formData.append('max_timeline_items', String(settings.max_timeline_items));
           formData.append('name', task.name);
           await api.post('/api/tasks', formData);
           addedCount++;

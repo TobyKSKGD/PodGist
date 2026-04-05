@@ -19,7 +19,7 @@ sys.path.insert(0, current_dir)
 
 # 导入项目模块
 from backend import task_queue
-from backend.transcriber import transcribe_with_sensevoice, transcribe_audio_to_timestamped_text, get_whisper_model
+from backend.transcriber import transcribe_with_sensevoice, get_dashscope_api_key
 from backend.llm_agent import get_podcast_summary_robust
 from backend.downloader import route_and_download
 
@@ -202,7 +202,7 @@ def process_single_task(task, api_key):
     task_id = task["id"]
     source = task["source"]
     engine = task.get("engine", "sensevoice")
-    max_timeline_items = task.get("max_timeline_items", 15)
+    max_timeline_items = 15  # 固定时间轴上限
 
     print(f"[Worker] 开始处理任务: {source}")
 
@@ -244,37 +244,14 @@ def process_single_task(task, api_key):
         task_queue.update_task_name(task_id, title)
         task_queue.update_progress_status(task_id, "音频获取成功")
 
-        # 步骤 2: 转录
+        # 步骤 2: 转录（统一使用 DashScope 云端 ASR）
         print(f"[Worker] 转录中: {title}")
-        engine_name = "SenseVoice" if engine == "sensevoice" else "Whisper"
-        task_queue.update_progress_status(task_id, f"正在调用 {engine_name} 转录...")
+        task_queue.update_progress_status(task_id, "正在调用 DashScope ASR 转录...")
 
-        if engine == "sensevoice":
-            # 选择设备
-            import torch
-            if torch.cuda.is_available():
-                device_key = "cuda"
-            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                device_key = "mps"
-            else:
-                device_key = "cpu"
+        # 调用 DashScope ASR（通过 transcribe_with_sensevoice 兼容层）
+        podcast_text = transcribe_with_sensevoice(audio_file_path, "cloud")
 
-            podcast_text = transcribe_with_sensevoice(audio_file_path, device_key)
-        else:
-            # Whisper
-            import whisper
-            import torch
-            if torch.cuda.is_available():
-                device_key = "cuda"
-            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                device_key = "mps"
-            else:
-                device_key = "cpu"
-
-            model = get_whisper_model("small", device_key)
-            podcast_text = transcribe_audio_to_timestamped_text(model, audio_file_path, device_key)
-
-        task_queue.update_progress_status(task_id, f"{engine_name} 转录完成")
+        task_queue.update_progress_status(task_id, "DashScope ASR 转录完成")
 
         # 步骤 3: 清理音频文件
         if os.path.exists(audio_file_path) and task_type != "local":
@@ -285,15 +262,17 @@ def process_single_task(task, api_key):
 
         # 步骤 4: 调用大模型生成摘要
         print(f"[Worker] 生成摘要中: {title}")
-        task_queue.update_progress_status(task_id, "正在调用 DeepSeek 提炼高光...")
+        task_queue.update_progress_status(task_id, "正在调用通义千问提炼高光...")
 
-        raw_summary = get_podcast_summary_robust(api_key, podcast_text, max_timeline_items)
+        # 使用 DashScope API Key（.env 中的 DASHSCOPE_API_KEY）
+        dashscope_key = get_dashscope_api_key()
+        raw_summary = get_podcast_summary_robust(dashscope_key, podcast_text, max_timeline_items)
 
         # 提取第一行作为标题
         lines = raw_summary.strip().split('\n')
         ai_title = lines[0] if lines else title
 
-        task_queue.update_progress_status(task_id, "DeepSeek 提炼完成")
+        task_queue.update_progress_status(task_id, "通义千问提炼完成")
 
         # 步骤 5: 归档
         print(f"[Worker] 归档中: {title}")

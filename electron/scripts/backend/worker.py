@@ -268,7 +268,7 @@ def process_single_task(task, api_key):
 
         # 步骤 4: 调用大模型生成摘要
         print(f"[Worker] 生成摘要中: {title}")
-        task_queue.update_progress_status(task_id, "正在调用 DeepSeek 提炼高光...")
+        task_queue.update_progress_status(task_id, "正在调用通义千问提炼高光...")
 
         raw_summary = get_podcast_summary_robust(api_key, podcast_text, max_timeline_items)
 
@@ -276,7 +276,7 @@ def process_single_task(task, api_key):
         lines = raw_summary.strip().split('\n')
         ai_title = lines[0] if lines else title
 
-        task_queue.update_progress_status(task_id, "DeepSeek 提炼完成")
+        task_queue.update_progress_status(task_id, "通义千问提炼完成")
 
         # 步骤 5: 归档
         print(f"[Worker] 归档中: {title}")

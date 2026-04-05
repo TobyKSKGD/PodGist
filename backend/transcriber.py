@@ -45,12 +45,11 @@ def _upload_to_dashscope(audio_file_path: str, api_key: str) -> Optional[str]:
     """
     from dashscope import Files
 
-    os.environ['DASHSCOPE_API_KEY'] = api_key
-
     try:
         upload_response = Files.upload(
             file_path=audio_file_path,
-            purpose='audio'
+            purpose='audio',
+            api_key=api_key
         )
 
         if upload_response.status_code != 200:
@@ -58,7 +57,7 @@ def _upload_to_dashscope(audio_file_path: str, api_key: str) -> Optional[str]:
             return None
 
         file_id = upload_response.output['uploaded_files'][0]['file_id']
-        file_info = Files.get(file_id)
+        file_info = Files.get(file_id, api_key=api_key)
         if file_info.status_code != 200:
             print(f"[DashScope ASR] Get file info failed: {file_info.output}")
             return None
@@ -145,12 +144,11 @@ def _call_dashscope_asr(audio_url: str, api_key: str, model: str = DASHSCOPE_ASR
     """
     from dashscope import Transcription
 
-    os.environ['DASHSCOPE_API_KEY'] = api_key
-
     task = Transcription.async_call(
         model=model,
         file_urls=[audio_url],
-        timestamp_alignment_enabled=True
+        timestamp_alignment_enabled=True,
+        api_key=api_key
     )
 
     if task.status_code != 200:
@@ -162,7 +160,7 @@ def _call_dashscope_asr(audio_url: str, api_key: str, model: str = DASHSCOPE_ASR
     task_id = task.output['task_id']
 
     for _ in range(60):
-        result = Transcription.wait(task_id)
+        result = Transcription.wait(task_id, api_key=api_key)
         status = result.output.task_status
 
         if status == 'SUCCEEDED':

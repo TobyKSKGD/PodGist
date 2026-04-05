@@ -4,7 +4,8 @@ RAG 检索与生成模块
 负责：接收用户问题 → 检索相关片段 → 组装 System Prompt → 调用 LLM 流式生成
 """
 
-from openai import OpenAI
+from dashscope import Generation
+from http import HTTPStatus
 from backend.rag_db import retrieve_relevant_chunks, get_archive_tags
 import re
 
@@ -49,7 +50,7 @@ def generate_chat_response(
     RAG 对话生成器（支持流式和非流式）。
 
     参数:
-        api_key: DeepSeek API Key
+        api_key: DashScope API Key
         query: 用户问题
         archive_ids: 限定检索的归档 ID 列表（None 表示全库）
         tag_ids: 限定检索的标签 ID 列表
@@ -59,7 +60,6 @@ def generate_chat_response(
     Yields:
         dict: 事件类型和内容
     """
-    client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
 
     # Step 1: 检索相关片段
     chunks = retrieve_relevant_chunks(
@@ -76,7 +76,6 @@ def generate_chat_response(
     )
 
     # Step 3: 提取引用信息（包含 archive_name 和 timestamp）
-    # 构建 {archive_id: {archive_name, timestamp}} 映射，取每个归档的第一个时间戳
     archive_refs: dict[str, dict] = {}
     for c in chunks:
         aid = c["archive_id"]
@@ -94,24 +93,30 @@ def generate_chat_response(
         {"role": "user", "content": query}
     ]
 
-    # Step 5: 流式调用 LLM
+    # Step 5: 调用通义千问 LLM
     if stream:
-        stream_response = client.chat.completions.create(
-            model="deepseek-chat",
+        stream_response = Generation.call(
+            model="qwen-plus",
             messages=messages,
-            temperature=0.3,
-            stream=True
+            result_format="message",
+            stream=True,
+            incremental_output=True,
+            api_key=api_key
         )
 
         full_content = ""
+        prev_content = ""
         for chunk in stream_response:
-            token = chunk.choices[0].delta.content or ""
-            full_content += token
-            yield {
-                "type": "token",
-                "content": token,
-                "referenced_archives": referenced_archives
-            }
+            if chunk.status_code == HTTPStatus.OK:
+                content = chunk.output.choices[0].message.content or ""
+                token = content[len(prev_content):] if content.startswith(prev_content) else content
+                full_content += token
+                prev_content = content
+                yield {
+                    "type": "token",
+                    "content": token,
+                    "referenced_archives": referenced_archives
+                }
 
         yield {
             "type": "done",
@@ -119,13 +124,17 @@ def generate_chat_response(
             "referenced_archives": referenced_archives
         }
     else:
-        response = client.chat.completions.create(
-            model="deepseek-chat",
+        response = Generation.call(
+            model="qwen-plus",
             messages=messages,
-            temperature=0.3,
-            stream=False
+            result_format="message",
+            stream=False,
+            api_key=api_key
         )
-        full_content = response.choices[0].message.content
+        if response.status_code == HTTPStatus.OK:
+            full_content = response.output.choices[0].message.content or ""
+        else:
+            full_content = f"请求失败: {response.message}"
         yield {
             "type": "done",
             "content": full_content,
@@ -146,18 +155,15 @@ def extract_references_from_response(content: str, referenced_archives: list[str
     archive_name_to_id = {}
 
     for archive_name, timestamp in matches:
-        # 惰性获取 archive_id（需要查表或前端传）
         if archive_name not in archive_name_to_id:
             from backend.rag_db import get_db_connection
             conn = get_db_connection()
             cursor = conn.cursor()
-            # 模糊匹配（归档目录名通常包含原始名）
             cursor.execute(
                 "SELECT id FROM chat_references WHERE archive_id LIKE ? LIMIT 1",
                 (f"%{archive_name}%",)
             )
-            # 实际上需要通过 ChromaDB metadata 反查，这里暂时用名称匹配
-            archive_name_to_id[archive_name] = archive_name  # 降级：存名称
+            archive_name_to_id[archive_name] = archive_name
 
         refs.append({
             "archive_name": archive_name,

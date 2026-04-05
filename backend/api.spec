@@ -52,7 +52,7 @@ a = Analysis(
         'pydantic.v1',
         'pydantic_settings',
         # === 核心依赖 ===
-        'openai',
+        'dashscope',
         'httpx',
         'requests',
         'python_dotenv',
