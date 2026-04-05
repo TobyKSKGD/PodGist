@@ -1,292 +1,222 @@
-import whisper
-import torch
-import subprocess
-import re
+"""
+语音转录模块 - 使用 DashScope 远程 ASR API
+
+本版本移除了所有本地模型（Whisper / SenseVoice / PyTorch），
+改用 DashScope Qwen3-ASR-Flash 云端 API 进行语音识别。
+"""
+
 import os
-import platform
+import re
+import time
+from typing import Optional
 
-# 显式导入 FunASR / ModelScope 以辅助 PyInstaller 检测依赖
-try:
-    import funasr
-    import funasr.auto
-    import funasr.pipelines
-    import modelscope
-    import modelscope.pipelines
-except ImportError:
-    pass  # 开发环境中这些包可能未安装
-
-# ================= 模型路径配置（支持 Electron 打包）=================
-# 通过环境变量 PODGIST_MODEL_DIR 指定模型根目录
-
-MODEL_CACHE_DIR = os.environ.get('PODGIST_MODEL_DIR', None)
-
-def get_whisper_model_dir():
-    """获取 Whisper 模型目录"""
-    if MODEL_CACHE_DIR:
-        return os.path.join(MODEL_CACHE_DIR, 'whisper')
-    return None  # 使用默认路径 ~/.cache/whisper/
-
-def get_sensevoice_cache_dir():
-    """获取 SenseVoice (ModelScope) 模型目录"""
-    if MODEL_CACHE_DIR:
-        return os.path.join(MODEL_CACHE_DIR, 'modelscope', 'hub', 'models')
-    return None  # 使用默认路径 ~/.cache/modelscope/
-
-def get_available_devices():
-    """
-    检测并返回当前系统可用的计算设备。
-
-    返回:
-        dict: 可用设备字典，键为设备标识符（如 'cpu', 'cuda', 'mps'），
-              值为设备描述字符串。
-    """
-    devices = {"cpu": "CPU (基础处理器)"}
-
-    if torch.cuda.is_available():
-        device_name = torch.cuda.get_device_name(0)
-        devices["cuda"] = f"GPU: {device_name}"
-
-    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        try:
-            # sysctl 是 macOS 特有命令，Windows/Linux 上不存在
-            if platform.system() == 'Darwin':
-                chip_name = subprocess.check_output(["sysctl", "-n", "machdep.cpu.brand_string"]).strip().decode("utf-8")
-                devices["mps"] = f"Apple Silicon ({chip_name})"
-            else:
-                devices["mps"] = "Apple M系芯片 (Mac 专属加速)"
-        except Exception:
-            # 若系统调用失败，使用默认描述
-            devices["mps"] = "Apple M系芯片 (Mac 专属加速)"
-
-    return devices
-
-def get_whisper_model(model_name="small", device_key="cpu"):
-    """
-    加载指定规模的 Whisper 语音识别模型。
-
-    参数:
-        model_name (str): Whisper 模型规模，可选 'tiny', 'base', 'small', 'medium', 'large-v3'
-        device_key (str): 计算设备标识符，如 'cpu', 'cuda', 'mps'
-
-    返回:
-        whisper.Whisper: 加载的 Whisper 模型实例
-    """
-    whisper_model_dir = get_whisper_model_dir()
-
-    if whisper_model_dir:
-        # 确保目录存在
-        os.makedirs(whisper_model_dir, exist_ok=True)
-        # 临时修改 torch hub 缓存目录
-        original_dir = torch.hub.get_dir()
-        try:
-            torch.hub.set_dir(whisper_model_dir)
-            model = whisper.load_model(model_name, device=device_key)
-        finally:
-            torch.hub.set_dir(original_dir)
-        return model
-    else:
-        return whisper.load_model(model_name, device=device_key)
-
-def transcribe_audio_to_timestamped_text(model, audio_file_path, device_key):
-    """
-    使用 Whisper 模型转录音频文件，并生成带时间戳的文本。
-
-    参数:
-        model: 已加载的 Whisper 模型实例
-        audio_file_path (str): 音频文件路径
-        device_key (str): 计算设备标识符，用于决定是否使用 FP16 精度
-
-    返回:
-        str: 带 [MM:SS] 格式时间戳的转录文本
-    """
-    # 仅在 CUDA 设备上使用 FP16 精度以提高性能
-    use_fp16 = True if device_key == "cuda" else False
-
-    transcribe_result = model.transcribe(
-        audio_file_path,
-        language="zh",
-        initial_prompt="以下是一段精彩的音频内容，请输出简体中文。",
-        fp16=use_fp16
-    )
-
-    full_text = ""
-    for segment in transcribe_result["segments"]:
-        minutes = int(segment["start"]) // 60
-        seconds = int(segment["start"]) % 60
-        full_text += f"[{minutes:02d}:{seconds:02d}] {segment['text']}\n"
-
-    return full_text
+# DashScope ASR API 配置
+DASHSCOPE_ASR_MODEL = "qwen3-asr-flash-2026-02-10"
+FALLBACK_ASR_MODEL = "paraformer-v1"
 
 
-# ================= SenseVoice 本地模型 =================
-
-# SenseVoice 模型缓存
-_sensevoice_model = None
-
-def get_sensevoice_model(device_key="cuda"):
-    """
-    加载 SenseVoice 模型。
-
-    参数:
-        device_key (str): 计算设备标识符，如 'cuda', 'cpu'
-
-    返回:
-        SenseVoice 模型实例
-    """
-    global _sensevoice_model
-
-    if _sensevoice_model is not None:
-        return _sensevoice_model
-
-    try:
-        from modelscope.pipelines import pipeline
-        from modelscope.utils.constant import Tasks
-
-        # SenseVoice 模型路径
-        sensevoice_dir = os.path.join(
-            get_sensevoice_cache_dir() or '',
-            'iic', 'SenseVoiceSmall'
-        ) if get_sensevoice_cache_dir() else None
-
-        # 检查本地是否存在模型
-        if sensevoice_dir and os.path.exists(sensevoice_dir):
-            model_path = sensevoice_dir
-        else:
-            model_path = "iic/SenseVoiceSmall"  # 回退到 ModelScope 下载
-
-        # 使用 ModelScope 的 SenseVoice pipeline
-        _sensevoice_model = pipeline(
-            Tasks.auto_speech_recognition,
-            model=model_path,
-            device=device_key
-        )
-        return _sensevoice_model
-    except ImportError:
-        raise ImportError("请安装 ModelScope: pip install modelscope")
+def get_dashscope_api_key() -> str:
+    """从环境变量或 .env 文件获取 DashScope API Key"""
+    api_key = os.environ.get('DASHSCOPE_API_KEY', '')
+    if not api_key:
+        env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env')
+        if os.path.exists(env_path):
+            with open(env_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('DASHSCOPE_API_KEY='):
+                        api_key = line.split('=', 1)[1].strip().strip('"\'')
+                        break
+    return api_key
 
 
-def clean_sensevoice_text(text):
-    """
-    清洗 SenseVoice 输出，移除情绪标签和特殊标记。
-
-    参数:
-        text (str): 原始 SenseVoice 输出
-
-    返回:
-        str: 清洗后的文本
-    """
-    # 移除 <|xxx|> 格式的标签（支持多标签连续的情况）
+def clean_asr_text(text: str) -> str:
+    """清洗 ASR 输出，移除特殊标记"""
     text = re.sub(r'<\|[^|]*\|>', '', text)
-
-    # 移除字典格式的残留（如 {'key': '...', 'text': '...'}）
-    text = re.sub(r"\{[^}]+\}", '', text)
-
-    # 移除多余的空格
+    text = re.sub(r'\{[^}]+\}', '', text)
     text = re.sub(r'\s+', ' ', text).strip()
-
     return text
 
 
-def transcribe_with_sensevoice(audio_file_path, device_key="cuda"):
+def _upload_to_dashscope(audio_file_path: str, api_key: str) -> Optional[str]:
     """
-    使用 SenseVoice 模型转录音频文件（分片处理以获取时间戳）。
+    将本地音频文件上传到 DashScope，返回可访问的 URL。
 
     参数:
-        audio_file_path (str): 音频文件路径
-        device_key (str): 计算设备标识符，如 'cuda', 'cpu', 'cuda:0'
+        audio_file_path: 本地音频文件路径
+        api_key: DashScope API Key
+
+    返回:
+        str: DashScope 上的文件 URL，失败返回 None
+    """
+    from dashscope import Files
+
+    os.environ['DASHSCOPE_API_KEY'] = api_key
+
+    try:
+        upload_response = Files.upload(
+            file_path=audio_file_path,
+            purpose='audio'
+        )
+
+        if upload_response.status_code != 200:
+            print(f"[DashScope ASR] Upload failed: {upload_response.output}")
+            return None
+
+        file_id = upload_response.output['uploaded_files'][0]['file_id']
+
+        # 获取文件的访问 URL
+        file_info = Files.get(file_id)
+        if file_info.status_code != 200:
+            print(f"[DashScope ASR] Get file info failed: {file_info.output}")
+            return None
+
+        return file_info.output['url']
+
+    except Exception as e:
+        print(f"[DashScope ASR] Upload error: {e}")
+        return None
+
+
+def _call_dashscope_asr(audio_url: str, api_key: str, model: str = DASHSCOPE_ASR_MODEL) -> dict:
+    """
+    调用 DashScope ASR API 进行语音识别。
+
+    参数:
+        audio_url: 音频文件的公开访问 URL
+        api_key: DashScope API Key
+        model: ASR 模型名称
+
+    返回:
+        dict: 包含 'text'（完整文本）和 'sentences'（分段时间戳）的字典
+    """
+    from dashscope import Transcription
+
+    os.environ['DASHSCOPE_API_KEY'] = api_key
+
+    # 先尝试 qwen3-asr-flash
+    task = Transcription.async_call(
+        model=model,
+        file_urls=[audio_url],
+        timestamp_alignment_enabled=True
+    )
+
+    if task.status_code != 200:
+        # 如果 qwen3-asr-flash 失败，尝试 paraformer-v1
+        if model == DASHSCOPE_ASR_MODEL:
+            print(f"[DashScope ASR] {model} failed, trying {FALLBACK_ASR_MODEL}...")
+            return _call_dashscope_asr(audio_url, api_key, model=FALLBACK_ASR_MODEL)
+        return {"error": f"Task creation failed: {task.output}"}
+
+    task_id = task.output['task_id']
+
+    # 轮询等待结果
+    for _ in range(60):  # 最多等2分钟
+        result = Transcription.wait(task_id)
+        status = result.output.task_status
+
+        if status == 'SUCCEEDED':
+            # 解析结果
+            transcription_text = ""
+            sentences = []
+
+            for r in result.output.results:
+                transcription_text += r.get('transcription', '')
+                sentences.extend(r.get('sentences', []))
+
+            return {
+                "text": transcription_text,
+                "sentences": sentences
+            }
+        elif status == 'FAILED':
+            error_msg = result.output.message
+            print(f"[DashScope ASR] Task failed: {error_msg}")
+
+            # 如果 qwen3-asr-flash 失败，尝试 paraformer-v1
+            if model == DASHSCOPE_ASR_MODEL:
+                print(f"[DashScope ASR] Retrying with {FALLBACK_ASR_MODEL}...")
+                return _call_dashscope_asr(audio_url, api_key, model=FALLBACK_ASR_MODEL)
+
+            return {"error": error_msg}
+
+        time.sleep(2)
+
+    return {"error": "Timeout waiting for transcription"}
+
+
+def transcribe_with_dashscope(audio_file_path: str, api_key: str) -> str:
+    """
+    使用 DashScope ASR API 转录音频文件，返回带时间戳的文本。
+
+    参数:
+        audio_file_path: 音频文件路径
+        api_key: DashScope API Key
 
     返回:
         str: 带 [MM:SS] 格式时间戳的转录文本
     """
-    try:
-        from modelscope.pipelines import pipeline
-        from modelscope.utils.constant import Tasks
-        from pydub import AudioSegment
-    except ImportError as e:
-        raise ImportError(f"缺少依赖: {e}，请安装: pip install modelscope pydub")
+    if not api_key:
+        raise ValueError("未配置 DashScope API Key，请在设置中添加 DASHSCOPE_API_KEY")
 
-    # 转换设备参数格式
-    if device_key == "cuda":
-        device = "cuda:0"
-    elif device_key == "mps":
-        device = "cpu"
-    else:
-        device = "cpu"
+    # 1. 上传文件到 DashScope
+    print(f"[DashScope ASR] Uploading {audio_file_path}...")
+    audio_url = _upload_to_dashscope(audio_file_path, api_key)
+    if not audio_url:
+        raise RuntimeError("文件上传失败，无法获取访问 URL")
 
-    # 加载音频
-    audio = AudioSegment.from_mp3(audio_file_path)
-    duration_sec = len(audio) / 1000
+    print(f"[DashScope ASR] File uploaded, calling ASR...")
+    result = _call_dashscope_asr(audio_url, api_key)
 
-    # 切片大小（秒）- 可调整
-    chunk_size = 30
-    num_chunks = int((duration_sec + chunk_size - 1) // chunk_size)
+    if "error" in result:
+        raise RuntimeError(f"ASR 转录失败: {result['error']}")
 
-    # 创建 SenseVoice pipeline
-    # 检查本地是否存在模型
-    sensevoice_local_dir = os.path.join(
-        get_sensevoice_cache_dir() or '',
-        'iic', 'SenseVoiceSmall'
-    ) if get_sensevoice_cache_dir() else None
+    # 2. 解析结果，生成带时间戳的文本
+    lines = []
+    for sent in result.get("sentences", []):
+        begin_time = int(sent.get('begin_time', 0))  # 毫秒
+        text = clean_asr_text(sent.get('text', ''))
 
-    if sensevoice_local_dir and os.path.exists(sensevoice_local_dir):
-        model_path = sensevoice_local_dir
-        print(f"[SenseVoice] 使用本地模型: {model_path}")
-    else:
-        model_path = "iic/SenseVoiceSmall"
-        print(f"[SenseVoice] 使用 ModelScope 下载模型: {model_path}")
+        if text:
+            minutes = begin_time // 1000 // 60
+            seconds = (begin_time // 1000) % 60
+            lines.append(f"[{minutes:02d}:{seconds:02d}] {text}")
 
-    inference_pipeline = pipeline(
-        Tasks.auto_speech_recognition,
-        model=model_path,
-        device=device
-    )
+    if not lines:
+        # 没有时间戳句子，尝试用完整文本
+        text = clean_asr_text(result.get('text', ''))
+        if text:
+            lines.append(f"[00:00] {text}")
+        else:
+            return ""
 
-    results = []
+    return '\n'.join(lines)
 
-    # 分片处理
-    for i in range(num_chunks):
-        start_ms = i * chunk_size * 1000
-        end_ms = min((i + 1) * chunk_size * 1000, len(audio))
 
-        chunk = audio[start_ms:end_ms]
+# ================= 兼容层（供 api.py 统一调用）=================
 
-        # 保存到临时文件
-        import tempfile
-        import os
-        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
-            chunk.export(tmp.name, format="wav")
-            tmp_path = tmp.name
+def get_available_devices():
+    """返回可用设备（远程 API 模式下始终返回云端）"""
+    return {"cloud": "云端 ASR (DashScope)"}
 
-        try:
-            # 转录
-            result = inference_pipeline(tmp_path)
 
-            # 提取文本
-            text = ""
-            if isinstance(result, dict):
-                text = result.get("text", str(result))
-            elif isinstance(result, list) and len(result) > 0:
-                for item in result:
-                    if isinstance(item, dict):
-                        text += item.get("text", "")
-                    elif isinstance(item, str):
-                        text += item
-            else:
-                text = str(result)
+def transcribe_with_sensevoice(audio_file_path: str, device_key: str = "cpu") -> str:
+    """
+    兼容层：将 SenseVoice 接口重定向到 DashScope ASR。
+    device_key 参数被忽略（始终使用云端 API）。
+    """
+    api_key = get_dashscope_api_key()
+    return transcribe_with_dashscope(audio_file_path, api_key)
 
-            # 清洗文本
-            text = clean_sensevoice_text(text)
 
-            # 计算绝对时间戳
-            timestamp = start_ms / 1000
-            minutes = int(timestamp) // 60
-            seconds = int(timestamp) % 60
+def transcribe_audio_to_timestamped_text(model, audio_file_path: str, device_key: str) -> str:
+    """
+    兼容层：将 Whisper 接口重定向到 DashScope ASR。
+    model 和 device_key 参数被忽略。
+    """
+    api_key = get_dashscope_api_key()
+    return transcribe_with_dashscope(audio_file_path, api_key)
 
-            if text:
-                results.append(f"[{minutes:02d}:{seconds:02d}] {text}")
 
-        finally:
-            # 删除临时文件
-            os.remove(tmp_path)
-
-    return "\n".join(results)
+def get_whisper_model(model_name: str = "small", device_key: str = "cpu"):
+    """兼容层：返回 None，Whisper 模型不再需要。"""
+    return None

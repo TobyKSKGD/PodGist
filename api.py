@@ -4,7 +4,6 @@ import os
 import shutil
 import json
 import re
-import torch
 import argparse
 from datetime import datetime
 from backend.diagnostics import run_all_diagnostics
@@ -82,14 +81,42 @@ app.add_middleware(
 
 def load_api_key():
     """
-    从 .env 文件加载 API Key。
-    文件内容应为单行：sk-xxxxxx
+    从 .env 文件加载 DeepSeek API Key。
+    支持两种格式：
+    1. 单行：sk-xxxxxx（兼容旧格式）
+    2. 多行：DEEPSEEK_API_KEY=sk-xxxxxx
     """
     try:
         if os.path.exists(ENV_FILE):
             with open(ENV_FILE, "r", encoding="utf-8") as f:
-                key = f.read().strip()
-                return key if key else ""
+                content = f.read().strip()
+                # 尝试解析多行格式
+                lines = content.split('\n')
+                for line in lines:
+                    line = line.strip()
+                    if line.startswith('DEEPSEEK_API_KEY='):
+                        return line.split('=', 1)[1].strip().strip('"\'')
+                # 回退：单行格式（旧兼容）
+                if content and not '=' in content:
+                    return content
+                return ""
+        return ""
+    except Exception:
+        return ""
+
+
+def load_dashscope_api_key():
+    """
+    从 .env 文件加载 DashScope API Key。
+    格式：DASHSCOPE_API_KEY=sk-xxxxxx
+    """
+    try:
+        if os.path.exists(ENV_FILE):
+            with open(ENV_FILE, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('DASHSCOPE_API_KEY='):
+                        return line.split('=', 1)[1].strip().strip('"\'')
         return ""
     except Exception:
         return ""
@@ -164,25 +191,9 @@ async def transcribe_local(
         if not api_key:
             raise HTTPException(status_code=400, detail="请提供 DeepSeek API Key")
 
-        # 2. 选择计算设备
-        if device == "auto":
-            if torch.cuda.is_available():
-                device_key = "cuda"
-            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                device_key = "mps"
-            else:
-                device_key = "cpu"
-        else:
-            device_key = device
-
-        # 3. 转录（根据选择的引擎）
-        if engine == "SenseVoice":
-            # SenseVoice 转录
-            podcast_text = transcribe_with_sensevoice(file_path, device_key)
-        else:
-            # Whisper 转录 - 使用前端指定的模型规模
-            model = get_whisper_model(whisper_model, device_key)
-            podcast_text = transcribe_audio_to_timestamped_text(model, file_path, device_key)
+        # 2. 统一使用 DashScope ASR（远程 API，无需本地设备）
+        # engine/device 参数保留兼容性，但始终使用 DashScope
+        podcast_text = transcribe_with_sensevoice(file_path, "cloud")
 
         # 4. 调用大模型生成摘要（使用前端指定的时间轴上限）
         summary = get_podcast_summary_robust(api_key, podcast_text, max_timeline_items=max_timeline_items)
@@ -299,23 +310,9 @@ async def transcribe_url(
     title = download_result.get('title', 'unknown')
 
     try:
-        # 3. 选择计算设备
-        if device == "auto":
-            if torch.cuda.is_available():
-                device_key = "cuda"
-            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                device_key = "mps"
-            else:
-                device_key = "cpu"
-        else:
-            device_key = device
-
-        # 4. 转录（根据选择的引擎）
-        if engine == "SenseVoice":
-            podcast_text = transcribe_with_sensevoice(file_path, device_key)
-        else:
-            model = get_whisper_model(whisper_model, device_key)
-            podcast_text = transcribe_audio_to_timestamped_text(model, file_path, device_key)
+        # 3. 统一使用 DashScope ASR（远程 API，无需本地设备）
+        # engine 参数保留兼容性，但始终使用 DashScope
+        podcast_text = transcribe_with_sensevoice(file_path, "cloud")
 
         # 5. 调用大模型生成摘要
         summary = get_podcast_summary_robust(api_key, podcast_text, max_timeline_items=max_timeline_items)
@@ -653,15 +650,17 @@ def get_devices():
 @app.get("/api/settings")
 def get_settings():
     api_key = load_api_key()
+    dashscope_api_key = load_dashscope_api_key()
     config = load_config()
-    print(f"[get_settings] ENV_FILE={ENV_FILE}, api_key_present={bool(api_key)}, api_key_prefix={api_key[:4] if api_key else 'None'}")
+    print(f"[get_settings] ENV_FILE={ENV_FILE}, api_key_present={bool(api_key)}, dashscope_present={bool(dashscope_api_key)}")
     devices = get_available_devices()
     device_list = [{"key": k, "name": v} for k, v in devices.items()]
     return {
         "status": "success",
         "data": {
             "api_key": api_key,
-            "engine": config.get("engine", "SenseVoice"),
+            "dashscope_api_key": dashscope_api_key,
+            "engine": config.get("engine", "cloud"),
             "whisper_model": config.get("whisper_model", "small"),
             "device": config.get("device", "auto"),
             "max_timeline_items": config.get("max_timeline_items", 15),
@@ -674,16 +673,29 @@ def get_settings():
 @app.post("/api/settings")
 def save_settings(
     api_key: str = Form(""),
-    engine: str = Form("SenseVoice"),
+    dashscope_api_key: str = Form(""),
+    engine: str = Form("cloud"),
     whisper_model: str = Form("small"),
     device: str = Form("auto"),
     max_timeline_items: int = Form(15)
 ):
     try:
-        # 保存 API Key 到 .env 文件
+        # 保存 API Keys 到 .env 文件（支持多行格式）
         print(f"[save_settings] Saving to ENV_FILE={ENV_FILE}")
+        lines = []
+        deepseek_key = api_key.strip()
+        dashscope_key = dashscope_api_key.strip()
+        if deepseek_key:
+            lines.append(f"DEEPSEEK_API_KEY={deepseek_key}")
+        if dashscope_key:
+            lines.append(f"DASHSCOPE_API_KEY={dashscope_key}")
+
         with open(ENV_FILE, "w", encoding="utf-8") as f:
-            f.write(api_key.strip())
+            f.write('\n'.join(lines))
+
+        # 同时设置到环境变量供 DashScope SDK 使用
+        if dashscope_key:
+            os.environ['DASHSCOPE_API_KEY'] = dashscope_key
 
         # 保存所有配置到 config.json
         config = load_config()
