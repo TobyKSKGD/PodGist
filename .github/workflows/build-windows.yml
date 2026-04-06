@@ -80,21 +80,33 @@ jobs:
           }
 
       - name: Build backend with PyInstaller
+        shell: pwsh
         run: |
-          pyinstaller --clean --noconfirm backend/api.spec 2>&1 | Tee-Object -FilePath pyinstaller_output.txt
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "PyInstaller FAILED with exit code $LASTEXITCODE"
+          Write-Host "=== Starting PyInstaller ==="
+          pyinstaller --clean --noconfirm backend/api.spec 2>&1
+          $exit = $LASTEXITCODE
+          Write-Host "=== PyInstaller exit code: $exit ==="
+          if ($exit -ne 0) {
+            Write-Host "PyInstaller FAILED with exit code $exit"
             exit 1
+          }
+
+          # 列出所有可能的输出位置
+          Write-Host "=== Checking backend/dist ==="
+          if (Test-Path "backend/dist") {
+            Get-ChildItem "backend/dist" -Recurse | Select-Object FullName | Format-Table -AutoSize
+          } else {
+            Write-Host "backend/dist does not exist"
+          }
+
+          Write-Host "=== Checking dist ==="
+          if (Test-Path "dist") {
+            Get-ChildItem "dist" -Recurse | Select-Object FullName | Format-Table -AutoSize
+          } else {
+            Write-Host "dist does not exist"
           }
         env:
           PYTHONOPTIMIZE: '1'
-
-      - name: Show PyInstaller output
-        shell: pwsh
-        run: |
-          if (Test-Path "pyinstaller_output.txt") {
-            Get-Content "pyinstaller_output.txt"
-          }
 
       - name: Verify PyInstaller output
         shell: pwsh
