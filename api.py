@@ -5,9 +5,11 @@ import shutil
 import json
 import re
 import argparse
+import stat
+import platform
 from datetime import datetime
 from backend.diagnostics import run_all_diagnostics
-from backend.transcriber import transcribe_with_sensevoice
+from backend.transcriber import transcribe_with_sensevoice, get_available_devices
 from backend.llm_agent import get_podcast_summary_robust, search_in_podcast
 from backend.downloader import route_and_download, detect_platform, AudioDownloader
 from backend.task_queue import add_task, get_task, get_all_tasks, get_queue_stats, update_task_status, delete_task, clear_completed
@@ -19,8 +21,6 @@ from backend.rag_db import (
     index_archive, delete_archive_vectors, get_archives_by_tag, init_db as init_rag_db
 )
 from backend.rag_retriever import generate_chat_response
-from backend.model_manager import get_all_models_status, download_model, get_manual_download_info, get_model_path
-from backend.package_manager import get_all_packages_status, install_package, install_core_packages, uninstall_package
 from sse_starlette.sse import EventSourceResponse
 import asyncio
 
@@ -50,49 +50,38 @@ async def startup_index():
 # 获取 api.py 所在目录作为项目根目录（默认）
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# 用户数据目录（优先使用环境变量，回退到命令行参数，再回退到脚本目录）
-# 优先级：PODGIST_DATA_DIR > _cli_args.data_dir > _SCRIPT_DIR
-_env_data_dir = os.environ.get('PODGIST_DATA_DIR')
-_cli_data_dir = _cli_args.data_dir
-print(f"[api.py] PODGIST_DATA_DIR={_env_data_dir}, _cli_args.data_dir={_cli_data_dir}, _SCRIPT_DIR={_SCRIPT_DIR}")
-_data_dir = _env_data_dir or _cli_data_dir or _SCRIPT_DIR
-BASE_DIR = _data_dir
-print(f"[api.py] BASE_DIR={BASE_DIR}")
+# 用户数据目录（Electron 模式或开发模式）
+if _cli_args.data_dir:
+    BASE_DIR = _cli_args.data_dir
+else:
+    BASE_DIR = _SCRIPT_DIR
 
 ENV_FILE = os.path.join(BASE_DIR, ".env")
 CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
-print(f"[api.py] ENV_FILE={ENV_FILE}")
 
 # ================= 安全配置：跨域 (CORS) =================
 # 极其关键：允许未来的 React 前端与这个后端通信
-is_dev = os.environ.get('NODE_ENV') == 'development'
-allow_origins = (
-    ["http://localhost:5173", "http://127.0.0.1:5173"]
-    if is_dev
-    else ["*"]
-)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allow_origins,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-
-
-def load_dashscope_api_key():
+def load_api_key():
     """
-    从 .env 文件加载 DashScope API Key。
-    格式：DASHSCOPE_API_KEY=sk-xxxxxx
+    从 .env 文件加载 API Key。
+    支持两种格式：DASHSCOPE_API_KEY=sk-xxxxxx（带前缀）或 sk-xxxxxx（裸 key）
     """
     try:
         if os.path.exists(ENV_FILE):
             with open(ENV_FILE, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line.startswith('DASHSCOPE_API_KEY='):
-                        return line.split('=', 1)[1].strip().strip('"\'')
+                key = f.read().strip()
+                # 去掉前缀以兼容旧格式
+                if key.startswith("DASHSCOPE_API_KEY="):
+                    key = key[len("DASHSCOPE_API_KEY="):]
+                return key if key else ""
         return ""
     except Exception:
         return ""
@@ -163,16 +152,15 @@ async def transcribe_local(
 
         # 1. 获取 API Key（优先使用前端传的，否则从 .env 读取）
         if not api_key:
-            api_key = load_dashscope_api_key()
+            api_key = load_api_key()
         if not api_key:
             raise HTTPException(status_code=400, detail="请提供 DashScope API Key")
 
-        # 2. 统一使用 DashScope ASR（远程 API，无需本地设备）
-        # engine/device 参数保留兼容性，但始终使用 DashScope
-        podcast_text = transcribe_with_sensevoice(file_path, "cloud")
+        # 2. 转录（使用 DashScope 云端 ASR）
+        podcast_text = transcribe_with_sensevoice(file_path)
 
         # 4. 调用大模型生成摘要（使用前端指定的时间轴上限）
-        summary = get_podcast_summary_robust(api_key, podcast_text, max_timeline_items=15)
+        summary = get_podcast_summary_robust(api_key, podcast_text, max_timeline_items=max_timeline_items)
 
         # 5. 提取第一行作为标题
         lines = summary.strip().split('\n')
@@ -250,7 +238,7 @@ async def transcribe_url(
 
     # 1. 获取 API Key
     if not api_key:
-        api_key = load_dashscope_api_key()
+        api_key = load_api_key()
     if not api_key:
         raise HTTPException(status_code=400, detail="请提供 DashScope API Key")
 
@@ -286,12 +274,11 @@ async def transcribe_url(
     title = download_result.get('title', 'unknown')
 
     try:
-        # 3. 统一使用 DashScope ASR（远程 API，无需本地设备）
-        # engine 参数保留兼容性，但始终使用 DashScope
-        podcast_text = transcribe_with_sensevoice(file_path, "cloud")
+        # 3. 转录（使用 DashScope 云端 ASR）
+        podcast_text = transcribe_with_sensevoice(file_path)
 
         # 5. 调用大模型生成摘要
-        summary = get_podcast_summary_robust(api_key, podcast_text, max_timeline_items=15)
+        summary = get_podcast_summary_robust(api_key, podcast_text, max_timeline_items=max_timeline_items)
 
         # 6. 创建归档目录
         date_str = datetime.now().strftime("%Y%m%d_%H%M")
@@ -384,6 +371,20 @@ def get_archives():
 
 
 # 3.1 删除归档
+def _robust_rmtree(path):
+    """
+    跨平台 robust 删除目录，处理 Windows 锁定文件和只读属性。
+    """
+    if platform.system() == 'Windows':
+        def _onerror(func, file_path, exc_info):
+            # Windows 上如果文件被锁定或只读，先修改权限再重试
+            os.chmod(file_path, stat.S_IWRITE)
+            func(file_path)
+        shutil.rmtree(path, onerror=_onerror)
+    else:
+        shutil.rmtree(path)
+
+
 @app.delete("/api/archives/{archive_name}")
 def delete_archive(archive_name: str):
     """
@@ -399,8 +400,8 @@ def delete_archive(archive_name: str):
         if not os.path.exists(archive_path) or not os.path.isdir(archive_path):
             raise HTTPException(status_code=404, detail="归档不存在")
 
-        # 删除整个目录
-        shutil.rmtree(archive_path)
+        # 删除整个目录（使用 robust 版本，处理 Windows 锁定文件）
+        _robust_rmtree(archive_path)
         # 删除向量
         delete_archive_vectors(archive_name)
         return {"status": "success", "message": f"归档 '{archive_name}' 已删除"}
@@ -465,7 +466,7 @@ def get_archive_detail(archive_id: str):
 @app.get("/api/diagnostics")
 def run_diagnostics():
     try:
-        api_key = load_dashscope_api_key()
+        api_key = load_api_key()
         results = run_all_diagnostics(api_key=api_key)
         # 转换结果为前端易用的格式
         formatted_results = []
@@ -480,123 +481,20 @@ def run_diagnostics():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ================= 模型管理 API =================
+# ================= 模型管理 API（云端模式，无需本地模型）=================
 
-# 4.1 获取所有模型状态
 @app.get("/api/models/status")
 def get_models_status():
-    """获取所有模型的状态"""
-    try:
-        return {"status": "success", "data": get_all_models_status()}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    """本地模型已停用，统一使用 DashScope 云端 ASR"""
+    return {"status": "success", "data": []}
 
-# 4.2 获取手动下载信息
 @app.get("/api/models/manual-download/{model_name}")
 def get_manual_download(model_name: str):
-    """获取手动下载链接和说明"""
-    try:
-        info = get_manual_download_info(model_name)
-        if "error" in info:
-            raise HTTPException(status_code=404, detail=info["error"])
-        return {"status": "success", "data": info}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    raise HTTPException(status_code=404, detail="本地模型已停用，使用 DashScope 云端 ASR")
 
-# 4.3 删除模型
 @app.delete("/api/models/{model_name}")
 def delete_model(model_name: str):
-    """删除指定模型"""
-    try:
-        # 验证模型名称
-        valid_models = [
-            "whisper-tiny", "whisper-base", "whisper-small", "whisper-medium",
-            "whisper-large-v3", "whisper-large-v3-turbo",
-            "sensevoice", "all-MiniLM-L6-v2"
-        ]
-        if model_name not in valid_models:
-            raise HTTPException(status_code=400, detail=f"未知模型: {model_name}")
-
-        model_path = get_model_path(model_name)
-        if os.path.exists(model_path):
-            if os.path.isdir(model_path):
-                import shutil
-                shutil.rmtree(model_path)
-            else:
-                os.remove(model_path)
-            return {"status": "success", "message": f"{model_name} 已删除", "path": model_path}
-        else:
-            raise HTTPException(status_code=404, detail="模型文件不存在")
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# 4.4 下载模型（SSE 流式进度）
-@app.get("/api/models/download/{model_name}")
-async def download_model_stream(model_name: str):
-    """
-    下载指定模型，通过 SSE 流式返回进度
-    """
-    try:
-        # 验证模型名称
-        valid_models = [
-            "whisper-tiny", "whisper-base", "whisper-small", "whisper-medium",
-            "whisper-large-v3", "whisper-large-v3-turbo",
-            "sensevoice", "all-MiniLM-L6-v2"
-        ]
-        if model_name not in valid_models:
-            raise HTTPException(status_code=400, detail=f"未知模型: {model_name}")
-
-        # 进度收集器（线程安全）
-        import threading
-        progress_lock = threading.Lock()
-        progress_data = {"type": "starting", "downloaded_mb": 0, "total_mb": 0, "percent": 0}
-        download_done = False
-        download_result = None
-
-        def progress_callback(event):
-            nonlocal download_done, download_result
-            with progress_lock:
-                progress_data.update(event)
-            if event.get("type") in ("error", "success"):
-                download_done = True
-                download_result = event
-
-        async def event_generator():
-            nonlocal download_done, download_result
-
-            # 先发送一个起始事件
-            yield {"event": "progress", "data": json.dumps(progress_data)}
-
-            # 在线程池中执行下载
-            import concurrent.futures
-            loop = asyncio.get_event_loop()
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(download_model, model_name, progress_callback)
-                # 等待下载完成，每 0.5 秒 yield 一次进度
-                while not future.done():
-                    await asyncio.sleep(0.5)
-                    with progress_lock:
-                        data = dict(progress_data)
-                    yield {"event": "progress", "data": json.dumps(data)}
-
-                # 下载完成，获取最终结果
-                final_result = future.result()
-                with progress_lock:
-                    if download_result:
-                        final_result = download_result
-
-                yield {"event": "done", "data": json.dumps(final_result)}
-
-        return EventSourceResponse(event_generator())
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    raise HTTPException(status_code=404, detail="本地模型已停用，使用 DashScope 云端 ASR")
 
 
 # 5. 获取可用硬件设备列表
@@ -625,13 +523,13 @@ def get_devices():
 # 6. 获取偏好设置
 @app.get("/api/settings")
 def get_settings():
-    dashscope_api_key = load_dashscope_api_key()
+    api_key = load_api_key()
     config = load_config()
     return {
         "status": "success",
         "data": {
-            "dashscope_api_key": dashscope_api_key,
-            "max_timeline_items": 15
+            "dashscope_api_key": api_key,
+            "max_timeline_items": config.get("max_timeline_items", 15)
         }
     }
 
@@ -639,77 +537,23 @@ def get_settings():
 # 7. 保存偏好设置
 @app.post("/api/settings")
 def save_settings(
-    dashscope_api_key: str = Form("")
+    dashscope_api_key: str = Form(""),
+    max_timeline_items: int = Form(15)
 ):
     try:
-        # 保存 DashScope API Key 到 .env 文件
-        lines = []
-        dashscope_key = dashscope_api_key.strip()
-        if dashscope_key:
-            lines.append(f"DASHSCOPE_API_KEY={dashscope_key}")
-
+        # 保存 API Key 到 .env 文件（使用 DASHSCOPE_API_KEY=xxx 格式）
         with open(ENV_FILE, "w", encoding="utf-8") as f:
-            f.write('\n'.join(lines))
+            f.write(f"DASHSCOPE_API_KEY={dashscope_api_key.strip()}")
 
-        # 设置到环境变量供 DashScope SDK 使用
-        if dashscope_key:
-            os.environ['DASHSCOPE_API_KEY'] = dashscope_key
+        # 同步更新当前进程环境变量，使 worker 线程立即可见
+        os.environ['DASHSCOPE_API_KEY'] = dashscope_api_key.strip()
+
+        # 保存配置到 config.json
+        config = load_config()
+        config["max_timeline_items"] = max_timeline_items
+        save_config(config)
 
         return {"status": "success", "message": "设置已保存"}
-    except Exception as e:
-        print(f"[save_settings] Error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ================= 依赖管理 API =================
-
-@app.get("/api/packages/status")
-def get_packages_status():
-    """获取所有依赖包的状态"""
-    try:
-        return {"status": "success", "data": get_all_packages_status()}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/packages/install")
-def api_install_package(body: dict = None):
-    """安装指定的依赖包"""
-    try:
-        pkg_id = body.get("package_id") if body else None
-        if not pkg_id:
-            raise HTTPException(status_code=400, detail="package_id 不能为空")
-
-        success, message = install_package(pkg_id)
-        return {"status": "success" if success else "error", "message": message}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/packages/install-core")
-def api_install_core_packages():
-    """一键安装所有核心依赖（不含 torch GPU 版）"""
-    try:
-        success, results = install_core_packages()
-        return {"status": "success" if success else "partial", "results": results}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/packages/uninstall")
-def api_uninstall_package(body: dict = None):
-    """卸载指定的依赖包"""
-    try:
-        pkg_id = body.get("package_id") if body else None
-        if not pkg_id:
-            raise HTTPException(status_code=400, detail="package_id 不能为空")
-
-        success, message = uninstall_package(pkg_id)
-        return {"status": "success" if success else "error", "message": message}
-    except HTTPException:
-        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -779,7 +623,6 @@ def get_single_task(task_id: str):
 async def create_task(
     source: str = Form(...),
     task_type: str = Form(...),
-    engine: str = Form("SenseVoice"),
     max_timeline_items: int = Form(15),
     name: str = Form("")
 ):
@@ -789,13 +632,9 @@ async def create_task(
         if not is_worker_running():
             start_worker()
 
-        # 转换引擎名称
-        engine_key = "sensevoice" if engine == "SenseVoice" else "whisper"
-
         task_id = add_task(
             source=source,
             task_type=task_type,
-            engine=engine_key,
             max_timeline_items=max_timeline_items,
             name=name if name else None
         )
@@ -840,9 +679,9 @@ def clear_finished_tasks():
 def retry_tasks():
     """重试所有失败的任务"""
     try:
-        api_key = load_dashscope_api_key()
+        api_key = load_api_key()
         if not api_key:
-            raise HTTPException(status_code=400, detail="请先配置 DashScope API Key")
+            raise HTTPException(status_code=400, detail="请先配置 API Key")
 
         success_count = retry_failed_tasks(api_key)
         return {"status": "success", "message": f"成功重试 {success_count} 个任务"}
@@ -882,9 +721,9 @@ def retry_task_llm(task_id: str):
     """
     try:
         # 获取 API Key
-        api_key = load_dashscope_api_key()
+        api_key = load_api_key()
         if not api_key:
-            raise HTTPException(status_code=400, detail="请先配置 DashScope API Key")
+            raise HTTPException(status_code=400, detail="请先配置 API Key")
 
         # 获取任务信息
         task = get_task(task_id)
@@ -907,11 +746,12 @@ def retry_task_llm(task_id: str):
             raise HTTPException(status_code=400, detail="转录文本为空")
 
         # 获取任务参数
+        max_timeline_items = task.get("max_timeline_items", 15)
         title = task.get("name", "未知任务")
 
         # 调用 LLM 生成摘要
         print(f"[Retry-LLM] 正在为任务 {task_id} 生成摘要...")
-        raw_summary = get_podcast_summary_robust(api_key, podcast_text, max_timeline_items=15)
+        raw_summary = get_podcast_summary_robust(api_key, podcast_text, max_timeline_items)
 
         # 提取第一行作为标题
         lines = raw_summary.strip().split('\n')
@@ -991,7 +831,7 @@ async def search_podcast(request: dict):
 
         # 获取 API Key
         if not api_key:
-            api_key = load_dashscope_api_key()
+            api_key = load_api_key()
         if not api_key:
             raise HTTPException(status_code=400, detail="请先配置 DashScope API Key")
 
@@ -1149,7 +989,7 @@ async def chat_stream(session_id: str, request: dict):
         archive_ids = request.get("archive_ids") or None
         tag_ids = request.get("tag_ids") or None
 
-        api_key = load_dashscope_api_key()
+        api_key = load_api_key()
         if not api_key:
             raise HTTPException(status_code=400, detail="请先配置 DashScope API Key")
 
@@ -1179,10 +1019,10 @@ async def chat_stream(session_id: str, request: dict):
                 elif event["type"] == "done":
                     referenced_archives = event["referenced_archives"]
                     full_content = event["content"]
-                    # 使用紧凑 JSON（无多余空格和换行），确保第一个 \n 是 JSON 与内容的分隔符
+                    # JSON 放前面（JSON 不以 \n 开头，保证 split 只匹配分隔符）
                     yield {
                         "event": "done",
-                        "data": f"{json.dumps(referenced_archives, ensure_ascii=False, separators=(',', ':'))}\n{full_content}"
+                        "data": f"{json.dumps(referenced_archives, ensure_ascii=False)}\n{full_content}"
                     }
 
             # 保存助手消息
