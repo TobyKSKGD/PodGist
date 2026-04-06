@@ -103,19 +103,19 @@ jobs:
         shell: pwsh
         run: |
           $required = @(
-            "backend/dist/api/api-engine.exe",
-            "backend/dist/api/_internal/python311.dll",
-            "backend/dist/api/_internal/vcruntime140.dll",
-            "backend/dist/api/_internal/vcruntime140_1.dll",
-            "backend/dist/api/_internal/msvcp140.dll"
+            "dist/api/api-engine.exe",
+            "dist/api/_internal/python311.dll",
+            "dist/api/_internal/vcruntime140.dll",
+            "dist/api/_internal/vcruntime140_1.dll",
+            "dist/api/_internal/msvcp140.dll"
           )
 
-          if (-not (Test-Path "backend/dist/api")) {
-            Write-Host "ERROR: backend/dist/api not found"
+          if (-not (Test-Path "dist/api")) {
+            Write-Host "ERROR: dist/api not found"
             exit 1
           }
 
-          Get-ChildItem "backend/dist/api" -Recurse |
+          Get-ChildItem "dist/api" -Recurse |
             Select-Object FullName |
             Format-Table -AutoSize
 
@@ -133,7 +133,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path "electron/dist" | Out-Null
           Remove-Item "electron/dist/api" -Recurse -Force -ErrorAction SilentlyContinue
-          Copy-Item "backend/dist/api" "electron/dist/" -Recurse -Force
+          Copy-Item "dist/api" "electron/dist/" -Recurse -Force
 
           if (-not (Test-Path "electron/dist/api/api-engine.exe")) {
             Write-Host "ERROR: electron/dist/api/api-engine.exe not found after copy"
