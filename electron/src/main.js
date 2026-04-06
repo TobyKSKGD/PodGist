@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const path = require('node:path');
 const BackendStarter = require('./backendStarter');
 
@@ -64,6 +64,15 @@ function createWindow() {
   // 加载失败时记录错误
   mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDesc) => {
     console.error('[PodGist] 前端加载失败:', errorCode, errorDesc);
+  });
+
+  // 处理 window.open() 调用：外部链接在系统浏览器中打开，而不是创建新窗口
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    // 只对外部 HTTP(S) 链接使用系统浏览器
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      shell.openExternal(url);
+    }
+    return { action: 'deny' };
   });
 
   // 窗口准备好后显示

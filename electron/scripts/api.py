@@ -509,7 +509,7 @@ def get_settings():
     return {
         "status": "success",
         "data": {
-            "api_key": api_key,
+            "dashscope_api_key": api_key,
             "max_timeline_items": config.get("max_timeline_items", 15)
         }
     }
@@ -518,13 +518,13 @@ def get_settings():
 # 7. 保存偏好设置
 @app.post("/api/settings")
 def save_settings(
-    api_key: str = Form(""),
+    dashscope_api_key: str = Form(""),
     max_timeline_items: int = Form(15)
 ):
     try:
         # 保存 API Key 到 .env 文件
         with open(ENV_FILE, "w", encoding="utf-8") as f:
-            f.write(api_key.strip())
+            f.write(dashscope_api_key.strip())
 
         # 保存配置到 config.json
         config = load_config()
