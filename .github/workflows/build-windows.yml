@@ -82,19 +82,19 @@ jobs:
       - name: Build backend with PyInstaller
         shell: pwsh
         run: |
-          pyinstaller --clean --noconfirm backend/api.spec *> pyinstaller.log
+          pyinstaller --clean --noconfirm backend/api.spec
           $exit = $LASTEXITCODE
           Write-Host "EXIT_CODE=$exit"
-          if ($exit -ne 0) {
-            Get-Content "pyinstaller.log" | Select-Object -Last 50
-          }
           if (Test-Path "backend/dist/api") {
             Write-Host "OUTPUT_FOUND=backend/dist/api"
-            Get-ChildItem "backend/dist/api" -Recurse | Select-Object FullName | Format-Table -AutoSize
           } elseif (Test-Path "dist/api") {
             Write-Host "OUTPUT_FOUND=dist/api"
           } else {
             Write-Host "OUTPUT_FOUND=none"
+            Write-Host "=== backend/dist contents ==="
+            if (Test-Path "backend/dist") { Get-ChildItem "backend/dist" -Recurse | Select FullName }
+            Write-Host "=== dist contents ==="
+            if (Test-Path "dist") { Get-ChildItem "dist" -Recurse | Select FullName }
           }
         env:
           PYTHONOPTIMIZE: '1'
