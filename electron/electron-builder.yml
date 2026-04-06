@@ -1,6 +1,7 @@
 # ================= electron-builder 配置 =================
 # PodGist 桌面应用打包配置
 
+
 # 打包目标平台
 target:
   - target: nsis
@@ -10,18 +11,11 @@ target:
     arch:
       - arm64
 
-# App 元数据（icon 必须在根层级，build key 已废弃）
+# App 元数据
 appId: com.podgist.desktop
 productName: PodGist
 copyright: Copyright © 2026 PodGist Team
-icon: assets/icon
-
-# 发布配置 - 已禁用，改由 workflow 通过 gh CLI 手动上传
-# publish:
-#   provider: github
-#   owner: TobySKKGD
-#   repo: PodGist
-#   releaseType: draft
+icon: assets/icon.ico
 
 # 构建产物输出目录
 directories:
@@ -38,6 +32,7 @@ nsis:
   artifactName: ${productName}-${version}-${os}-${arch}.${ext}
   installerIcon: assets/icon.ico
   uninstallerIcon: assets/icon.ico
+  uninstallDisplayName: PodGist
 
 # DMG macOS 安装包配置
 dmg:
@@ -62,7 +57,6 @@ mac:
   icon: assets/Icon.icns
   target:
     - dmg
-  # macOS: 使用 Python venv（python_venv 在 prebuild 时已准备）
   files:
     - src/**/*
     - package.json
@@ -88,20 +82,28 @@ mac:
 # ================= Windows 配置 =================
 win:
   icon: assets/icon.ico
+  executableName: PodGist
   forceCodeSigning: false
-  signAndEditExecutable: false
+
+  # 关键修复：
+  # 必须开启，electron-builder 才会把 app icon / metadata / execution level 写进主程序 EXE
+  signAndEditExecutable: true
+
   publish: null
   target:
     - target: nsis
       arch:
         - x64
-  # Windows: 使用 PyInstaller 打包的 api-engine（后端已编译为本地二进制）
+
+  # Windows 只需要 Electron 端文件，后端通过 extraResources 带入 resources/api
   files:
     - src/**/*
     - package.json
     - frontend-dist/**/*
+
   asarUnpack:
     - frontend-dist/**/*
+
   extraResources:
     - from: assets/icon.ico
       to: icon.ico

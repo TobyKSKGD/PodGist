@@ -38,11 +38,14 @@ jobs:
           cache: 'pip'
           cache-dependency-path: requirements.txt
 
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
       - name: Install Python deps
         run: pip install -r requirements.txt
 
       - name: Install PyInstaller
-        run: pip install pyinstaller
+        run: pip install pyinstaller==6.19.0
 
       - name: Copy clean backend scripts
         shell: pwsh
@@ -58,30 +61,54 @@ jobs:
           Write-Host "Backend scripts copied"
 
       - name: Build backend with PyInstaller
-        run: pyinstaller backend/api.spec
+        run: pyinstaller --clean --noconfirm backend/api.spec
         env:
           PYTHONOPTIMIZE: '1'
+
+      - name: Verify PyInstaller output
+        shell: pwsh
+        run: |
+          $required = @(
+            "backend/dist/api/api-engine.exe",
+            "backend/dist/api/_internal/python311.dll",
+            "backend/dist/api/_internal/vcruntime140.dll",
+            "backend/dist/api/_internal/vcruntime140_1.dll",
+            "backend/dist/api/_internal/msvcp140.dll"
+          )
+
+          if (-not (Test-Path "backend/dist/api")) {
+            Write-Host "ERROR: backend/dist/api not found"
+            exit 1
+          }
+
+          Get-ChildItem "backend/dist/api" -Recurse |
+            Select-Object FullName |
+            Format-Table -AutoSize
+
+          foreach ($path in $required) {
+            if (-not (Test-Path $path)) {
+              Write-Host "ERROR: Missing $path"
+              exit 1
+            }
+          }
+
+          Write-Host "PyInstaller output verified."
 
       - name: Copy api dist to electron/dist
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "electron/dist" | Out-Null
-          # 先检查 backend/dist/api（PyInstaller 原始输出）
-          if (Test-Path "backend/dist/api") {
-            Copy-Item "backend/dist/api/*" "electron/dist/api/" -Recurse -Force
-            Write-Host "Copied backend/dist/api -> electron/dist/api"
-          } elseif (Test-Path "dist/api") {
-            # api.spec 的 post-build 脚本会复制到 dist/api
-            Copy-Item "dist/api/*" "electron/dist/api/" -Recurse -Force
-            Write-Host "Copied dist/api -> electron/dist/api"
-          } else {
-            Write-Host "ERROR: api dist not found!"
-            Write-Host "=== backend/dist contents ==="
-            Get-ChildItem "backend/dist" -Recurse -ErrorAction SilentlyContinue | Format-Table FullName
-            Write-Host "=== dist contents ==="
-            Get-ChildItem "dist" -Recurse -ErrorAction SilentlyContinue | Format-Table FullName
+          Remove-Item "electron/dist/api" -Recurse -Force -ErrorAction SilentlyContinue
+          Copy-Item "backend/dist/api" "electron/dist/" -Recurse -Force
+
+          if (-not (Test-Path "electron/dist/api/api-engine.exe")) {
+            Write-Host "ERROR: electron/dist/api/api-engine.exe not found after copy"
             exit 1
           }
+
+          Get-ChildItem "electron/dist/api" -Recurse |
+            Select-Object FullName |
+            Format-Table -AutoSize
 
       - name: Download ffmpeg for Windows
         shell: pwsh
@@ -90,23 +117,31 @@ jobs:
           New-Item -ItemType Directory -Force -Path $ffmpegDir | Out-Null
           $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
           $zipPath = "$env:TEMP\ffmpeg.zip"
+
           Write-Host "Downloading ffmpeg..."
           [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
           Invoke-WebRequest -Uri $url -OutFile $zipPath
+
           Expand-Archive -Path $zipPath -DestinationPath "$env:TEMP\ffmpeg_extracted" -Force
+
           $ffmpegExe = Get-ChildItem -Path "$env:TEMP\ffmpeg_extracted" -Recurse -Filter "ffmpeg.exe" | Select-Object -First 1
           if ($ffmpegExe) {
-              Copy-Item $ffmpegExe.FullName -Destination $ffmpegDir -Force
-              Write-Host "ffmpeg.exe ready"
+            Copy-Item $ffmpegExe.FullName -Destination $ffmpegDir -Force
+            Write-Host "ffmpeg.exe ready"
           } else {
-              Write-Host "ERROR: ffmpeg.exe not found"
-              exit 1
+            Write-Host "ERROR: ffmpeg.exe not found"
+            exit 1
           }
+
           $ffprobeExe = Get-ChildItem -Path "$env:TEMP\ffmpeg_extracted" -Recurse -Filter "ffprobe.exe" | Select-Object -First 1
           if ($ffprobeExe) {
-              Copy-Item $ffprobeExe.FullName -Destination $ffmpegDir -Force
-              Write-Host "ffprobe.exe ready"
+            Copy-Item $ffprobeExe.FullName -Destination $ffmpegDir -Force
+            Write-Host "ffprobe.exe ready"
+          } else {
+            Write-Host "ERROR: ffprobe.exe not found"
+            exit 1
           }
+
           Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
           Remove-Item "$env:TEMP\ffmpeg_extracted" -Recurse -Force -ErrorAction SilentlyContinue
 
@@ -122,7 +157,7 @@ jobs:
         shell: pwsh
         run: |
           Get-ChildItem "release" -Filter "*.exe" -Recurse |
-            Select-Object FullName, @{N="SizeMB";E={[math]::Round($_.Length/1MB,2)}} |
+            Select-Object FullName, @{N="SizeMB";E={[math]::Round($_.Length / 1MB, 2)}} |
             Format-Table -AutoSize
 
       - name: Upload to GitHub Release
@@ -130,13 +165,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
         run: |
-          # 固定上传到 v1.0.0
           $tag = "v1.0.0"
           $installer = Get-ChildItem -Path "release" -Filter "*.exe" -Recurse | Select-Object -First 1
+
           if (-not $installer) {
-              Write-Host "ERROR: No installer found"
-              exit 1
+            Write-Host "ERROR: No installer found"
+            exit 1
           }
+
           $sizeMB = [math]::Round($installer.Length / 1MB, 2)
           Write-Host "Uploading $($installer.Name) ($sizeMB MB) to release $tag"
           gh release upload "$tag" $installer.FullName --clobber
