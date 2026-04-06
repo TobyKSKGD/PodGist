@@ -157,14 +157,27 @@ def run_all_diagnostics(api_key=None):
     # 读取 DashScope API Key
     if api_key is None:
         api_key = ""
-        env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env')
-        if os.path.exists(env_path):
-            with open(env_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line.startswith('DASHSCOPE_API_KEY='):
-                        api_key = line.split('=', 1)[1].strip().strip('"\'')
-                        break
+        # 优先从 PODGIST_DATA_DIR 读取（Electron 打包环境）
+        data_dir = os.environ.get('PODGIST_DATA_DIR')
+        if data_dir:
+            env_path = os.path.join(data_dir, '.env')
+            if os.path.exists(env_path):
+                with open(env_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith('DASHSCOPE_API_KEY='):
+                            api_key = line.split('=', 1)[1].strip().strip('"\'')
+                            break
+        # 回退到项目根目录（开发环境）
+        if not api_key:
+            env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env')
+            if os.path.exists(env_path):
+                with open(env_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith('DASHSCOPE_API_KEY='):
+                            api_key = line.split('=', 1)[1].strip().strip('"\'')
+                            break
 
     # 1. DashScope API Key 检查
     if api_key:

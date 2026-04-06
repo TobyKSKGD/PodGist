@@ -5,6 +5,8 @@ import shutil
 import json
 import re
 import argparse
+import stat
+import platform
 from datetime import datetime
 from backend.diagnostics import run_all_diagnostics
 from backend.transcriber import transcribe_with_sensevoice, get_available_devices
@@ -369,6 +371,20 @@ def get_archives():
 
 
 # 3.1 删除归档
+def _robust_rmtree(path):
+    """
+    跨平台 robust 删除目录，处理 Windows 锁定文件和只读属性。
+    """
+    if platform.system() == 'Windows':
+        def _onerror(func, file_path, exc_info):
+            # Windows 上如果文件被锁定或只读，先修改权限再重试
+            os.chmod(file_path, stat.S_IWRITE)
+            func(file_path)
+        shutil.rmtree(path, onerror=_onerror)
+    else:
+        shutil.rmtree(path)
+
+
 @app.delete("/api/archives/{archive_name}")
 def delete_archive(archive_name: str):
     """
@@ -384,8 +400,8 @@ def delete_archive(archive_name: str):
         if not os.path.exists(archive_path) or not os.path.isdir(archive_path):
             raise HTTPException(status_code=404, detail="归档不存在")
 
-        # 删除整个目录
-        shutil.rmtree(archive_path)
+        # 删除整个目录（使用 robust 版本，处理 Windows 锁定文件）
+        _robust_rmtree(archive_path)
         # 删除向量
         delete_archive_vectors(archive_name)
         return {"status": "success", "message": f"归档 '{archive_name}' 已删除"}

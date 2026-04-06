@@ -19,7 +19,7 @@ sys.path.insert(0, current_dir)
 
 # 导入项目模块
 from backend import task_queue
-from backend.transcriber import transcribe_with_sensevoice, get_dashscope_api_key
+from backend.transcriber import transcribe_with_sensevoice
 from backend.llm_agent import get_podcast_summary_robust
 from backend.downloader import route_and_download
 
@@ -136,7 +136,6 @@ def get_api_key():
         if os.path.exists(env_path):
             with open(env_path, "r") as f:
                 return f.read().strip()
-
     # 回退到项目根目录（开发环境）
     env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
     if os.path.exists(env_path):
@@ -202,7 +201,7 @@ def process_single_task(task, api_key):
     task_id = task["id"]
     source = task["source"]
     engine = task.get("engine", "sensevoice")
-    max_timeline_items = 15  # 固定时间轴上限
+    max_timeline_items = task.get("max_timeline_items", 15)
 
     print(f"[Worker] 开始处理任务: {source}")
 
@@ -244,12 +243,11 @@ def process_single_task(task, api_key):
         task_queue.update_task_name(task_id, title)
         task_queue.update_progress_status(task_id, "音频获取成功")
 
-        # 步骤 2: 转录（统一使用 DashScope 云端 ASR）
+        # 步骤 2: 转录（使用 DashScope 云端 ASR）
         print(f"[Worker] 转录中: {title}")
         task_queue.update_progress_status(task_id, "正在调用 DashScope ASR 转录...")
 
-        # 调用 DashScope ASR（通过 transcribe_with_sensevoice 兼容层）
-        podcast_text = transcribe_with_sensevoice(audio_file_path, "cloud")
+        podcast_text = transcribe_with_sensevoice(audio_file_path)
 
         task_queue.update_progress_status(task_id, "DashScope ASR 转录完成")
 
@@ -264,9 +262,7 @@ def process_single_task(task, api_key):
         print(f"[Worker] 生成摘要中: {title}")
         task_queue.update_progress_status(task_id, "正在调用通义千问提炼高光...")
 
-        # 使用 DashScope API Key（.env 中的 DASHSCOPE_API_KEY）
-        dashscope_key = get_dashscope_api_key()
-        raw_summary = get_podcast_summary_robust(dashscope_key, podcast_text, max_timeline_items)
+        raw_summary = get_podcast_summary_robust(api_key, podcast_text, max_timeline_items)
 
         # 提取第一行作为标题
         lines = raw_summary.strip().split('\n')
@@ -440,14 +436,8 @@ def worker_loop():
                 task_queue.mark_failed(task_id, error_msg)
                 print(f"[Worker] 任务 {task_id[:8]} 失败: {error_msg[:100]}")
 
-            # 显存清理
+            # 显存清理（DashScope 模式无需 GPU 显存管理）
             gc.collect()
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            except:
-                pass
 
         except KeyboardInterrupt:
             print("[Worker] 收到中断信号，退出")
