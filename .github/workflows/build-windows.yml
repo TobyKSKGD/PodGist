@@ -121,7 +121,7 @@ jobs:
       - name: Find built installer
         shell: pwsh
         run: |
-          Get-ChildItem "electron/release" -Filter "*.exe" -Recurse |
+          Get-ChildItem "release" -Filter "*.exe" -Recurse |
             Select-Object FullName, @{N="SizeMB";E={[math]::Round($_.Length/1MB,2)}} |
             Format-Table -AutoSize
 
@@ -132,7 +132,7 @@ jobs:
         run: |
           # 固定上传到 v1.0.0
           $tag = "v1.0.0"
-          $installer = Get-ChildItem -Path "electron/release" -Filter "*.exe" -Recurse | Select-Object -First 1
+          $installer = Get-ChildItem -Path "release" -Filter "*.exe" -Recurse | Select-Object -First 1
           if (-not $installer) {
               Write-Host "ERROR: No installer found"
               exit 1
