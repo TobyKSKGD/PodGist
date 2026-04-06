@@ -66,12 +66,20 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "electron/dist" | Out-Null
+          # 先检查 backend/dist/api（PyInstaller 原始输出）
           if (Test-Path "backend/dist/api") {
             Copy-Item "backend/dist/api/*" "electron/dist/api/" -Recurse -Force
             Write-Host "Copied backend/dist/api -> electron/dist/api"
+          } elseif (Test-Path "dist/api") {
+            # api.spec 的 post-build 脚本会复制到 dist/api
+            Copy-Item "dist/api/*" "electron/dist/api/" -Recurse -Force
+            Write-Host "Copied dist/api -> electron/dist/api"
           } else {
-            Write-Host "ERROR: backend/dist/api not found!"
-            Get-ChildItem "backend/dist" -Recurse
+            Write-Host "ERROR: api dist not found!"
+            Write-Host "=== backend/dist contents ==="
+            Get-ChildItem "backend/dist" -Recurse -ErrorAction SilentlyContinue | Format-Table FullName
+            Write-Host "=== dist contents ==="
+            Get-ChildItem "dist" -Recurse -ErrorAction SilentlyContinue | Format-Table FullName
             exit 1
           }
 
