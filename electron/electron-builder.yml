@@ -35,7 +35,6 @@ nsis:
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: PodGist
-  shortcutIcon: assets/icon.ico
   artifactName: ${productName}-${version}-${os}-${arch}.${ext}
   installerIcon: assets/icon.ico
   uninstallerIcon: assets/icon.ico
@@ -91,6 +90,7 @@ win:
   icon: assets/icon.ico
   forceCodeSigning: false
   signAndEditExecutable: false
+  publish: null
   target:
     - target: nsis
       arch:
