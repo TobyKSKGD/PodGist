@@ -70,12 +70,15 @@ app.add_middleware(
 def load_api_key():
     """
     从 .env 文件加载 API Key。
-    文件内容应为单行：sk-xxxxxx
+    支持两种格式：DASHSCOPE_API_KEY=sk-xxxxxx（带前缀）或 sk-xxxxxx（裸 key）
     """
     try:
         if os.path.exists(ENV_FILE):
             with open(ENV_FILE, "r", encoding="utf-8") as f:
                 key = f.read().strip()
+                # 去掉前缀以兼容旧格式
+                if key.startswith("DASHSCOPE_API_KEY="):
+                    key = key[len("DASHSCOPE_API_KEY="):]
                 return key if key else ""
         return ""
     except Exception:
@@ -522,9 +525,9 @@ def save_settings(
     max_timeline_items: int = Form(15)
 ):
     try:
-        # 保存 API Key 到 .env 文件
+        # 保存 API Key 到 .env 文件（使用 DASHSCOPE_API_KEY=xxx 格式）
         with open(ENV_FILE, "w", encoding="utf-8") as f:
-            f.write(dashscope_api_key.strip())
+            f.write(f"DASHSCOPE_API_KEY={dashscope_api_key.strip()}")
 
         # 保存配置到 config.json
         config = load_config()
