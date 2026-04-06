@@ -68,7 +68,7 @@ jobs:
             "backend/__init__.py",
             "backend/transcriber.py",
             "backend/worker.py",
-            "backend/api.py"
+            "api.py"
           )
           foreach ($f in $files) {
             if (Test-Path $f) {
