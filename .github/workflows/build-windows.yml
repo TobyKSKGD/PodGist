@@ -60,10 +60,41 @@ jobs:
           Copy-Item "electron/scripts/api.py" "api.py" -Force
           Write-Host "Backend scripts copied"
 
+      - name: Verify backend files exist
+        shell: pwsh
+        run: |
+          $files = @(
+            "backend/start_electron.py",
+            "backend/__init__.py",
+            "backend/transcriber.py",
+            "backend/worker.py",
+            "backend/api.py"
+          )
+          foreach ($f in $files) {
+            if (Test-Path $f) {
+              Write-Host "OK: $f"
+            } else {
+              Write-Host "MISSING: $f"
+              exit 1
+            }
+          }
+
       - name: Build backend with PyInstaller
-        run: pyinstaller --clean --noconfirm backend/api.spec
+        run: |
+          pyinstaller --clean --noconfirm backend/api.spec 2>&1 | Tee-Object -FilePath pyinstaller_output.txt
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "PyInstaller FAILED with exit code $LASTEXITCODE"
+            exit 1
+          }
         env:
           PYTHONOPTIMIZE: '1'
+
+      - name: Show PyInstaller output
+        shell: pwsh
+        run: |
+          if (Test-Path "pyinstaller_output.txt") {
+            Get-Content "pyinstaller_output.txt"
+          }
 
       - name: Verify PyInstaller output
         shell: pwsh
