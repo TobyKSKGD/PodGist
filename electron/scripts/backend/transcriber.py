@@ -18,30 +18,33 @@ FALLBACK_ASR_MODEL = "paraformer-v1"
 
 def get_dashscope_api_key() -> str:
     """从环境变量或 .env 文件获取 DashScope API Key"""
-    api_key = os.environ.get('DASHSCOPE_API_KEY', '')
-    if not api_key:
-        # 优先从 PODGIST_DATA_DIR 读取（Electron 打包环境）
-        data_dir = os.environ.get('PODGIST_DATA_DIR')
-        if data_dir:
-            env_path = os.path.join(data_dir, '.env')
-            if os.path.exists(env_path):
-                with open(env_path, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        line = line.strip()
-                        if line.startswith('DASHSCOPE_API_KEY='):
-                            api_key = line.split('=', 1)[1].strip().strip('"\'')
-                            break
-        # 回退到项目根目录（开发环境）
-        if not api_key:
-            env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env')
-            if os.path.exists(env_path):
-                with open(env_path, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        line = line.strip()
-                        if line.startswith('DASHSCOPE_API_KEY='):
-                            api_key = line.split('=', 1)[1].strip().strip('"\'')
-                            break
-    return api_key
+    # 优先从环境变量读取（Electron 打包时由 backendStarter 注入）
+    # 注意：即使是空字符串也要继续尝试 .env 文件
+    env_api_key = os.environ.get('DASHSCOPE_API_KEY', None)
+    if env_api_key:
+        return env_api_key
+
+    # 回退到 .env 文件（Electron 打包环境）
+    data_dir = os.environ.get('PODGIST_DATA_DIR')
+    if data_dir:
+        env_path = os.path.join(data_dir, '.env')
+        if os.path.exists(env_path):
+            with open(env_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('DASHSCOPE_API_KEY='):
+                        return line.split('=', 1)[1].strip().strip('"\'')
+
+    # 最后回退到项目根目录（开发环境）
+    env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env')
+    if os.path.exists(env_path):
+        with open(env_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('DASHSCOPE_API_KEY='):
+                    return line.split('=', 1)[1].strip().strip('"\'')
+
+    return ""
 
 
 def clean_asr_text(text: str) -> str:

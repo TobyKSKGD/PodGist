@@ -529,6 +529,9 @@ def save_settings(
         with open(ENV_FILE, "w", encoding="utf-8") as f:
             f.write(f"DASHSCOPE_API_KEY={dashscope_api_key.strip()}")
 
+        # 同步更新当前进程环境变量，使 worker 线程立即可见
+        os.environ['DASHSCOPE_API_KEY'] = dashscope_api_key.strip()
+
         # 保存配置到 config.json
         config = load_config()
         config["max_timeline_items"] = max_timeline_items
