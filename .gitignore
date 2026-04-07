@@ -139,7 +139,7 @@ electron/requirements.txt
 electron/backend/
 
 # 发布包（非常大，不上传）
-release/
+/release/
 
 # macOS build 相关
 *.dSYM/
