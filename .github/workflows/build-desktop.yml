@@ -1,0 +1,219 @@
+name: Build Desktop App
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: '构建平台'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - mac
+          - win
+
+env:
+  NODE_VERSION: '20'
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  # ===== Job A: 创建/验证 Draft Release =====
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      release_id: ${{ steps.release.outputs.id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Determine tag
+        id: tag
+        run: |
+          TAG="${{ github.ref_name }}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Create or update draft release
+        id: release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          prerelease: false
+          generate_release_notes: true
+          tag_name: ${{ steps.tag.outputs.tag }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Show release info
+        run: |
+          echo "Release tag: ${{ steps.tag.outputs.tag }}"
+          echo "Release ID: ${{ steps.release.outputs.id }}"
+
+  # ===== Job B: 构建矩阵 (mac + win) =====
+  build:
+    needs: create-release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: mac
+            artifact_pattern: '*.dmg'
+          - os: windows-latest
+            platform: win
+            artifact_pattern: '*.exe'
+        exclude:
+          - os: macos-latest
+            platform: win
+          - os: windows-latest
+            platform: mac
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # ===== 前端构建 (两个平台都需要) =====
+      - name: Build frontend
+        run: |
+          npm install
+          npm run build
+        working-directory: frontend
+
+      # ===== Windows 专属步骤 =====
+      - name: Setup Python (Windows)
+        if: matrix.platform == 'win'
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+
+      - name: Install Python deps (Windows)
+        if: matrix.platform == 'win'
+        run: pip install -r requirements.txt
+
+      - name: Install PyInstaller (Windows)
+        if: matrix.platform == 'win'
+        run: pip install pyinstaller==6.19.0
+
+      - name: Syntax check backend
+        if: matrix.platform == 'win'
+        run: python scripts/check_backend.py
+
+      - name: Build backend (Windows)
+        if: matrix.platform == 'win'
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File scripts/release/build-backend-win.ps1
+
+      - name: Fetch FFmpeg (Windows)
+        if: matrix.platform == 'win'
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File scripts/release/fetch-ffmpeg-win.ps1
+
+      # ===== macOS 专属步骤 =====
+      - name: Setup Python (macOS)
+        if: matrix.platform == 'mac'
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+
+      - name: Bootstrap runtime (macOS)
+        if: matrix.platform == 'mac'
+        run: bash scripts/release/bootstrap-runtime-mac.sh
+
+      - name: Syntax check backend (macOS)
+        if: matrix.platform == 'mac'
+        run: python scripts/check_backend.py
+
+      # ===== Electron 构建 =====
+      - name: Install electron deps
+        run: npm ci
+        working-directory: electron
+
+      - name: Build Electron (${{ matrix.platform }})
+        run: npm run build:ci:${{ matrix.platform }}
+        working-directory: electron
+
+      # ===== 查找产物 =====
+      - name: Find artifact (Windows)
+        if: matrix.platform == 'win'
+        shell: pwsh
+        id: find-win
+        run: |
+          $artifacts = Get-ChildItem "release" -Filter "*.exe" -Recurse
+          if ($artifacts) {
+            $artifacts | ForEach-Object {
+              Write-Host "Found: $($_.FullName) ($([math]::Round($_.Length / 1MB, 2)) MB)"
+            }
+            $first = $artifacts | Select-Object -First 1
+            echo "path=$($first.FullName)" >> $env:GITHUB_OUTPUT
+            echo "name=$($first.Name)" >> $env:GITHUB_OUTPUT
+            echo "size=$([math]::Round($first.Length / 1MB, 2)) MB" >> $env:GITHUB_OUTPUT
+          } else {
+            Write-Host "ERROR: No .exe found in release/"
+            exit 1
+          }
+
+      - name: Find artifact (macOS)
+        if: matrix.platform == 'mac'
+        id: find-mac
+        run: |
+          find release/ -name "*.dmg" -type f | while read f; do
+            size=$(du -h "$f" | cut -f1)
+            echo "Found: $f ($size)"
+            echo "path=$f" >> $GITHUB_OUTPUT
+            echo "name=$(basename $f)" >> $GITHUB_OUTPUT
+          done
+          if [ -z "$GITHUB_OUTPUT_PATH" ]; then
+            echo "ERROR: No .dmg found in release/"
+            exit 1
+          fi
+
+      # ===== 上传到 GitHub Release =====
+      - name: Upload to Release (Windows)
+        if: matrix.platform == 'win'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ needs.create-release.outputs.tag }}"
+          echo "Uploading ${{ steps.find-win.outputs.name }} (${{ steps.find-win.outputs.size }}) to release $TAG"
+          gh release upload "$TAG" "${{ steps.find-win.outputs.path }}" --clobber
+
+      - name: Upload to Release (macOS)
+        if: matrix.platform == 'mac'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ needs.create-release.outputs.tag }}"
+          echo "Uploading ${{ steps.find-mac.outputs.name }} to release $TAG"
+          gh release upload "$TAG" "${{ steps.find-mac.outputs.path }}" --clobber
+
+      - name: Verify upload (Windows)
+        if: matrix.platform == 'win'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ needs.create-release.outputs.tag }}"
+          echo "Verifying Windows artifact in release $TAG..."
+          gh release view "$TAG" --json assets --jq '.assets[].name'
+
+      - name: Verify upload (macOS)
+        if: matrix.platform == 'mac'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ needs.create-release.outputs.tag }}"
+          echo "Verifying macOS artifact in release $TAG..."
+          gh release view "$TAG" --json assets --jq '.assets[].name'

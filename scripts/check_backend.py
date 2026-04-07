@@ -24,9 +24,6 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BACKEND_DIR = os.path.join(PROJECT_ROOT, "backend")
 API_FILE = os.path.join(PROJECT_ROOT, "api.py")
 
-# electron/scripts/backend/ 目录（Mac/Windows 共享源码）
-ELECTRON_BACKEND_DIR = os.path.join(PROJECT_ROOT, "electron", "scripts", "backend")
-
 
 def check_file(file_path: str) -> bool:
     """
@@ -75,7 +72,7 @@ def main() -> int:
     else:
         print(f"[WARN] api.py not found at {API_FILE}")
 
-    # 2. 检查 backend/ 目录
+    # 2. 检查 backend/ 目录（唯一真源）
     if os.path.exists(BACKEND_DIR):
         print(f"\nChecking backend/ directory: {BACKEND_DIR}")
         backend_files = collect_py_files(BACKEND_DIR)
@@ -87,19 +84,7 @@ def main() -> int:
     else:
         print(f"[WARN] backend/ directory not found at {BACKEND_DIR}")
 
-    # 3. 检查 electron/scripts/backend/ 目录
-    if os.path.exists(ELECTRON_BACKEND_DIR):
-        print(f"\nChecking electron/scripts/backend/ directory: {ELECTRON_BACKEND_DIR}")
-        electron_files = collect_py_files(ELECTRON_BACKEND_DIR)
-        for f in electron_files:
-            rel = os.path.relpath(f, PROJECT_ROOT)
-            print(f"  Checking: {rel}")
-            if not check_file(f):
-                has_error = True
-    else:
-        print(f"[WARN] electron/scripts/backend/ not found at {ELECTRON_BACKEND_DIR}")
-
-    # 4. 使用 compileall 做二次验证（更严格的深度检查）
+    # 3. 使用 compileall 做二次验证（更严格的深度检查）
     print("\nRunning compileall validation...")
     if os.path.exists(BACKEND_DIR):
         # compileall 在 quiet=1 时只打印总结，quiet=2 完全静默

@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node start.js",
     "dev:frontend": "cd frontend && npm run dev",
-    "dev:backend": "node start-backend.js",
+    "dev:backend": "node scripts/dev/run-backend.mjs",
     "build": "cd frontend && npm run build",
     "preview": "cd frontend && npm run preview"
   },
