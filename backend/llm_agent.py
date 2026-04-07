@@ -2,6 +2,9 @@ import time
 from dashscope import Generation
 from http import HTTPStatus
 
+# 模型降级梯队：按质量和速度排序，质量优先，速度其次
+MODEL_FALLBACK_LIST = ['qwen-plus', 'qwen-turbo', 'qwen-max']
+
 
 def get_podcast_summary(api_key, podcast_text, max_timeline_items=15, temperature=0.3):
     """
@@ -43,59 +46,59 @@ def get_podcast_summary(api_key, podcast_text, max_timeline_items=15, temperatur
         {"role": "user", "content": prompt_text}
     ]
 
-    response = Generation.call(
-        model="qwen-plus",
-        messages=messages,
-        result_format="message",
-        temperature=temperature,
-        api_key=api_key,
-        request_timeout=180
-    )
-
-    if response.status_code == HTTPStatus.OK:
-        return response.output.choices[0].message.content
-    else:
-        raise Exception(f"LLM 调用失败: {response.code} - {response.message}")
+    # 走统一的重试+模型降级层
+    return _call_llm_with_retry(api_key, messages, max_retries=2, temperature=temperature)
 
 
-def _call_llm_with_retry(api_key, messages, max_retries=2, temperature=0.3):
+def _call_llm_with_retry(api_key, messages, max_retries=2, temperature=0.3, model=None):
     """
-    带重试机制的 LLM 调用（使用 DashScope Qwen）。
+    带重试 + 模型降级的 LLM 调用（DashScope Qwen）。
 
     参数:
         api_key: DashScope API 密钥
         messages: 消息列表
-        max_retries: 最大重试次数
+        max_retries: 每个模型的最大重试次数
         temperature: 温度参数
+        model: 可选，指定单个模型；默认 None 会使用 MODEL_FALLBACK_LIST 逐个降级
 
     返回:
         str: LLM 响应内容
 
     异常:
-        Exception: 如果所有重试都失败
+        Exception: 如果所有模型 + 所有重试都失败
     """
-    for attempt in range(max_retries):
-        try:
-            response = Generation.call(
-                model="qwen-plus",
-                messages=messages,
-                result_format="message",
-                temperature=temperature,
-                api_key=api_key,
-                request_timeout=180
-            )
-            if response.status_code == HTTPStatus.OK:
-                return response.output.choices[0].message.content
-            else:
-                raise Exception(f"LLM error: {response.code} - {response.message}")
-        except Exception as e:
+    models_to_try = [model] if model else list(MODEL_FALLBACK_LIST)
+
+    for m in models_to_try:
+        for attempt in range(max_retries):
+            try:
+                response = Generation.call(
+                    model=m,
+                    messages=messages,
+                    result_format="message",
+                    temperature=temperature,
+                    api_key=api_key,
+                    request_timeout=180
+                )
+                if response.status_code == HTTPStatus.OK:
+                    print(f"[LLM] {m} 调用成功")
+                    return response.output.choices[0].message.content
+                else:
+                    err = Exception(f"LLM error ({m}): {response.code} - {response.message}")
+            except Exception as e:
+                err = e
+
             if attempt < max_retries - 1:
-                # 第一次失败后，等待 2 秒再试
                 time.sleep(2)
-                # 第二次尝试时稍微调高 temperature，打破死锁
                 temperature = min(temperature + 0.2, 0.7)
             else:
-                raise e
+                print(f"[LLM] {m} 全部重试失败: {err}，切换到下一个模型...")
+
+        # 当前模型全部重试失败，换下一个模型
+        temperature = 0.3  # 重置 temperature
+
+    # 所有模型都失败了
+    raise Exception(f"所有模型 {models_to_try} 都调用失败: {err}")
 
 
 def _split_text_into_chunks(podcast_text, chunk_size=2000):
@@ -149,19 +152,7 @@ def _merge_summaries(part_summaries, api_key):
         {"role": "user", "content": merge_prompt}
     ]
 
-    response = Generation.call(
-        model="qwen-plus",
-        messages=messages,
-        result_format="message",
-        temperature=0.3,
-        api_key=api_key,
-        request_timeout=180
-    )
-
-    if response.status_code == HTTPStatus.OK:
-        return response.output.choices[0].message.content
-    else:
-        raise Exception(f"LLM merge error: {response.code} - {response.message}")
+    return _call_llm_with_retry(api_key, messages, max_retries=2, temperature=0.3)
 
 
 def get_podcast_summary_robust(api_key, podcast_text, max_timeline_items=15):
@@ -309,16 +300,4 @@ def search_in_podcast(api_key, search_query, podcast_text):
     """
     messages = [{"role": "user", "content": search_prompt}]
 
-    response = Generation.call(
-        model="qwen-plus",
-        messages=messages,
-        result_format="message",
-        temperature=0.2,
-        api_key=api_key,
-        request_timeout=60
-    )
-
-    if response.status_code == HTTPStatus.OK:
-        return response.output.choices[0].message.content
-    else:
-        raise Exception(f"LLM search error: {response.code} - {response.message}")
+    return _call_llm_with_retry(api_key, messages, max_retries=2, temperature=0.2)
