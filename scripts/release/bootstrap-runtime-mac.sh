@@ -12,7 +12,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+PROJECT_ROOT="${SCRIPT_DIR%/scripts/release}"
 ELECTRON_DIR="$PROJECT_ROOT/electron"
 VENV_DIR="$ELECTRON_DIR/resources/python_venv"
 FFMPEG_DIR="$ELECTRON_DIR/resources/ffmpeg"
