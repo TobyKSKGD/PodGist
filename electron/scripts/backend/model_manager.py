@@ -378,7 +378,7 @@ def _get_download_instructions(model_name: str) -> str:
         return """1. 复制上方链接
 2. 打开 ModelScope App 或浏览器下载
 3. 保存到以下目录:
-   Windows: %USERPROFILE%\.cache\modelscope\hub\models\iic\SenseVoiceSmall\
+   Windows: %USERPROFILE%/.cache/modelscope/hub/models/iic/SenseVoiceSmall/
    macOS: ~/.cache/modelscope/hub/models/iic/SenseVoiceSmall/
 4. 文件命名为: model.pt
 5. 刷新此页面"""
@@ -387,7 +387,7 @@ def _get_download_instructions(model_name: str) -> str:
         return """1. 复制上方链接
 2. 打开 HuggingFace 下载
 3. 保存到以下目录:
-   Windows: %USERPROFILE%\.cache\huggingface\hub\models--sentence-transformers--all-MiniLM-L6-v2\
+   Windows: %USERPROFILE%/.cache/huggingface/hub/models--sentence-transformers--all-MiniLM-L6-v2/
    macOS: ~/.cache/huggingface/hub/models--sentence-transformers--all-MiniLM-L6-v2/
 4. 刷新此页面"""
 

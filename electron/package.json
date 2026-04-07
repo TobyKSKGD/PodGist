@@ -8,8 +8,9 @@
   "scripts": {
     "start": "electron-builder --dir",
     "prebuild": "node scripts/prebuild.js",
-    "build:mac": "npm run prebuild && electron-builder --config electron-builder.yml --mac",
-    "build:win": "npm run prebuild && electron-builder --config electron-builder.yml --win",
+    "check:backend": "python ../scripts/check_backend.py",
+    "build:mac": "npm run check:backend && npm run prebuild && electron-builder --config electron-builder.yml --mac",
+    "build:win": "npm run check:backend && npm run prebuild && electron-builder --config electron-builder.yml --win",
     "build:all": "npm run prebuild && electron-builder --config electron-builder.yml --win --mac",
     "build:full": "BUILD_TYPE=full npm run build:win",
     "build:lite": "BUILD_TYPE=lite npm run build:win",
