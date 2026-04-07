@@ -1,494 +1,302 @@
 import os
+import platform as platform_sys
 import subprocess
 import yt_dlp
 import re
 import requests
+import threading
+import sys
 from urllib.parse import urlparse
+
+# 延迟导入 get_ffmpeg_path，兼容开发环境和 electron 打包环境
+def _get_ffmpeg_path_impl():
+    resources_path = os.environ.get('PODGIST_RESOURCES_PATH')
+    if resources_path:
+        if platform_sys.system() == 'Windows':
+            return os.path.join(resources_path, 'ffmpeg', 'ffmpeg.exe')
+        return os.path.join(resources_path, 'ffmpeg', 'ffmpeg')
+    return 'ffmpeg'
+
+try:
+    from backend import get_ffmpeg_path
+except ImportError:
+    _parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _parent not in sys.path:
+        sys.path.insert(0, _parent)
+    try:
+        from backend import get_ffmpeg_path
+    except ImportError:
+        get_ffmpeg_path = _get_ffmpeg_path_impl
+
+
+def _sanitize_title(title):
+    title = re.sub(r'[\/*?:"<>|]', '', title)
+    title = title.strip()
+    if len(title) > 200:
+        title = title[:200]
+    return title
+
+
+def _get_ffmpeg_dir():
+    ffmpeg_path = get_ffmpeg_path()
+    return os.path.dirname(ffmpeg_path)
+
+
+def extract_info_with_ytdlp(url, cookies_path=None):
+    ydl_opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'extract_flat': False,
+    }
+    if cookies_path and os.path.exists(cookies_path):
+        ydl_opts['cookiefile'] = cookies_path
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+        return {'success': True, 'info': info, 'error': None}
+    except yt_dlp.utils.DownloadError as e:
+        return {'success': False, 'info': None, 'error': '获取信息失败: ' + str(e)}
+    except Exception as e:
+        return {'success': False, 'info': None, 'error': '获取信息出错: ' + str(e)}
+
+
+def download_audio_with_ytdlp(url, save_dir, title=None, prefer_m4a=False,
+                               cookies_path=None, timeout=300):
+    os.makedirs(save_dir, exist_ok=True)
+    ffmpeg_dir = _get_ffmpeg_dir()
+
+    if title is None:
+        info_result = extract_info_with_ytdlp(url, cookies_path=cookies_path)
+        if not info_result['success']:
+            return {'success': False, 'file_path': None, 'title': None, 'error': info_result['error'], 'platform': None}
+        raw_title = info_result['info'].get('title', 'audio')
+        title = _sanitize_title(raw_title)
+    else:
+        title = _sanitize_title(title)
+
+    print('[Downloader] 开始下载: ' + title)
+
+    output_template = os.path.join(save_dir, title + '.%(ext)s')
+
+    postprocessors = []
+    if prefer_m4a:
+        postprocessors.append({'key': 'FFmpegExtractAudio', 'preferredcodec': 'm4a', 'preferredquality': '192'})
+    else:
+        postprocessors.append({'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '192'})
+
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'outtmpl': output_template,
+        'quiet': False,
+        'no_warnings': False,
+        'socket_timeout': 30,
+        'retries': 3,
+        'postprocessors': postprocessors,
+        'ffmpeg_location': ffmpeg_dir,
+    }
+    if cookies_path and os.path.exists(cookies_path):
+        ydl_opts['cookiefile'] = cookies_path
+
+    download_error = [None]
+
+    def _do_download():
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+        except Exception as e:
+            download_error[0] = e
+
+    download_thread = threading.Thread(target=_do_download)
+    download_thread.daemon = True
+    download_thread.start()
+    download_thread.join(timeout=timeout)
+
+    if download_thread.is_alive():
+        return {'success': False, 'file_path': None, 'title': title, 'error': '下载超时（' + str(timeout) + '秒），可能网络问题或内容无法访问', 'platform': None}
+
+    if download_error[0]:
+        error_msg = str(download_error[0])
+        if 'HTTP Error 403' in error_msg or '403' in error_msg:
+            return {'success': False, 'file_path': None, 'title': title, 'error': '下载失败：该内容可能需要 VIP 权限或已被删除', 'platform': None}
+        elif 'HTTP Error 404' in error_msg or '404' in error_msg:
+            return {'success': False, 'file_path': None, 'title': title, 'error': '下载失败：内容不存在或链接无效', 'platform': None}
+        else:
+            return {'success': False, 'file_path': None, 'title': title, 'error': '下载失败: ' + error_msg, 'platform': None}
+
+    exts = ['.m4a', '.mp3', '.webm', '.aac', '.flac'] if prefer_m4a else ['.mp3', '.m4a', '.webm', '.aac', '.flac']
+    for ext in exts:
+        file_path = os.path.join(save_dir, title + '.' + ext)
+        if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+            if not prefer_m4a and ext != '.mp3':
+                mp3_path = os.path.join(save_dir, title + '.mp3')
+                try:
+                    result = subprocess.run([get_ffmpeg_path(), '-i', file_path, '-codec:a', 'libmp3lame', '-q:a', '2', mp3_path, '-y'], capture_output=True, text=True, timeout=60)
+                    if result.returncode == 0:
+                        os.remove(file_path)
+                        file_path = mp3_path
+                        print('[Downloader] 转码完成: ' + title)
+                    else:
+                        print('[Downloader] FFmpeg 转码失败: ' + result.stderr[:200])
+                except subprocess.TimeoutExpired:
+                    return {'success': False, 'file_path': None, 'title': title, 'error': '音频格式转换超时', 'platform': None}
+                except Exception as e:
+                    print('[Downloader] 转码出错: ' + str(e))
+            return {'success': True, 'file_path': file_path, 'title': title, 'error': None, 'platform': None}
+
+    return {'success': False, 'file_path': None, 'title': title, 'error': '音频文件下载失败或未找到', 'platform': None}
 
 
 class AudioDownloader:
-    """
-    在线音频/视频下载器，支持从 Bilibili 等平台提取音频。
-
-    使用 yt-dlp 进行下载，配置为仅提取最高音质音频流，
-    并自动转换为 MP3 格式。
-    """
-
-    def __init__(self, save_dir="temp_audio"):
-        """
-        初始化下载器。
-
-        参数:
-            save_dir (str): 音频保存目录
-        """
+    def __init__(self, save_dir='temp_audio'):
         self.save_dir = save_dir
         os.makedirs(save_dir, exist_ok=True)
 
     def sanitize_filename(self, filename):
-        """
-        清理文件名，移除无效字符。
-
-        参数:
-            filename (str): 原始文件名
-
-        返回:
-            str: 清理后的安全文件名
-        """
-        # 移除 Windows/macOS/Linux 文件名中的非法字符
-        filename = re.sub(r'[\\/*?:"<>|]', "", filename)
-        # 移除前后空格
-        filename = filename.strip()
-        # 限制文件名长度（保留足够空间给扩展名）
-        if len(filename) > 200:
-            filename = filename[:200]
-        return filename
+        return _sanitize_title(filename)
 
     def download_bilibili_audio(self, url, cookies_path=None):
-        """
-        从 Bilibili 下载视频并提取音频。
-
-        参数:
-            url (str): Bilibili 视频链接
-            cookies_path (str, optional): cookies 文件路径，用于下载大会员内容
-
-        返回:
-            dict: 包含以下键的字典:
-                - success (bool): 是否成功
-                - file_path (str): 下载的音频文件路径（成功时）
-                - title (str): 视频标题（成功时）
-                - error (str): 错误信息（失败时）
-        """
-        # 先获取视频信息以获取标题
-        ydl_opts_info = {
-            'quiet': True,
-            'no_warnings': True,
-            'extract_flat': False,
-        }
-
-        # 如果提供了 cookies，添加到配置中
-        if cookies_path and os.path.exists(cookies_path):
-            ydl_opts_info['cookiefile'] = cookies_path
-
-        try:
-            # 获取视频信息
-            with yt_dlp.YoutubeDL(ydl_opts_info) as ydl:
-                info = ydl.extract_info(url, download=False)
-                video_title = info.get('title', 'unknown')
-                video_title = self.sanitize_filename(video_title)
-        except Exception as e:
-            return {
-                'success': False,
-                'error': f"获取视频信息失败: {str(e)}"
-            }
-
-        # 下载音频的配置
-        output_template = os.path.join(self.save_dir, f"{video_title}.%(ext)s")
-
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            # 音频提取选项
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
-            'outtmpl': output_template,
-            'quiet': False,
-            'no_warnings': False,
-            'progress_hooks': [],
-            'socket_timeout': 30,
-            'retries': 3,
-        }
-
-        # 添加 cookies 支持（如果提供）
-        if cookies_path and os.path.exists(cookies_path):
-            ydl_opts['cookiefile'] = cookies_path
-
-        # 用线程超时包装下载，避免永久阻塞
-        import threading
-
-        download_error = [None]
-        download_result = [None]
-
-        def _do_download():
-            try:
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download([url])
-                download_result[0] = "done"
-            except Exception as e:
-                download_error[0] = e
-
-        download_thread = threading.Thread(target=_do_download)
-        download_thread.daemon = True
-        download_thread.start()
-        download_thread.join(timeout=300)  # 5分钟超时
-
-        if download_thread.is_alive():
-            # 下载超时
-            return {
-                'success': False,
-                'error': "Bilibili 下载超时（5分钟），可能网络问题或视频无法访问"
-            }
-
-        if download_error[0]:
-            # 下载出错
-            error_msg = str(download_error[0])
-            if "HTTP Error 403" in error_msg or "403" in error_msg:
-                return {
-                    'success': False,
-                    'error': "下载失败：该视频可能需要大会员权限或视频已被删除"
-                }
-            elif "HTTP Error 404" in error_msg or "404" in error_msg:
-                return {
-                    'success': False,
-                    'error': "下载失败：视频不存在或链接无效"
-                }
-            else:
-                return {
-                    'success': False,
-                    'error': f"下载失败: {error_msg}"
-                }
-
-        # 查找下载的 MP3 文件
-        mp3_path = os.path.join(self.save_dir, f"{video_title}.mp3")
-
-        if os.path.exists(mp3_path):
-            return {
-                'success': True,
-                'file_path': mp3_path,
-                'title': video_title
-            }
-        else:
-            # 检查是否有其他格式的文件
-            for ext in ['m4a', 'webm', 'aac', 'flac']:
-                alt_path = os.path.join(self.save_dir, f"{video_title}.{ext}")
-                if os.path.exists(alt_path):
-                    # 尝试转换为 MP3（带超时）
-                    try:
-                        mp3_path = alt_path.replace(f".{ext}", ".mp3")
-                        result = subprocess.run([
-                            'ffmpeg', '-i', alt_path,
-                            '-codec:a', 'libmp3lame',
-                            '-q:a', '2', mp3_path,
-                            '-y'
-                        ], capture_output=True, text=True, timeout=60)
-                        if result.returncode != 0:
-                            print(f"[Downloader] FFmpeg 转换失败: {result.stderr[:200]}")
-                        else:
-                            os.remove(alt_path)
-                            return {
-                                'success': True,
-                                'file_path': mp3_path,
-                                'title': video_title
-                            }
-                    except subprocess.TimeoutExpired:
-                        return {
-                            'success': False,
-                            'error': "音频格式转换超时"
-                        }
-                    except Exception as e:
-                        print(f"[Downloader] 转换失败: {e}")
-
-            return {
-                'success': False,
-                'error': "音频文件下载失败或未找到"
-            }
+        result = download_audio_with_ytdlp(url=url, save_dir=self.save_dir, prefer_m4a=False, cookies_path=cookies_path, timeout=300)
+        result['platform'] = 'bilibili'
+        return result
 
 
-def download_audio_from_url(url, save_dir="temp_audio", cookies_path=None):
-    """
-    从在线 URL 下载音频文件的便捷函数。
-
-    参数:
-        url (str): 在线音频/视频 URL（如 Bilibili 链接）
-        save_dir (str): 保存目录，默认为 'temp_audio'
-        cookies_path (str, optional): cookies 文件路径
-
-    返回:
-        dict: 包含 success, file_path, title, error 键的字典
-    """
-    downloader = AudioDownloader(save_dir=save_dir)
-    return downloader.bilibili_audio(url, cookies_path=cookies_path)
-
-
-# 为保持向后兼容，保留原函数名
-def download_and_convert(url, save_dir="temp_audio", cookies_path=None):
-    """
-    从 URL 下载并转换音频的向后兼容函数。
-
-    参数:
-        url (str): 视频 URL
-        save_dir (str): 保存目录
-        cookies_path (str, optional): cookies 路径
-
-    返回:
-        dict: 下载结果
-    """
+def download_audio_from_url(url, save_dir='temp_audio', cookies_path=None):
     downloader = AudioDownloader(save_dir=save_dir)
     return downloader.download_bilibili_audio(url, cookies_path=cookies_path)
 
 
-# ================= 小宇宙播客抓取器 =================
+def download_and_convert(url, save_dir='temp_audio', cookies_path=None):
+    downloader = AudioDownloader(save_dir=save_dir)
+    return downloader.download_bilibili_audio(url, cookies_path=cookies_path)
+
 
 def detect_platform(url):
-    """
-    根据 URL 识别播客平台。
-
-    参数:
-        url (str): 播客链接（可能包含分享文案）
-
-    返回:
-        str: 平台标识符，如 "xiaoyuzhou", "bilibili", "netease", "ximalaya", "applepodcasts", "unknown"
-    """
     url = url.lower()
-    if "xiaoyuzhoufm.com" in url:
-        return "xiaoyuzhou"
-    elif "bilibili.com" in url:
-        return "bilibili"
-    elif "163cn.tv" in url or "music.163.com" in url:
-        return "netease"
-    elif "xima.tv" in url or "ximalaya.com" in url:
-        return "ximalaya"
-    elif "podcasts.apple.com" in url:
-        return "applepodcasts"
+    if 'xiaoyuzhoufm.com' in url:
+        return 'xiaoyuzhou'
+    elif 'bilibili.com' in url:
+        return 'bilibili'
+    elif '163cn.tv' in url or 'music.163.com' in url:
+        return 'netease'
+    elif 'xima.tv' in url or 'ximalaya.com' in url:
+        return 'ximalaya'
+    elif 'podcasts.apple.com' in url:
+        return 'applepodcasts'
     else:
-        return "unknown"
+        return 'unknown'
 
 
 def parse_netease_url(raw_text):
-    """
-    智能嗅探并净化网易云播客链接（终极版：支持动态解包短链）
-
-    参数:
-        raw_text (str): 用户分享的原始文本（可能包含分享文案）
-
-    返回:
-        str or None: 净化后的标准播客 URL，失败返回 None
-    """
-    # 场景 1: 嗅探并解包手机端短链 (如 https://163cn.tv/3Kc5VwN)
     short_match = re.search(r'(https?://163cn\.tv/[a-zA-Z0-9]+)', raw_text)
     if short_match:
         short_url = short_match.group(1)
         try:
-            # 伪装浏览器请求，防止被网易云基础风控拦截
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            }
-            # 发起请求，requests 默认会跟随重定向 (allow_redirects=True)
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
             response = requests.get(short_url, headers=headers, timeout=10)
-
-            # response.url 就是重定向后极其冗长的真实 URL
             real_url = response.url
-
-            # 从冗长的 URL 中精准提取 id
-            # 兼容形如 ?app_version=xxx&id=12345 或 ?id=12345 的情况
             id_match = re.search(r'[?&]id=(\d+)', real_url)
             if id_match:
                 podcast_id = id_match.group(1)
-                # 重新组装成 yt-dlp 绝对能认出来的纯净格式！
-                return f"https://music.163.com/program?id={podcast_id}"
-
+                return 'https://music.163.com/program?id=' + podcast_id
         except Exception as e:
-            print(f"短链解包失败: {e}")
-            return None  # 如果网络炸了，优雅退出
+            print('短链解包失败: ' + str(e))
+            return None
 
-    # 场景 2: 嗅探 PC/网页端长链 (直接正则切除盲肠参数)
     long_match = re.search(r'https?://music\.163\.com/(?:#/)?(?:program|dj)\?id=(\d+)', raw_text)
     if long_match:
         podcast_id = long_match.group(1)
-        return f"https://music.163.com/program?id={podcast_id}"
-
-    # 如果什么都没匹配到，返回 None
+        return 'https://music.163.com/program?id=' + podcast_id
     return None
 
 
 def parse_ximalaya_url(raw_text):
-    """
-    智能嗅探并净化喜马拉雅播客链接（支持动态解包短链）
-
-    参数:
-        raw_text (str): 用户分享的原始文本（可能包含分享文案）
-
-    返回:
-        str or None: 净化后的标准播客 URL，失败返回 None
-    """
-    # 场景 1: 短链 xima.tv/xxx
     short_match = re.search(r'(https?://xima\.tv/[a-zA-Z0-9_]+)', raw_text)
     if short_match:
         short_url = short_match.group(1)
-        # 移除可能的追踪参数如 ?_sonic=0
         short_url = re.sub(r'\?_sonic=\d+', '', short_url)
         try:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            }
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
             response = requests.get(short_url, headers=headers, timeout=10, allow_redirects=True)
             real_url = response.url
-
-            # 从重定向 URL 中提取音频 ID
-            # 格式: https://m.ximalaya.com/gatekeeper/podcast-share/sound/964832711
             sound_match = re.search(r'/sound/(\d+)', real_url)
             if sound_match:
                 sound_id = sound_match.group(1)
-                return f"https://m.ximalaya.com/sound/{sound_id}"
-
+                return 'https://m.ximalaya.com/sound/' + sound_id
         except Exception as e:
-            print(f"喜马拉雅短链解包失败: {e}")
+            print('喜马拉雅短链解包失败: ' + str(e))
             return None
 
-    # 场景 2: 长链 m.ximalaya.com/sound/xxx
     long_match = re.search(r'https?://(?:[a-z]+\.)?ximalaya\.com/sound/(\d+)', raw_text)
     if long_match:
         sound_id = long_match.group(1)
-        return f"https://m.ximalaya.com/sound/{sound_id}"
+        return 'https://m.ximalaya.com/sound/' + sound_id
 
-    # 场景 3: 带参数的分享链接
     share_match = re.search(r'https?://m\.ximalaya\.com/gatekeeper/podcast-share/sound/(\d+)', raw_text)
     if share_match:
         sound_id = share_match.group(1)
-        return f"https://m.ximalaya.com/sound/{sound_id}"
-
+        return 'https://m.ximalaya.com/sound/' + sound_id
     return None
 
 
 def fetch_netease_title(podcast_url):
-    """
-    获取网易云播客标题。
-
-    参数:
-        podcast_url (str): 净化后的播客 URL
-
-    返回:
-        str: 播客标题，失败返回 None
-    """
-    ydl_opts = {
-        'quiet': True,
-        'no_warnings': True,
-    }
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(podcast_url, download=False)
-            return info.get('title', None)
-    except Exception as e:
-        print(f"获取标题失败: {e}")
-        return None
+    result = extract_info_with_ytdlp(podcast_url)
+    if result['success']:
+        return result['info'].get('title', None)
+    print('获取标题失败: ' + str(result['error']))
+    return None
 
 
 def fetch_ximalaya_title(podcast_url):
-    """
-    获取喜马拉雅播客标题。
-
-    参数:
-        podcast_url (str): 净化后的播客 URL
-
-    返回:
-        str: 播客标题，失败返回 None
-    """
-    ydl_opts = {
-        'quiet': True,
-        'no_warnings': True,
-    }
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(podcast_url, download=False)
-            return info.get('title', None)
-    except Exception as e:
-        print(f"获取喜马拉雅标题失败: {e}")
-        return None
+    result = extract_info_with_ytdlp(podcast_url)
+    if result['success']:
+        return result['info'].get('title', None)
+    print('获取喜马拉雅标题失败: ' + str(result['error']))
+    return None
 
 
-def download_xiaoyuzhou_audio(url, save_dir="temp_audio"):
-    """
-    从小宇宙播客单集链接下载音频。
-
-    参数:
-        url (str): 小宇宙分享链接（如 https://xiaoyuzhoufm.com/episode/xxx）
-        save_dir (str): 保存目录
-
-    返回:
-        dict: 包含以下键的字典:
-            - success (bool): 是否成功
-            - file_path (str): 下载的音频文件路径（成功时）
-            - title (str): 播客标题（成功时）
-            - error (str): 错误信息（失败时）
-    """
+def download_xiaoyuzhou_audio(url, save_dir='temp_audio'):
     os.makedirs(save_dir, exist_ok=True)
+    if detect_platform(url) != 'xiaoyuzhou':
+        return {'success': False, 'file_path': None, 'title': None, 'error': '非有效的小宇宙分享链接，请检查链接是否正确', 'platform': 'xiaoyuzhou'}
 
-    # 检查 URL 格式
-    if detect_platform(url) != "xiaoyuzhou":
-        return {
-            'success': False,
-            'error': "非有效的小宇宙分享链接，请检查链接是否正确"
-        }
-
-    # 伪装浏览器 User-Agent
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-    }
+    headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36', 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8', 'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'}
 
     try:
-        # 请求网页
         response = requests.get(url, headers=headers, timeout=10)
         if response.status_code != 200:
-            return {
-                'success': False,
-                'error': f"请求失败，状态码: {response.status_code}"
-            }
+            return {'success': False, 'file_path': None, 'title': None, 'error': '请求失败，状态码: ' + str(response.status_code), 'platform': 'xiaoyuzhou'}
 
         html_content = response.text
-
-        # 提取音频直链 - 查找 <meta property="og:audio" content="...">
         audio_url = None
-        title = "未知标题"
+        title = '未知标题'
 
-        import re
-
-        # 匹配 og:audio
         audio_match = re.search(r'<meta\s+(?:property|name)="og:audio"\s+content="([^"]+)"', html_content)
         if audio_match:
             audio_url = audio_match.group(1)
         else:
-            # 备选：查找 data-src 属性
             audio_match = re.search(r'data-src="([^"]+\.mp3)"', html_content)
             if audio_match:
                 audio_url = audio_match.group(1)
 
-        # 提取标题 - 查找 <meta property="og:title" content="...">
         title_match = re.search(r'<meta\s+(?:property|name)="og:title"\s+content="([^"]+)"', html_content)
         if title_match:
             title = title_match.group(1)
         else:
-            # 备选：查找 <title>
             title_match = re.search(r'<title>([^<]+)</title>', html_content)
             if title_match:
                 title = title_match.group(1)
 
         if not audio_url:
-            return {
-                'success': False,
-                'error': "页面结构已变更，无法解析音频链接，请等待开发者更新"
-            }
+            return {'success': False, 'file_path': None, 'title': None, 'error': '页面结构已变更，无法解析音频链接，请等待开发者更新', 'platform': 'xiaoyuzhou'}
 
-        # 清理标题
-        title = re.sub(r'[\\/*?:"<>|]', "", title).strip()
-        if len(title) > 200:
-            title = title[:200]
+        title = _sanitize_title(title)
+        print('[Downloader] 正在下载音频: ' + title)
 
-        # 下载音频文件
-        print(f"正在下载音频: {title}")
-        print(f"音频链接: {audio_url}")
-
-        # 流式下载
         audio_response = requests.get(audio_url, headers=headers, timeout=60, stream=True)
         if audio_response.status_code != 200:
-            return {
-                'success': False,
-                'error': f"音频下载失败，状态码: {audio_response.status_code}"
-            }
+            return {'success': False, 'file_path': None, 'title': title, 'error': '音频下载失败，状态码: ' + str(audio_response.status_code), 'platform': 'xiaoyuzhou'}
 
-        # 根据 Content-Type 确定文件扩展名
         content_type = audio_response.headers.get('Content-Type', '').lower()
         if 'mpeg' in content_type or 'mp3' in content_type:
             ext = '.mp3'
@@ -497,390 +305,88 @@ def download_xiaoyuzhou_audio(url, save_dir="temp_audio"):
         elif 'audio/aac' in content_type:
             ext = '.aac'
         else:
-            # 默认先保存为 .m4a，后续可以转换
             ext = '.m4a'
 
-        # 保存文件
-        file_path = os.path.join(save_dir, f"{title}{ext}")
-        temp_path = file_path  # 初始保存路径
-
+        file_path = os.path.join(save_dir, title + ext)
         with open(file_path, 'wb') as f:
             for chunk in audio_response.iter_content(chunk_size=8192):
                 if chunk:
                     f.write(chunk)
 
-        # 如果是 m4a/aac 格式，转换为 mp3
+        print('[Downloader] 下载完成: ' + title + '，转码中...')
+
         if ext in ['.m4a', '.aac'] and os.path.exists(file_path):
             try:
-                import subprocess
-                mp3_path = file_path.replace(ext, '.mp3')
-                subprocess.run([
-                    'ffmpeg', '-i', file_path,
-                    '-codec:a', 'libmp3lame',
-                    '-q:a', '2', mp3_path,
-                    '-y'
-                ], capture_output=True, check=True)
-                os.remove(file_path)  # 删除原文件
-                file_path = mp3_path  # 使用转换后的文件
+                mp3_path = os.path.join(save_dir, title + '.mp3')
+                result = subprocess.run([get_ffmpeg_path(), '-i', file_path, '-codec:a', 'libmp3lame', '-q:a', '2', mp3_path, '-y'], capture_output=True, text=True, timeout=60)
+                if result.returncode == 0:
+                    os.remove(file_path)
+                    file_path = mp3_path
+                    print('[Downloader] 转码完成: ' + title)
+                else:
+                    print('[Downloader] FFmpeg 转码失败: ' + result.stderr[:200])
             except Exception as e:
-                print(f"格式转换失败，保持原格式: {e}")
+                print('[Downloader] 格式转换失败，保持原格式: ' + str(e))
 
-        # 验证文件
         if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
-            return {
-                'success': True,
-                'file_path': file_path,
-                'title': title
-            }
+            return {'success': True, 'file_path': file_path, 'title': title, 'error': None, 'platform': 'xiaoyuzhou'}
         else:
-            return {
-                'success': False,
-                'error': "音频文件保存失败"
-            }
+            return {'success': False, 'file_path': None, 'title': title, 'error': '音频文件保存失败', 'platform': 'xiaoyuzhou'}
 
     except requests.exceptions.Timeout:
-        return {
-            'success': False,
-            'error': "网络连接超时，请检查网络或稍后再试"
-        }
+        return {'success': False, 'file_path': None, 'title': None, 'error': '网络连接超时，请检查网络或稍后再试', 'platform': 'xiaoyuzhou'}
     except requests.exceptions.ConnectionError:
-        return {
-            'success': False,
-            'error': "网络连接失败，请检查网络"
-        }
+        return {'success': False, 'file_path': None, 'title': None, 'error': '网络连接失败，请检查网络', 'platform': 'xiaoyuzhou'}
     except Exception as e:
-        return {
-            'success': False,
-            'error': f"下载过程出错: {str(e)}"
-        }
+        return {'success': False, 'file_path': None, 'title': None, 'error': '下载过程出错: ' + str(e), 'platform': 'xiaoyuzhou'}
 
 
-def download_netease_audio(raw_text, save_dir="temp_audio"):
-    """
-    从网易云播客链接下载音频。
-
-    参数:
-        raw_text (str): 用户分享的原始文本（可能包含分享文案）
-        save_dir (str): 保存目录
-
-    返回:
-        dict: 包含以下键的字典:
-            - success (bool): 是否成功
-            - file_path (str): 下载的音频文件路径（成功时）
-            - title (str): 播客标题（成功时）
-            - error (str): 错误信息（失败时）
-    """
+def download_netease_audio(raw_text, save_dir='temp_audio'):
     os.makedirs(save_dir, exist_ok=True)
-
-    # 先解析并净化 URL
     podcast_url = parse_netease_url(raw_text)
     if not podcast_url:
-        return {
-            'success': False,
-            'error': "无法解析网易云播客链接，请检查链接是否正确"
-        }
-
-    print(f"净化后的播客链接: {podcast_url}")
-
-    # 先获取标题
-    title = fetch_netease_title(podcast_url)
-    if not title:
-        title = "网易云播客"
-    title = re.sub(r'[\\/*?:"<>|]', "", title).strip()
-    if len(title) > 200:
-        title = title[:200]
-
-    # 下载音频
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'outtmpl': os.path.join(save_dir, f"{title}.%(ext)s"),
-        'quiet': True,
-        'no_warnings': True,
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }],
-    }
-
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([podcast_url])
-
-        # 查找下载的文件
-        for ext in ['.mp3', '.m4a', '.webm', '.aac', '.flac']:
-            file_path = os.path.join(save_dir, f"{title}{ext}")
-            if os.path.exists(file_path):
-                # 如果是其他格式，转换为 mp3
-                if ext != '.mp3':
-                    mp3_path = file_path.replace(ext, '.mp3')
-                    try:
-                        subprocess.run([
-                            'ffmpeg', '-i', file_path,
-                            '-codec:a', 'libmp3lame',
-                            '-q:a', '2', mp3_path, '-y'
-                        ], capture_output=True, check=True)
-                        os.remove(file_path)
-                        file_path = mp3_path
-                    except Exception:
-                        pass
-
-                if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
-                    return {
-                        'success': True,
-                        'file_path': file_path,
-                        'title': title
-                    }
-
-        return {
-            'success': False,
-            'error': "音频文件下载失败或未找到"
-        }
-
-    except yt_dlp.utils.DownloadError as e:
-        error_msg = str(e)
-        # 检测是否为 VIP/付费内容 (403 错误)
-        if "HTTP Error 403" in error_msg or "403" in error_msg:
-            return {
-                'success': False,
-                'error': "此为网易云 VIP/付费专属播客，请使用网易云客户端下载音频后，通过本地文件拖拽上传提炼"
-            }
-        return {
-            'success': False,
-            'error': f"下载失败: {error_msg}"
-        }
-    except Exception as e:
-        return {
-            'success': False,
-            'error': f"下载过程出错: {str(e)}"
-        }
+        return {'success': False, 'file_path': None, 'title': None, 'error': '无法解析网易云播客链接，请检查链接是否正确', 'platform': 'netease'}
+    print('[Downloader] 净化后的播客链接: ' + podcast_url)
+    result = download_audio_with_ytdlp(url=podcast_url, save_dir=save_dir, prefer_m4a=False, timeout=300)
+    result['platform'] = 'netease'
+    return result
 
 
-def download_ximalaya_audio(raw_text, save_dir="temp_audio"):
-    """
-    从喜马拉雅播客链接下载音频。
-
-    参数:
-        raw_text (str): 用户分享的原始文本（可能包含分享文案）
-        save_dir (str): 保存目录
-
-    返回:
-        dict: 包含以下键的字典:
-            - success (bool): 是否成功
-            - file_path (str): 下载的音频文件路径（成功时）
-            - title (str): 播客标题（成功时）
-            - error (str): 错误信息（失败时）
-    """
+def download_ximalaya_audio(raw_text, save_dir='temp_audio'):
     os.makedirs(save_dir, exist_ok=True)
-
-    # 先解析并净化 URL
     podcast_url = parse_ximalaya_url(raw_text)
     if not podcast_url:
-        return {
-            'success': False,
-            'error': "无法解析喜马拉雅播客链接，请检查链接是否正确"
-        }
-
-    print(f"净化后的喜马拉雅链接: {podcast_url}")
-
-    # 先获取标题
-    title = fetch_ximalaya_title(podcast_url)
-    if not title:
-        title = "喜马拉雅播客"
-    title = re.sub(r'[\\/*?:"<>|]', "", title).strip()
-    if len(title) > 200:
-        title = title[:200]
-
-    # 下载音频
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'outtmpl': os.path.join(save_dir, f"{title}.%(ext)s"),
-        'quiet': True,
-        'no_warnings': True,
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }],
-    }
-
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([podcast_url])
-
-        # 查找下载的文件
-        for ext in ['.mp3', '.m4a', '.webm', '.aac', '.flac']:
-            file_path = os.path.join(save_dir, f"{title}{ext}")
-            if os.path.exists(file_path):
-                # 如果是其他格式，转换为 mp3
-                if ext != '.mp3':
-                    mp3_path = file_path.replace(ext, '.mp3')
-                    try:
-                        subprocess.run([
-                            'ffmpeg', '-i', file_path,
-                            '-codec:a', 'libmp3lame',
-                            '-q:a', '2', mp3_path, '-y'
-                        ], capture_output=True, check=True)
-                        os.remove(file_path)
-                        file_path = mp3_path
-                    except Exception:
-                        pass
-
-                if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
-                    return {
-                        'success': True,
-                        'file_path': file_path,
-                        'title': title
-                    }
-
-        return {
-            'success': False,
-            'error': "音频文件下载失败或未找到"
-        }
-
-    except yt_dlp.utils.DownloadError as e:
-        error_msg = str(e)
-        if "HTTP Error 403" in error_msg or "403" in error_msg:
-            return {
-                'success': False,
-                'error': "此为喜马拉雅 VIP/付费专属内容，请使用喜马拉雅客户端下载音频后，通过本地文件拖拽上传提炼"
-            }
-        return {
-            'success': False,
-            'error': f"下载失败: {error_msg}"
-        }
-    except Exception as e:
-        return {
-            'success': False,
-            'error': f"下载过程出错: {str(e)}"
-        }
+        return {'success': False, 'file_path': None, 'title': None, 'error': '无法解析喜马拉雅播客链接，请检查链接是否正确', 'platform': 'ximalaya'}
+    print('[Downloader] 净化后的喜马拉雅链接: ' + podcast_url)
+    result = download_audio_with_ytdlp(url=podcast_url, save_dir=save_dir, prefer_m4a=False, timeout=300)
+    result['platform'] = 'ximalaya'
+    return result
 
 
-def download_applepodcasts_audio(url, save_dir="temp_audio"):
-    """
-    从苹果播客链接下载音频。
-
-    参数:
-        url (str): 苹果播客分享链接
-        save_dir (str): 保存目录
-
-    返回:
-        dict: {"success": bool, "file_path": str, "title": str, "error": str}
-    """
-    try:
-        import subprocess
-        import json
-        import os
-
-        # 使用 yt-dlp 获取视频信息
-        cmd = [
-            "yt-dlp",
-            "--dump-json",
-            "--no-download",
-            url
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        if result.returncode != 0:
-            return {
-                'success': False,
-                'error': f"获取播客信息失败: {result.stderr}"
-            }
-
-        info = json.loads(result.stdout)
-        title = info.get('title', 'apple_podcast')
-        # 清理标题中的非法字符
-        import re
-        title = re.sub(r'[\\/:*?"<>|]', '', title)
-
-        # 下载音频（先用 m4a 容器）
-        temp_path = os.path.join(save_dir, f"{title}_temp.m4a")
-        output_path = os.path.join(save_dir, f"{title}.m4a")
-        cmd = [
-            "yt-dlp",
-            "-f", "bestaudio",
-            "--output", temp_path,
-            url
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-
-        if result.returncode != 0:
-            return {
-                'success': False,
-                'error': f"下载失败: {result.stderr}"
-            }
-
-        # 使用 ffmpeg 转换为标准 m4a 格式（重新编码）
-        try:
-            convert_cmd = [
-                "ffmpeg",
-                "-y",
-                "-i", temp_path,
-                "-c:a", "aac",
-                "-b:a", "128k",
-                output_path
-            ]
-            convert_result = subprocess.run(convert_cmd, capture_output=True, text=True, timeout=60)
-            # 删除临时文件
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-        except Exception as e:
-            # 如果转换失败，直接使用原文件
-            if os.path.exists(temp_path):
-                os.rename(temp_path, output_path)
-
-        # 检查文件是否存在
-        if os.path.exists(output_path):
-            return {
-                'success': True,
-                'file_path': output_path,
-                'title': title
-            }
-        else:
-            return {
-                'success': False,
-                'error': "下载完成但未找到文件"
-            }
-
-    except subprocess.TimeoutExpired:
-        return {
-            'success': False,
-            'error': "下载超时"
-        }
-    except Exception as e:
-        return {
-            'success': False,
-            'error': f"下载过程出错: {str(e)}"
-        }
+def download_applepodcasts_audio(url, save_dir='temp_audio'):
+    os.makedirs(save_dir, exist_ok=True)
+    info_result = extract_info_with_ytdlp(url)
+    if not info_result['success']:
+        return {'success': False, 'file_path': None, 'title': None, 'error': info_result['error'], 'platform': 'applepodcasts'}
+    title = _sanitize_title(info_result['info'].get('title', 'apple_podcast'))
+    print('[Downloader] 开始下载 Apple Podcasts: ' + title)
+    result = download_audio_with_ytdlp(url=url, save_dir=save_dir, title=title, prefer_m4a=True, timeout=300)
+    result['platform'] = 'applepodcasts'
+    return result
 
 
-def route_and_download(url, save_dir="temp_audio", cookies_path=None):
-    """
-    根据 URL 类型智能路由并下载音频。
-
-    参数:
-        url (str): 在线链接（可能包含分享文案）
-        save_dir (str): 保存目录
-        cookies_path (str, optional): cookies 文件路径
-
-    返回:
-        dict: 下载结果
-    """
+def route_and_download(url, save_dir='temp_audio', cookies_path=None):
     platform = detect_platform(url)
-
-    if platform == "xiaoyuzhou":
+    if platform == 'xiaoyuzhou':
         return download_xiaoyuzhou_audio(url, save_dir)
-    elif platform == "bilibili":
+    elif platform == 'bilibili':
         downloader = AudioDownloader(save_dir=save_dir)
         return downloader.download_bilibili_audio(url, cookies_path)
-    elif platform == "netease":
+    elif platform == 'netease':
         return download_netease_audio(url, save_dir)
-    elif platform == "ximalaya":
+    elif platform == 'ximalaya':
         return download_ximalaya_audio(url, save_dir)
-    elif platform == "applepodcasts":
+    elif platform == 'applepodcasts':
         return download_applepodcasts_audio(url, save_dir)
     else:
-        return {
-            'success': False,
-            'error': f"不支持的平台，当前仅支持小宇宙、网易云、喜马拉雅、苹果播客和 Bilibili"
-        }
-
+        return {'success': False, 'file_path': None, 'title': None, 'error': '不支持的平台，当前仅支持小宇宙、网易云、喜马拉雅、苹果播客和 Bilibili', 'platform': platform}
