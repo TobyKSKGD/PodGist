@@ -88,4 +88,23 @@ if __name__ == "__main__":
     # Windows 专用：防止 PyTorch/Uvicorn 多进程无限递归启动
     # 必须在所有业务逻辑之前调用，且放在 if __name__ == '__main__' 内
     multiprocessing.freeze_support()
-    main()
+
+    # 顶层异常捕获：写入日志文件
+    import traceback
+    data_dir = os.environ.get('PODGIST_DATA_DIR')
+    if data_dir:
+        log_dir = os.path.join(data_dir, 'logs')
+        os.makedirs(log_dir, exist_ok=True)
+        log_file = os.path.join(log_dir, 'backend-python.log')
+        try:
+            main()
+        except Exception:
+            tb = traceback.format_exc()
+            log_content = f"[{os.environ.get('PODGIST_DATA_DIR', 'unknown')}] 顶层异常:\n{tb}\n"
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.write(log_content)
+            print(f"[start_electron] 顶层异常已写入: {log_file}")
+            print(tb)
+            sys.exit(1)
+    else:
+        main()
