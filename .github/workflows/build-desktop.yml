@@ -67,11 +67,6 @@ jobs:
           - os: windows-latest
             platform: win
             artifact_pattern: '*.exe'
-        exclude:
-          - os: macos-latest
-            platform: win
-          - os: windows-latest
-            platform: mac
 
     steps:
       - name: Checkout
