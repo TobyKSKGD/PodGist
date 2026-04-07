@@ -39,14 +39,21 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" == "push" ]; then
             TAG="${{ github.ref_name }}"
+            echo "Event: push tag = $TAG"
           else
-            # workflow_dispatch: 使用用户提供的 tag 或回退
-            TAG="${{ inputs.tag || github.ref_name }}"
+            # workflow_dispatch: 只在用户明确提供 tag 时才创建 release
+            if [ -n "${{ inputs.tag }}" ]; then
+              TAG="${{ inputs.tag }}"
+              echo "Event: workflow_dispatch with explicit tag = $TAG"
+            else
+              TAG=""
+              echo "Event: workflow_dispatch without tag, skipping release creation"
+            fi
           fi
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "Resolved tag: $TAG"
 
-      - name: Create draft release (if tag is valid)
+      - name: Create draft release
         if: steps.determine-tag.outputs.tag != ''
         uses: softprops/action-gh-release@v2
         with:
@@ -142,7 +149,9 @@ jobs:
         working-directory: electron
 
       - name: Build Electron (${{ matrix.platform }})
-        run: npm run build:ci:${{ matrix.platform }}
+        run: |
+          echo "electron-builder version: $(node -p 'require("./package.json").version')"
+          npm run build:ci:${{ matrix.platform }}
         working-directory: electron
 
       # ===== 查找产物 =====
@@ -169,14 +178,34 @@ jobs:
         if: matrix.platform == 'mac'
         id: find-mac
         run: |
-          find release/ -name "*.dmg" -type f | while read f; do
-            size=$(du -h "$f" | cut -f1)
-            echo "Found: $f ($size)"
-            echo "path=$f" >> $GITHUB_OUTPUT
-            echo "name=$(basename $f)" >> $GITHUB_OUTPUT
+          echo "=== Searching for .dmg artifacts ==="
+          echo "Searching electron/release/:"
+          find electron/release/ -name "*.dmg" -type f 2>/dev/null || echo "  (not found)"
+          echo "Searching release/:"
+          find release/ -name "*.dmg" -type f 2>/dev/null || echo "  (not found)"
+          echo "Searching electron/out/:"
+          find electron/out/ -name "*.dmg" -type f 2>/dev/null || echo "  (not found)"
+          echo "Listing electron/ directory:"
+          ls -la electron/ 2>/dev/null || echo "  (not found)"
+          echo "Listing release/ directory:"
+          ls -la release/ 2>/dev/null || echo "  (not found)"
+
+          # 查找 dmg（搜索多个可能的位置）
+          DMG_PATH=""
+          for dir in electron/release release electron/out; do
+            dmgs=$(find "$dir" -name "*.dmg" -type f 2>/dev/null | head -1)
+            if [ -n "$dmgs" ]; then
+              DMG_PATH="$dmgs"
+              break
+            fi
           done
-          if [ ! -s "$GITHUB_OUTPUT_PATH" ] || [ $(wc -l < $GITHUB_OUTPUT_PATH) -eq 0 ]; then
-            echo "ERROR: No .dmg found in release/"
+
+          if [ -n "$DMG_PATH" ]; then
+            echo "Found DMG: $DMG_PATH"
+            echo "path=$DMG_PATH" >> $GITHUB_OUTPUT
+            echo "name=$(basename $DMG_PATH)" >> $GITHUB_OUTPUT
+          else
+            echo "ERROR: No .dmg found"
             exit 1
           fi
 
