@@ -44,13 +44,23 @@ def _call_llm_with_retry(api_key, messages, max_retries=2, temperature=0.3, mode
                     return response.output.choices[0].message.content
                 else:
                     err_msg = f"status={response.code} msg={response.message}"
-                    print(f"[LLM] {m} attempt {attempt+1} 失败: {err_msg}")
+                    # 检测速率限制：如果是限流错误，增加更长的等待时间
+                    is_rate_limit = (response.status_code == 429 or
+                                     response.code in ('RateLimitError', 'ThrottlingException', 'TooManyRequestsException'))
+                    print(f"[LLM] {m} attempt {attempt+1} 失败: {err_msg}" + (" (检测到限流，增加等待时间)" if is_rate_limit else ""))
                     last_err = Exception(f"LLM error ({m}): {err_msg}")
+                    # 限流时增加等待时间
+                    if is_rate_limit:
+                        time.sleep(15)
             except Exception as e:
                 err_type = type(e).__name__
                 err_msg = str(e)
-                print(f"[LLM] {m} attempt {attempt+1} 异常 [{err_type}]: {err_msg}")
+                # 检测是否是限流相关异常
+                is_rate_limit = any(x in err_msg.lower() for x in ['rate', 'limit', 'throttle', '429', 'too many'])
+                print(f"[LLM] {m} attempt {attempt+1} 异常 [{err_type}]: {err_msg}" + (" (检测到限流，增加等待时间)" if is_rate_limit else ""))
                 last_err = Exception(f"[{err_type}] {err_msg}")
+                if is_rate_limit:
+                    time.sleep(15)
 
             if attempt < max_retries - 1:
                 time.sleep(2)
@@ -59,6 +69,8 @@ def _call_llm_with_retry(api_key, messages, max_retries=2, temperature=0.3, mode
                 print(f"[LLM] {m} 全部重试失败，切换下一个模型...")
 
         # 当前模型全部重试失败，换下一个模型
+        # 增加延迟，避免触发 DashScope 速率限制
+        time.sleep(5)
         temperature = 0.3  # 重置 temperature
 
     # 所有模型都失败了

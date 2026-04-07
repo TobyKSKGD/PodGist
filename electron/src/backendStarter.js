@@ -292,12 +292,17 @@ class BackendStarter {
       NODE_ENV: process.env.NODE_ENV || 'production'
     };
 
-    // Windows: 注入 FFmpeg/FFprobe 路径到环境变量
+    // macOS/Windows: 注入 FFmpeg/FFprobe 路径到环境变量
+    const ffmpegDir = path.join(process.resourcesPath, 'ffmpeg');
     if (platform === 'win32') {
-      const ffmpegDir = path.join(process.resourcesPath, 'ffmpeg');
       env.PATH = `${ffmpegDir};${env.PATH}`;
       env.FFMPEG_BINARY = path.join(ffmpegDir, 'ffmpeg.exe');
       env.FFPROBE_BINARY = path.join(ffmpegDir, 'ffprobe.exe');
+    } else {
+      // macOS: 将 ffmpeg 目录添加到 PATH 最前面
+      env.PATH = `${ffmpegDir}:${env.PATH}`;
+      env.FFMPEG_BINARY = path.join(ffmpegDir, 'ffmpeg');
+      env.FFPROBE_BINARY = path.join(ffmpegDir, 'ffprobe');
     }
 
     this._appendLog(BACKEND_LOG, `用户数据目录: ${this.userDataPath}`);
