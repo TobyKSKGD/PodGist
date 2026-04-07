@@ -29,14 +29,17 @@ if [ -d "$VENV_DIR" ]; then
     echo "  python_venv 已存在，跳过创建"
 else
     python3 -m venv "$VENV_DIR"
+    # 确保 pip 已正确安装
+    "$VENV_DIR/bin/python3" -m ensurepip --upgrade
     echo "  创建成功: $VENV_DIR"
 fi
 
 # ===== 安装依赖 =====
 echo ""
 echo "[2/4] 安装 Python 依赖..."
+# 使用绝对路径避免工作目录问题
 "$VENV_DIR/bin/pip" install --upgrade pip
-"$VENV_DIR/bin/pip" install -r requirements.txt
+"$VENV_DIR/bin/pip" install -r "$PROJECT_ROOT/requirements.txt"
 echo "  依赖安装完成"
 
 # ===== 安装 yt-dlp =====
