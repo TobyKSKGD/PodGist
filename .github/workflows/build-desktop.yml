@@ -27,9 +27,6 @@ env:
 jobs:
   # ===== Job A: 创建/验证 Draft Release =====
   create-release:
-    # 必须有 tag 才能创建 release
-    # workflow_dispatch 时：如果没提供 tag 且不是 tag push，则跳过
-    if: github.event_name == 'push' || inputs.tag != ''
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.determine-tag.outputs.tag }}
@@ -43,12 +40,14 @@ jobs:
           if [ "${{ github.event_name }}" == "push" ]; then
             TAG="${{ github.ref_name }}"
           else
-            TAG="${{ inputs.tag }}"
+            # workflow_dispatch: 使用用户提供的 tag 或回退
+            TAG="${{ inputs.tag || github.ref_name }}"
           fi
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "Resolved tag: $TAG"
 
-      - name: Create draft release
+      - name: Create draft release (if tag is valid)
+        if: steps.determine-tag.outputs.tag != ''
         uses: softprops/action-gh-release@v2
         with:
           draft: true
