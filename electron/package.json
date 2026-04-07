@@ -14,7 +14,10 @@
     "build:all": "npm run prebuild && electron-builder --config electron-builder.yml --win --mac",
     "build:full": "BUILD_TYPE=full npm run build:win",
     "build:lite": "BUILD_TYPE=lite npm run build:win",
-    "upload:release": "npm run prebuild && electron-builder --config electron-builder.yml --win --mac --publish always"
+    "upload:release": "npm run prebuild && electron-builder --config electron-builder.yml --win --mac --publish always",
+    "build:ci:win": "electron-builder --config electron-builder.yml --win",
+    "build:ci:mac": "electron-builder --config electron-builder.yml --mac",
+    "build:ci:all": "electron-builder --config electron-builder.yml --win --mac"
   },
   "devDependencies": {
     "electron": "^28.3.3",

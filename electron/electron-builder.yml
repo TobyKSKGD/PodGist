@@ -1,6 +1,6 @@
 # ================= electron-builder 配置 =================
 # PodGist 桌面应用打包配置
-
+# 统一构建：macOS (dmg) + Windows (nsis)
 
 # 打包目标平台
 target:
@@ -51,12 +51,14 @@ dmg:
 # ================= macOS 配置 =================
 mac:
   category: public.app-category.productivity
-  hardenedRuntime: true
+  # 允许 CI 无签名构建（不设置则默认尝试签名）
+  sign: false
   entitlements: assets/entitlements.plist
   entitlementsInherit: assets/entitlements.plist
   icon: assets/Icon.icns
   target:
     - dmg
+  # 打包文件：来自 electron/ 目录（由 prebuild 从根目录复制）
   files:
     - src/**/*
     - package.json
@@ -84,26 +86,21 @@ win:
   icon: assets/icon.ico
   executableName: PodGist
   forceCodeSigning: false
-
-  # 关键修复：
   # 必须开启，electron-builder 才会把 app icon / metadata / execution level 写进主程序 EXE
   signAndEditExecutable: true
-
   publish: null
   target:
     - target: nsis
       arch:
         - x64
-
-  # Windows 只需要 Electron 端文件，后端通过 extraResources 带入 resources/api
+  # Windows 打包文件
   files:
     - src/**/*
     - package.json
     - frontend-dist/**/*
-
   asarUnpack:
     - frontend-dist/**/*
-
+  # 后端 PyInstaller 产物（由 scripts/release/build-backend-win.ps1 放置）
   extraResources:
     - from: assets/icon.ico
       to: icon.ico
