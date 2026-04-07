@@ -6,6 +6,10 @@ on:
       - 'v*'
   workflow_dispatch:
     inputs:
+      tag:
+        description: 'Release tag (e.g. v1.0.0) - leave empty to skip release creation'
+        required: false
+        default: ''
       platform:
         description: '构建平台'
         required: false
@@ -23,35 +27,36 @@ env:
 jobs:
   # ===== Job A: 创建/验证 Draft Release =====
   create-release:
+    # 必须有 tag 才能创建 release
+    # workflow_dispatch 时：如果没提供 tag 且不是 tag push，则跳过
+    if: github.event_name == 'push' || inputs.tag != ''
     runs-on: ubuntu-latest
     outputs:
-      tag: ${{ steps.release.outputs.tag }}
-      release_id: ${{ steps.release.outputs.id }}
+      tag: ${{ steps.determine-tag.outputs.tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Determine tag
-        id: tag
+        id: determine-tag
         run: |
-          TAG="${{ github.ref_name }}"
+          if [ "${{ github.event_name }}" == "push" ]; then
+            TAG="${{ github.ref_name }}"
+          else
+            TAG="${{ inputs.tag }}"
+          fi
           echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Resolved tag: $TAG"
 
-      - name: Create or update draft release
-        id: release
+      - name: Create draft release
         uses: softprops/action-gh-release@v2
         with:
           draft: true
           prerelease: false
           generate_release_notes: true
-          tag_name: ${{ steps.tag.outputs.tag }}
+          tag_name: ${{ steps.determine-tag.outputs.tag }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Show release info
-        run: |
-          echo "Release tag: ${{ steps.tag.outputs.tag }}"
-          echo "Release ID: ${{ steps.release.outputs.id }}"
 
   # ===== Job B: 构建矩阵 (mac + win) =====
   build:
@@ -153,9 +158,9 @@ jobs:
               Write-Host "Found: $($_.FullName) ($([math]::Round($_.Length / 1MB, 2)) MB)"
             }
             $first = $artifacts | Select-Object -First 1
-            echo "path=$($first.FullName)" >> $env:GITHUB_OUTPUT
-            echo "name=$($first.Name)" >> $env:GITHUB_OUTPUT
-            echo "size=$([math]::Round($first.Length / 1MB, 2)) MB" >> $env:GITHUB_OUTPUT
+            Write-Host "path=$($first.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            Write-Host "name=$($first.Name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            Write-Host "size=$([math]::Round($first.Length / 1MB, 2)) MB" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           } else {
             Write-Host "ERROR: No .exe found in release/"
             exit 1
@@ -171,44 +176,44 @@ jobs:
             echo "path=$f" >> $GITHUB_OUTPUT
             echo "name=$(basename $f)" >> $GITHUB_OUTPUT
           done
-          if [ -z "$GITHUB_OUTPUT_PATH" ]; then
+          if [ ! -s "$GITHUB_OUTPUT_PATH" ] || [ $(wc -l < $GITHUB_OUTPUT_PATH) -eq 0 ]; then
             echo "ERROR: No .dmg found in release/"
             exit 1
           fi
 
       # ===== 上传到 GitHub Release =====
       - name: Upload to Release (Windows)
-        if: matrix.platform == 'win'
+        if: matrix.platform == 'win' && needs.create-release.outputs.tag != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.create-release.outputs.tag }}
         run: |
-          TAG="${{ needs.create-release.outputs.tag }}"
           echo "Uploading ${{ steps.find-win.outputs.name }} (${{ steps.find-win.outputs.size }}) to release $TAG"
           gh release upload "$TAG" "${{ steps.find-win.outputs.path }}" --clobber
 
       - name: Upload to Release (macOS)
-        if: matrix.platform == 'mac'
+        if: matrix.platform == 'mac' && needs.create-release.outputs.tag != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.create-release.outputs.tag }}
         run: |
-          TAG="${{ needs.create-release.outputs.tag }}"
           echo "Uploading ${{ steps.find-mac.outputs.name }} to release $TAG"
           gh release upload "$TAG" "${{ steps.find-mac.outputs.path }}" --clobber
 
       - name: Verify upload (Windows)
-        if: matrix.platform == 'win'
+        if: matrix.platform == 'win' && needs.create-release.outputs.tag != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.create-release.outputs.tag }}
         run: |
-          TAG="${{ needs.create-release.outputs.tag }}"
           echo "Verifying Windows artifact in release $TAG..."
           gh release view "$TAG" --json assets --jq '.assets[].name'
 
       - name: Verify upload (macOS)
-        if: matrix.platform == 'mac'
+        if: matrix.platform == 'mac' && needs.create-release.outputs.tag != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.create-release.outputs.tag }}
         run: |
-          TAG="${{ needs.create-release.outputs.tag }}"
           echo "Verifying macOS artifact in release $TAG..."
           gh release view "$TAG" --json assets --jq '.assets[].name'
