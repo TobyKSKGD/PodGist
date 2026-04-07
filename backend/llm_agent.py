@@ -78,7 +78,7 @@ def _call_llm_with_retry(api_key, messages, max_retries=2, temperature=0.3, mode
                     result_format="message",
                     temperature=temperature,
                     api_key=api_key,
-                    request_timeout=180
+                    request_timeout=600
                 )
                 if response.status_code == HTTPStatus.OK:
                     print(f"[LLM] {m} 调用成功")
