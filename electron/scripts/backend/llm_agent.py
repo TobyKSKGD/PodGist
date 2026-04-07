@@ -49,7 +49,7 @@ def get_podcast_summary(api_key, podcast_text, max_timeline_items=15, temperatur
         result_format="message",
         temperature=temperature,
         api_key=api_key,
-        request_timeout=60
+        request_timeout=180
     )
 
     if response.status_code == HTTPStatus.OK:
@@ -82,7 +82,7 @@ def _call_llm_with_retry(api_key, messages, max_retries=2, temperature=0.3):
                 result_format="message",
                 temperature=temperature,
                 api_key=api_key,
-                request_timeout=60
+                request_timeout=180
             )
             if response.status_code == HTTPStatus.OK:
                 return response.output.choices[0].message.content
@@ -155,7 +155,7 @@ def _merge_summaries(part_summaries, api_key):
         result_format="message",
         temperature=0.3,
         api_key=api_key,
-        request_timeout=60
+        request_timeout=180
     )
 
     if response.status_code == HTTPStatus.OK:

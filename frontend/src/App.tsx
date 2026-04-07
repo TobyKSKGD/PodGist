@@ -373,6 +373,7 @@ function AppContent() {
                 settings={settings}
                 downloadType="podcast"
                 onSuccess={() => {
+                  showToast('success', '已加入任务队列，请稍候查看结果');
                   fetchArchives();
                 }}
               />
@@ -383,6 +384,7 @@ function AppContent() {
                 settings={settings}
                 downloadType="bilibili"
                 onSuccess={() => {
+                  showToast('success', '已加入任务队列，请稍候查看结果');
                   fetchArchives();
                 }}
               />
