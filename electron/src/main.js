@@ -229,7 +229,7 @@ function createWindow() {
   });
 
   // 处理 window.open() 调用：外部链接在系统浏览器中打开
-  mainWindow.webContents.setWindowOpenHandler(({ url } => {
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('http://') || url.startsWith('https://')) {
       shell.openExternal(url);
     }
