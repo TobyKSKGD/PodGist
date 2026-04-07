@@ -194,7 +194,7 @@ async def transcribe_local(
                 clean_summary = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
             else:
                 ai_title = first_line if first_line else os.path.splitext(os.path.basename(file.filename))[0]
-                clean_summary = summary
+                clean_summary = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
 
         with open(summary_path, "w", encoding="utf-8") as f:
             f.write(f"# {ai_title}\n\n{clean_summary}")
@@ -308,10 +308,10 @@ async def transcribe_url(
                 clean_summary = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
             else:
                 ai_title = first_line if first_line else safe_title
-                clean_summary = summary
+                clean_summary = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
         else:
             ai_title = safe_title
-            clean_summary = summary
+            clean_summary = ""
 
         with open(summary_path, "w", encoding="utf-8") as f:
             f.write(f"# {ai_title}\n\n{clean_summary}")
@@ -786,10 +786,10 @@ def retry_task_llm(task_id: str):
                 clean_summary = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
             else:
                 ai_title = first_line if first_line else title
-                clean_summary = raw_summary
+                clean_summary = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
         else:
             ai_title = title
-            clean_summary = raw_summary
+            clean_summary = ""
 
         with open(summary_path, "w", encoding="utf-8") as f:
             f.write(f"# {ai_title}\n\n{clean_summary}")
