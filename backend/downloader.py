@@ -80,7 +80,6 @@ def download_audio_with_ytdlp(url, save_dir, title=None, prefer_m4a=False,
     print('[Downloader] 开始下载: ' + title)
 
     # yt-dlp 输出模板用 sanitized title（yt-dlp 会再次 sanitize，与我们独立计算的结果可能有差异）
-    # 所以我们用 process_info 返回的实际 filepath，而不是自己猜文件名
     output_template = os.path.join(save_dir, title + '.%(ext)s')
 
     postprocessors = []
@@ -102,29 +101,24 @@ def download_audio_with_ytdlp(url, save_dir, title=None, prefer_m4a=False,
     if cookies_path and os.path.exists(cookies_path):
         ydl_opts['cookiefile'] = cookies_path
 
-    download_result = [None]  # (actual_filepath, error_msg)
+    # 记录下载前目录中的文件（用于下载后通过 mtime 找到新文件）
+    before_files = {}
+    for f in os.listdir(save_dir):
+        fp = os.path.join(save_dir, f)
+        if os.path.isfile(fp):
+            before_files[f] = os.path.getmtime(fp)
+
+    download_error = [None]
 
     def _do_download():
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                if info is None:
-                    download_result[0] = ('error', '获取媒体信息失败')
-                    return
-                # process_info 会下载并运行所有 postprocessors，返回最终 filepath
-                final_info = ydl.process_info(info)
-                if final_info is not None:
-                    actual_path = final_info.get('filepath')
-                    if actual_path and os.path.exists(actual_path):
-                        download_result[0] = (actual_path, None)
-                    else:
-                        download_result[0] = ('error', '文件下载后未找到: ' + str(actual_path))
-                else:
-                    download_result[0] = ('error', 'process_info 返回为空')
+                # extract_info(download=True) 会下载并执行 postprocessors，完成后返回 info dict
+                ydl.extract_info(url, download=True)
         except yt_dlp.utils.DownloadError as e:
-            download_result[0] = ('error', str(e))
+            download_error[0] = e
         except Exception as e:
-            download_result[0] = ('error', str(e))
+            download_error[0] = e
 
     download_thread = threading.Thread(target=_do_download)
     download_thread.daemon = True
@@ -134,12 +128,8 @@ def download_audio_with_ytdlp(url, save_dir, title=None, prefer_m4a=False,
     if download_thread.is_alive():
         return {'success': False, 'file_path': None, 'title': title, 'error': '下载超时（' + str(timeout) + '秒），可能网络问题或内容无法访问', 'platform': None}
 
-    result = download_result[0]
-    if result is None:
-        return {'success': False, 'file_path': None, 'title': title, 'error': '下载未知错误', 'platform': None}
-
-    if result[0] == 'error':
-        error_msg = result[1]
+    if download_error[0]:
+        error_msg = str(download_error[0])
         if 'HTTP Error 403' in error_msg or '403' in error_msg:
             return {'success': False, 'file_path': None, 'title': title, 'error': '下载失败：该内容可能需要 VIP 权限或已被删除', 'platform': None}
         elif 'HTTP Error 404' in error_msg or '404' in error_msg:
@@ -147,9 +137,28 @@ def download_audio_with_ytdlp(url, save_dir, title=None, prefer_m4a=False,
         else:
             return {'success': False, 'file_path': None, 'title': title, 'error': '下载失败: ' + error_msg, 'platform': None}
 
-    file_path = result[0]
-    if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
+    # 通过 mtime 找到新创建/更新的文件（yt-dlp 内部 sanitize 过的文件名可能与我们计算的不同）
+    newest_file = None
+    newest_mtime = 0
+    for f in os.listdir(save_dir):
+        fp = os.path.join(save_dir, f)
+        if os.path.isfile(fp) and f not in before_files:
+            mtime = os.path.getmtime(fp)
+            if mtime > newest_mtime:
+                newest_mtime = mtime
+                newest_file = fp
+        elif os.path.isfile(fp) and f in before_files:
+            mtime = os.path.getmtime(fp)
+            if mtime > before_files[f] + 1:  # 允许 1 秒误差
+                if mtime > newest_mtime:
+                    newest_mtime = mtime
+                    newest_file = fp
+
+    if newest_file is None or not os.path.exists(newest_file) or os.path.getsize(newest_file) == 0:
         return {'success': False, 'file_path': None, 'title': title, 'error': '音频文件下载失败或未找到', 'platform': None}
+
+    file_path = newest_file
+    print('[Downloader] 下载完成: ' + file_path)
 
     # 如果需要转码（prefer_m4a=False 但得到的是 m4a）
     _, ext = os.path.splitext(file_path)
