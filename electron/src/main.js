@@ -234,7 +234,7 @@ function createWindow() {
       shell.openExternal(url);
     }
     return { action: 'deny' };
-  }));
+  });
 
   // 窗口准备好后显示
   mainWindow.once('ready-to-show', () => {
