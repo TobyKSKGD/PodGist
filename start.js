@@ -13,6 +13,7 @@ import { spawn, execSync } from 'child_process';
 import { platform, arch } from 'os';
 import { createRequire } from 'module';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const isWindows = platform() === 'win32';
@@ -71,12 +72,8 @@ async function main() {
 
   // Step 2: Start backend
   log(BLUE, 'START', '启动后端...');
-  const backendScript = path.join(
-    path.dirname(path.resolve(import.meta.url)),
-    'scripts',
-    'dev',
-    'run-backend.mjs'
-  );
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  const backendScript = path.join(__dirname, 'scripts', 'dev', 'run-backend.mjs');
 
   const backend = spawn('node', [backendScript], {
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -97,12 +94,13 @@ async function main() {
 
   // Step 3: Start frontend
   log(CYAN, 'START', '启动前端...');
+  // npm 在 macOS/Linux 直接调用，Windows 用 npm.cmd
+  const npmCmd = isWindows ? 'npm.cmd' : 'npm';
   const frontend = spawn(
-    'npm',
+    npmCmd,
     ['run', 'dev', '--prefix', 'frontend'],
     {
       stdio: ['ignore', 'pipe', 'pipe'],
-      shell: true,
       detached: false,
     }
   );
