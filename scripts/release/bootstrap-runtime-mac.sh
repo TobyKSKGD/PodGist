@@ -89,8 +89,24 @@ if [ -n "$FFMPEG_BIN" ]; then
         echo "  ffprobe 已存在，跳过"
     fi
 else
-    echo "  警告: 未找到系统 FFmpeg，跳过"
-    echo "  提示: 请使用 brew install ffmpeg"
+    echo "  警告: 未找到系统 FFmpeg，尝试下载..."
+    # 从可靠源下载静态 FFmpeg
+    FFMPEG_URL="https://evermeet.cx/ffmpeg/getRelease/ffmpeg"
+    FFPROBE_URL="https://evermeet.cx/ffmpeg/getRelease/ffprobe"
+
+    if [ ! -f "$FFMPEG_DIR/ffmpeg" ]; then
+        echo "  下载 ffmpeg from $FFMPEG_URL"
+        curl -sL "$FFMPEG_URL" -o "$FFMPEG_DIR/ffmpeg" && chmod +x "$FFMPEG_DIR/ffmpeg" && echo "  ffmpeg 下载成功" || echo "  ffmpeg 下载失败"
+    else
+        echo "  ffmpeg 已存在，跳过"
+    fi
+
+    if [ ! -f "$FFMPEG_DIR/ffprobe" ]; then
+        echo "  下载 ffprobe from $FFPROBE_URL"
+        curl -sL "$FFPROBE_URL" -o "$FFMPEG_DIR/ffprobe" && chmod +x "$FFMPEG_DIR/ffprobe" && echo "  ffprobe 下载成功" || echo "  ffprobe 下载失败"
+    else
+        echo "  ffprobe 已存在，跳过"
+    fi
 fi
 
 # 列出最终 ffmpeg 目录内容
