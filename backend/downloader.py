@@ -1,5 +1,6 @@
 import os
 import platform as platform_sys
+import shutil
 import subprocess
 import yt_dlp
 import re
@@ -38,8 +39,18 @@ def _sanitize_title(title):
 
 
 def _get_ffmpeg_dir():
+    """获取 ffmpeg 目录路径，用于 yt-dlp 的 ffmpeg_location 参数。
+    优先用 shutil.which 找系统 ffmpeg，否则用 backend/__init__.py 的 get_ffmpeg_path。
+    """
+    # 先尝试 shutil.which 找系统 ffmpeg（dev 模式下最可靠）
+    which_ffmpeg = shutil.which('ffmpeg')
+    if which_ffmpeg:
+        return os.path.dirname(which_ffmpeg)
+    # 打包环境下用 resources_path
     ffmpeg_path = get_ffmpeg_path()
-    return os.path.dirname(ffmpeg_path)
+    ffmpeg_dir = os.path.dirname(ffmpeg_path)
+    # os.path.dirname('ffmpeg') 在 POSIX 上返回 ''，此时不设置 ffmpeg_location
+    return ffmpeg_dir if ffmpeg_dir else None
 
 
 def extract_info_with_ytdlp(url, cookies_path=None):
@@ -96,8 +107,9 @@ def download_audio_with_ytdlp(url, save_dir, title=None, prefer_m4a=False,
         'socket_timeout': 30,
         'retries': 3,
         'postprocessors': postprocessors,
-        'ffmpeg_location': ffmpeg_dir,
     }
+    if ffmpeg_dir:
+        ydl_opts['ffmpeg_location'] = ffmpeg_dir
     if cookies_path and os.path.exists(cookies_path):
         ydl_opts['cookiefile'] = cookies_path
 
