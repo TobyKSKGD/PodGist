@@ -227,14 +227,26 @@ jobs:
           ASSET_PATH: ${{ steps.find-win.outputs.path }}
           ASSET_NAME: ${{ steps.find-win.outputs.name }}
         run: |
-          echo "Uploading $ASSET_NAME to release $TAG"
-          # Use curl + GitHub API to avoid gh CLI issues on Windows runner
-          UPLOAD_URL=$(gh api repos/${{ github.repository }}/releases/tags/$TAG --jq '.upload_url' | sed 's/{.*//')
-          curl -s -X POST \
-            -H "Authorization: token $GH_TOKEN" \
-            -H "Content-Type: application/octet-stream" \
-            --data-binary "@$ASSET_PATH" \
-            "$UPLOAD_URL?name=$ASSET_NAME"
+          echo "=== Windows Upload Debug ==="
+          echo "gh version:"
+          gh --version || echo "gh not found"
+          echo ""
+          echo "curl version:"
+          curl --version | head -1 || echo "curl not found"
+          echo ""
+          echo "ASSET_PATH=$ASSET_PATH"
+          echo "ASSET_NAME=$ASSET_NAME"
+          echo "TAG=$TAG"
+          echo ""
+          echo "Checking file exists:"
+          ls -la "$ASSET_PATH" || echo "File not found"
+          echo ""
+          echo "Getting upload URL:"
+          gh api repos/${{ github.repository }}/releases/tags/$TAG --jq '.upload_url'
+          echo ""
+          echo "Attempting upload..."
+          gh release upload "$TAG" "$ASSET_PATH" --clobber
+          echo "Upload exit code: $?"
 
       - name: Upload to Release (macOS)
         if: matrix.platform == 'mac' && needs.create-release.outputs.tag != ''
