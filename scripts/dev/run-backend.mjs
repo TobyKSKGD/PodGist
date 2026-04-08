@@ -13,6 +13,7 @@ import { platform } from 'os';
 import { createRequire } from 'module';
 import path from 'node:path';
 import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const isWindows = platform() === 'win32';
@@ -30,7 +31,7 @@ function logError(msg) {
 }
 
 function findPython() {
-  const projectRoot = path.dirname(path.dirname(path.resolve(import.meta.url)));
+  const projectRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
   // 按顺序尝试的 Python 解释器路径
   const candidates = isWindows
@@ -76,9 +77,7 @@ function findPython() {
   return null;
 }
 
-function getPythonCmd() {
-  const projectRoot = path.dirname(path.dirname(path.resolve(import.meta.url)));
-
+function getPythonCmd(projectRoot) {
   if (isWindows) {
     const venvPython = path.join(projectRoot, 'env', 'Scripts', 'python.exe');
     if (fs.existsSync(venvPython)) return venvPython;
@@ -94,8 +93,7 @@ function getPythonCmd() {
   }
 }
 
-function checkPythonEnv(pythonCmd) {
-  const projectRoot = path.dirname(path.dirname(path.resolve(import.meta.url)));
+function checkPythonEnv(pythonCmd, projectRoot) {
   return new Promise((resolve) => {
     const check = spawn(pythonCmd, ['-c', 'import fastapi'], {
       cwd: projectRoot,
@@ -109,8 +107,9 @@ function checkPythonEnv(pythonCmd) {
 }
 
 async function main() {
-  const projectRoot = path.dirname(path.dirname(path.resolve(import.meta.url)));
-  const pythonCmd = getPythonCmd();
+  // 使用 cwd 作为项目根目录（start.js 启动时 cwd 就是项目根目录）
+  const projectRoot = process.cwd();
+  const pythonCmd = getPythonCmd(projectRoot);
 
   log(`项目目录: ${projectRoot}`);
   log(`平台: ${platform()}`);
@@ -133,7 +132,7 @@ async function main() {
   }
 
   // Check fastapi installed
-  const hasFastAPI = await checkPythonEnv(pythonCmd);
+  const hasFastAPI = await checkPythonEnv(pythonCmd, projectRoot);
   if (!hasFastAPI) {
     logError('未安装 fastapi 依赖。请运行: pip install -r requirements.txt');
     process.exit(1);
