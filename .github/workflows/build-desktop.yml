@@ -220,14 +220,21 @@ jobs:
       # ===== 上传到 GitHub Release =====
       - name: Upload to Release (Windows)
         if: matrix.platform == 'win' && needs.create-release.outputs.tag != ''
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.create-release.outputs.tag }}
           ASSET_PATH: ${{ steps.find-win.outputs.path }}
           ASSET_NAME: ${{ steps.find-win.outputs.name }}
         run: |
-          echo "Uploading $env:ASSET_NAME to release $env:TAG"
-          gh release upload "$env:TAG" "$env:ASSET_PATH" --clobber
+          echo "Uploading $ASSET_NAME to release $TAG"
+          # Use curl + GitHub API to avoid gh CLI issues on Windows runner
+          UPLOAD_URL=$(gh api repos/${{ github.repository }}/releases/tags/$TAG --jq '.upload_url' | sed 's/{.*//')
+          curl -s -X POST \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Content-Type: application/octet-stream" \
+            --data-binary "@$ASSET_PATH" \
+            "$UPLOAD_URL?name=$ASSET_NAME"
 
       - name: Upload to Release (macOS)
         if: matrix.platform == 'mac' && needs.create-release.outputs.tag != ''
