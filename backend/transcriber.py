@@ -2,7 +2,7 @@
 语音转录模块 - 使用 DashScope 远程 ASR API
 
 本版本移除了所有本地模型（Whisper / SenseVoice / PyTorch），
-改用 DashScope Qwen3-ASR-Flash 云端 API 进行语音识别。
+改用 DashScope 云端 ASR API（paraformer-v1）进行语音识别。
 """
 
 import os
@@ -12,8 +12,10 @@ import requests
 from typing import Optional
 
 # DashScope ASR API 配置
-DASHSCOPE_ASR_MODEL = "qwen3-asr-flash-2026-02-10"
-FALLBACK_ASR_MODEL = "paraformer-v1"
+# 注意：qwen3-asr-flash-2026-02-10 不是 Transcription API 的有效模型名，
+# DashScope Python SDK Transcription.Models 仅支持: paraformer-v1, paraformer-8k-v1, paraformer-mtl-v1
+DASHSCOPE_ASR_MODEL = "paraformer-v1"
+FALLBACK_ASR_MODEL = "paraformer-8k-v1"
 
 
 def get_dashscope_api_key() -> str:
@@ -169,7 +171,7 @@ def _call_dashscope_asr(audio_url: str, api_key: str, model: str = DASHSCOPE_ASR
 
     if task.status_code != 200:
         if model == DASHSCOPE_ASR_MODEL:
-            print(f"[DashScope ASR] {model} failed, trying {FALLBACK_ASR_MODEL}...")
+            print(f"[DashScope ASR] {model} failed (status={task.status_code}), trying {FALLBACK_ASR_MODEL}...")
             return _call_dashscope_asr(audio_url, api_key, model=FALLBACK_ASR_MODEL)
         return {"error": f"Task creation failed: {task.output}"}
 
@@ -192,6 +194,9 @@ def _call_dashscope_asr(audio_url: str, api_key: str, model: str = DASHSCOPE_ASR
             if model == DASHSCOPE_ASR_MODEL:
                 print(f"[DashScope ASR] Retrying with {FALLBACK_ASR_MODEL}...")
                 return _call_dashscope_asr(audio_url, api_key, model=FALLBACK_ASR_MODEL)
+            elif model == FALLBACK_ASR_MODEL:
+                print(f"[DashScope ASR] {FALLBACK_ASR_MODEL} also failed, trying paraformer-mtl-v1...")
+                return _call_dashscope_asr(audio_url, api_key, model="paraformer-mtl-v1")
             return {"error": error_msg}
 
         time.sleep(2)
