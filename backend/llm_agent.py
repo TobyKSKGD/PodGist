@@ -135,7 +135,7 @@ def _split_text_into_chunks_safely(podcast_text, max_chars=12000, overlap_lines=
     return chunks
 
 
-def _merge_summaries(part_summaries, api_key, max_timeline_items=15):
+def _merge_summaries(part_summaries, api_key):
     """
     合并多个部分的摘要（使用高质量模型 qwen-plus）。
 
@@ -147,16 +147,19 @@ def _merge_summaries(part_summaries, api_key, max_timeline_items=15):
         str: 合并后的摘要
     """
     merge_prompt = f"""
-请将以下多个部分的摘要合并成一个完整的摘要。
+请将以下多个部分的摘要合并成一个完整的播客摘要。
 
-要求：
-1. 保留原始格式（短标题、关键词、概述、时间轴）
-2. 时间轴总数不超过 {max_timeline_items} 条
-3. 去除重复内容
-4. 按时间顺序排列
+【输出格式要求】严格遵循以下格式，不要输出任何提示词或说明文字：
+**核心话题**：[一句话概括]
+**关键词**：[关键词列表]
+**概述**：
+[详细概述内容]
+**时间轴**：
+[MM:SS] 事件1
+[MM:SS] 事件2
+...
 
-----
-
+合并以下多个摘要（去重、保留最有价值的内容，按时间顺序排列）：
 """ + '\n'.join(f'【Part {i+1}】\n{s}' for i, s in enumerate(part_summaries))
 
     messages = [
@@ -191,23 +194,19 @@ def get_podcast_summary_robust(api_key, podcast_text, max_timeline_items=15):
 
     # ---------- 构建基础 prompt ----------
     prompt_base = f"""
-请阅读以下【带有时间戳】的音频逐字稿，严格按照以下Markdown格式输出你的分析。
+你是一个播客与音频内容分析专家。请阅读以下【带有时间戳】的音频逐字稿，输出一期节目的结构化摘要。
 
-【输出格式要求】
-请直接在第1行输出15字以内的短标题（纯文本，不要任何标点、前缀或Markdown符号）。
-从第2行开始，严格按照以下模板排版：
+【重要】你的输出必须严格遵循以下格式，不要包含任何提示词、说明文字或解释，直接输出摘要内容：
 
-> **总结引擎**：通义千问
-> **🏷️ 核心关键词**：[提取3-5个核心关键词，用逗号隔开]
+**核心话题**：[一句话概括本期核心主题，不超过30字]
 
-### 节目总体概述
-[请用大约300字详细、全面地总结本期节目的核心主旨、探讨的具体议题以及整体氛围。要求信息丰富、结构清晰，可分段。]
+**关键词**：[3-5个核心关键词，用逗号隔开]
 
-### 细致高光时间轴
-[强制限制：为了保证报告的阅读体验，你提取的高光时间轴节点【最多不超过 {max_timeline_items} 条】！请站在全局视角，仅提炼最核心的议题切换点，并准确引用对应时间轴。禁止事无巨细地记流水账。]
-[排版警告：为了防止前端显示错乱，每一条时间轴必须单独占一行，且必须以 Markdown 无序列表符号 `-` 开头！]
-- [MM:SS] 详细描述1...
-- [MM:SS] 详细描述2...
+**概述**：
+[用200-400字详细总结本期节目的核心主旨、探讨的具体议题、讨论深度和整体氛围。内容要丰富完整，可以分段。]
+
+**时间轴**：
+[按时间顺序列出本期节目的关键时间节点，每条格式为：[MM:SS] 事件描述。只列出真正值得记录的高光时刻和议题切换点，不要事无巨细地记流水账。]
 
 音频全文如下：
 {podcast_text}
@@ -221,7 +220,7 @@ def get_podcast_summary_robust(api_key, podcast_text, max_timeline_items=15):
         print(f"[LLM] 策略: 整稿尝试 (text_len={text_len} <= 15000)")
 
         messages = [
-            {"role": "system", "content": "你是一个严谨且专业的音频内容分析专家，擅长结构化总结长文本，并且绝对服从格式和排版要求。"},
+            {"role": "system", "content": "你是一个播客与音频内容分析专家，擅长将长篇音频转录稿提炼为结构清晰、内容丰富的摘要，严格遵循用户要求的输出格式，绝不输出任何提示词或说明文字。"},
             {"role": "user", "content": prompt_base}
         ]
 
@@ -232,13 +231,8 @@ def get_podcast_summary_robust(api_key, podcast_text, max_timeline_items=15):
         except Exception as e:
             print(f"[LLM] 整稿尝试1 失败: {e}")
 
-        # 尝试2：减少输出条数，降低难度
-        reduced_items = max(8, max_timeline_items // 2)
-        prompt_v2 = prompt_base.replace(
-            f"最多不超过 {max_timeline_items} 条",
-            f"最多不超过 {reduced_items} 条"
-        )
-        messages[1]["content"] = prompt_v2
+        # 尝试2：使用更高 temperature 鼓励更完整的输出
+        messages[1]["content"] = prompt_base
 
         try:
             result = _call_llm_with_retry(api_key, messages, max_retries=2, temperature=0.5)
@@ -260,7 +254,7 @@ def get_podcast_summary_robust(api_key, podcast_text, max_timeline_items=15):
         # 最后再试一次整稿（兜底）
         print(f"[LLM] 只有1个 chunk，最后尝试整稿...")
         messages = [
-            {"role": "system", "content": "你是一个严谨且专业的音频内容分析专家，擅长结构化总结长文本，并且绝对服从格式和排版要求。"},
+            {"role": "system", "content": "你是一个播客与音频内容分析专家，擅长将长篇音频转录稿提炼为结构清晰、内容丰富的摘要，严格遵循用户要求的输出格式，绝不输出任何提示词或说明文字。"},
             {"role": "user", "content": prompt_base}
         ]
         try:
@@ -272,17 +266,19 @@ def get_podcast_summary_robust(api_key, podcast_text, max_timeline_items=15):
     part_summaries = []
     for i, chunk in enumerate(chunks):
         chunk_prompt = f"""
-请阅读以下【带有时间戳】的音频片段，简要提取关键信息。
+请阅读以下【带有时间戳】的音频片段，提取关键信息。
 
-【输出格式】（只需输出核心内容，不要过多细节）：
-1. 核心话题（1-2句话）
-2. 时间轴（不超过 5 条）
+【输出格式】严格遵循以下格式：
+**核心话题**：[1-2句话]
+**时间轴**：
+[MM:SS] 事件描述
+...
 
 片段 {i+1}/{len(chunks)}（共 {len(chunk)} 字符）：
 {chunk}
 """
         chunk_messages = [
-            {"role": "system", "content": "你是一个专业的音频内容分析专家。"},
+            {"role": "system", "content": "你是一个播客与音频内容分析专家，擅长提炼关键信息，严格遵循格式要求输出。"},
             {"role": "user", "content": chunk_prompt}
         ]
 
@@ -299,7 +295,7 @@ def get_podcast_summary_robust(api_key, podcast_text, max_timeline_items=15):
     # 合并
     if part_summaries:
         try:
-            merged = _merge_summaries(part_summaries, api_key, max_timeline_items=max_timeline_items)
+            merged = _merge_summaries(part_summaries, api_key)
             print(f"[LLM] Map-Reduce 合并成功，共 {len(part_summaries)} 个块")
             return merged
         except Exception as e:
