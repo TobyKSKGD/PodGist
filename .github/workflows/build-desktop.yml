@@ -162,18 +162,18 @@ jobs:
         id: locate-win-unpacked
         shell: pwsh
         run: |
-          # electron-builder 将 unpacked 输出到 repo root release/，不是 electron/release/
-          # PowerShell 默认继承上一步目录，需显式切到 repo root
+          # electron-builder 将 unpacked 输出到 repo root release/{version}/win-unpacked
           Set-Location $env:GITHUB_WORKSPACE
           Write-Host "Current directory: $PWD"
-          $unpacked = Get-ChildItem "release" -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "*-win-unpacked" } | Select-Object -First 1
+          # 递归查找 win-unpacked 目录
+          $unpacked = Get-ChildItem "release" -Directory -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq "win-unpacked" } | Select-Object -First 1
           if ($unpacked) {
             $path = $unpacked.FullName
             echo "path=$path" >> $env:GITHUB_OUTPUT
             echo "Found: $path"
           } else {
             Write-Host "ERROR: No win-unpacked directory found in release/"
-            Get-ChildItem . -Directory -ErrorAction SilentlyContinue | Select-Object -First 10 FullName
+            Get-ChildItem "release" -Recurse -Directory -ErrorAction SilentlyContinue | Select-Object -First 10 FullName
             exit 1
           }
 
