@@ -162,23 +162,19 @@ jobs:
         id: locate-win-unpacked
         shell: pwsh
         run: |
-          # electron-builder 将 unpacked 输出到 release/ (repo root)，不是 electron/release/
-          $unpacked = Get-ChildItem "release" -Directory | Where-Object { $_.Name -like "*-win-unpacked" } | Select-Object -First 1
+          # electron-builder 将 unpacked 输出到 repo root release/，不是 electron/release/
+          # PowerShell 默认继承上一步目录，需显式切到 repo root
+          Set-Location $env:GITHUB_WORKSPACE
+          Write-Host "Current directory: $PWD"
+          $unpacked = Get-ChildItem "release" -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "*-win-unpacked" } | Select-Object -First 1
           if ($unpacked) {
             $path = $unpacked.FullName
             echo "path=$path" >> $env:GITHUB_OUTPUT
             echo "Found: $path"
           } else {
-            # 尝试 electron/release/ 目录
-            $unpacked = Get-ChildItem "electron/release" -Directory | Where-Object { $_.Name -like "*-win-unpacked" } | Select-Object -First 1
-            if ($unpacked) {
-              $path = $unpacked.FullName
-              echo "path=$path" >> $env:GITHUB_OUTPUT
-              echo "Found (electron/release/): $path"
-            } else {
-              Write-Host "ERROR: No win-unpacked directory found in release/ or electron/release/"
-              exit 1
-            }
+            Write-Host "ERROR: No win-unpacked directory found in release/"
+            Get-ChildItem . -Directory -ErrorAction SilentlyContinue | Select-Object -First 10 FullName
+            exit 1
           }
 
       - name: Locate unpacked app (macOS)
@@ -186,7 +182,7 @@ jobs:
         id: locate-mac-unpacked
         run: |
           # macOS DMG 挂载后包含 unpacked .app
-          # electron-builder 输出到 release/ (repo root)
+          # electron-builder 输出到 repo root release/ (非 electron/release/)
           for dir in release electron/release electron/out; do
             app=$(find "$dir" -name "PodGist.app" -type d 2>/dev/null | head -1)
             if [ -n "$app" ]; then
