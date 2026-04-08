@@ -373,6 +373,21 @@ function renderMarkdown(md: string): string {
       continue;
     }
 
+    // Section label lines like: **核心关键词**：内容 or **关键词**：内容
+    // These have bold markers but are NOT proper markdown — treat as label + text
+    const sectionLabelMatch = line.match(/^\*\*(.+?)\*\*[：:](.*)$/);
+    if (sectionLabelMatch) {
+      const label = sectionLabelMatch[1];
+      const text = sectionLabelMatch[2].replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+      // Also process timestamps in the text part
+      const textProcessed = text.replace(/\[(\d+:\d{2}(?:\.\d+)?)\]/g,
+        '<span class="inline-flex items-center px-1.5 py-0.5 rounded bg-[#D1FAF5] text-[#10B981] text-xs font-mono font-medium">[$1]</span>'
+      );
+      output.push(`<p class="my-3 text-slate-700 leading-relaxed"><strong>${label}</strong>：${textProcessed}</p>`);
+      i++;
+      continue;
+    }
+
     // Plain paragraph text (may contain **bold**)
     let para = line.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
     // Timestamps inside paragraphs: [MM:SS]
