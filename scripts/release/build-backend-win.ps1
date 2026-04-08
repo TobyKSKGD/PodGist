@@ -13,7 +13,7 @@ $absElectronDist = Join-Path $absProjectRoot "electron/dist"
 $absElectronApi = Join-Path $absElectronDist "api"
 
 Write-Host "=== PodGist Windows Backend Build ===" -ForegroundColor Cyan
-Write-Host "Project: $absProjectRoot"
+Write-Host "Project: ${absProjectRoot}"
 
 # Step 1: Syntax check
 Write-Host "`n[1/5] Running syntax check..." -ForegroundColor Yellow
@@ -65,8 +65,8 @@ if (Test-Path $absBuildDir) {
 }
 
 Write-Host "  Running pyinstaller..."
-Write-Host "    Spec: $absApiSpec"
-Write-Host "    CWD: $absBackendDir"
+Write-Host "    Spec: ${absApiSpec}"
+Write-Host "    CWD: ${absBackendDir}"
 
 Push-Location $absBackendDir
 try {
@@ -84,9 +84,9 @@ try {
 # Step 4: Locate output
 Write-Host "`n[4/5] Locating output..." -ForegroundColor Yellow
 if (Test-Path $absApiOutput) {
-    Write-Host "Output: $absApiOutput" -ForegroundColor Green
+    Write-Host "Output: ${absApiOutput}" -ForegroundColor Green
 } else {
-    Write-Host "ERROR: Output dir not found: $absApiOutput" -ForegroundColor Red
+    Write-Host "ERROR: Output dir not found: ${absApiOutput}" -ForegroundColor Red
     if (Test-Path $absApiDist) {
         Get-ChildItem $absApiDist -Recurse | Select-Object -First 20 FullName
     }
@@ -120,8 +120,8 @@ if (-not $allOk) {
 
 # Copy to electron/dist/api
 Write-Host "`nCopying to electron/dist/api..." -ForegroundColor Yellow
-Write-Host "  Source: $absApiOutput"
-Write-Host "  Dest: $absElectronApi"
+Write-Host "  Source: ${absApiOutput}"
+Write-Host "  Dest: ${absElectronApi}"
 
 New-Item -ItemType Directory -Force -Path $absElectronApi | Out-Null
 
@@ -141,7 +141,7 @@ if (-not (Test-Path $destApiEngine)) {
     exit 1
 }
 
-Write-Host "`nContents of $absElectronApi:"
+Write-Host "`nContents of ${absElectronApi}:"
 Get-ChildItem $absElectronApi | ForEach-Object {
     $suffix = if ($_.PSIsContainer) { "/" } else { "" }
     Write-Host "  $($_.Name)$suffix"
