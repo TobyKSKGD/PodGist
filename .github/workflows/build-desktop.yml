@@ -30,6 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.determine-tag.outputs.tag }}
+      upload_url: ${{ steps.create-release.outputs.upload_url }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -55,6 +56,7 @@ jobs:
 
       - name: Create draft release
         if: steps.determine-tag.outputs.tag != ''
+        id: create-release
         uses: softprops/action-gh-release@v2
         with:
           draft: true
@@ -220,33 +222,14 @@ jobs:
       # ===== 上传到 GitHub Release =====
       - name: Upload to Release (Windows)
         if: matrix.platform == 'win' && needs.create-release.outputs.tag != ''
-        shell: bash
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ${{ steps.find-win.outputs.path }}
+          asset_name: ${{ steps.find-win.outputs.name }}
+          asset_content_type: application/x-msdownload
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.create-release.outputs.tag }}
-          ASSET_PATH: ${{ steps.find-win.outputs.path }}
-          ASSET_NAME: ${{ steps.find-win.outputs.name }}
-        run: |
-          echo "=== Windows Upload Debug ==="
-          echo "gh version:"
-          gh --version || echo "gh not found"
-          echo ""
-          echo "curl version:"
-          curl --version | head -1 || echo "curl not found"
-          echo ""
-          echo "ASSET_PATH=$ASSET_PATH"
-          echo "ASSET_NAME=$ASSET_NAME"
-          echo "TAG=$TAG"
-          echo ""
-          echo "Checking file exists:"
-          ls -la "$ASSET_PATH" || echo "File not found"
-          echo ""
-          echo "Getting upload URL:"
-          gh api repos/${{ github.repository }}/releases/tags/$TAG --jq '.upload_url'
-          echo ""
-          echo "Attempting upload..."
-          gh release upload "$TAG" "$ASSET_PATH" --clobber
-          echo "Upload exit code: $?"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload to Release (macOS)
         if: matrix.platform == 'mac' && needs.create-release.outputs.tag != ''
