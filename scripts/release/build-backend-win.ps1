@@ -112,13 +112,27 @@ if (-not $allOk) {
 
 # ===== 复制到 electron/dist/api =====
 Write-Host "`n复制到 electron/dist/api..." -ForegroundColor Yellow
-New-Item -ItemType Directory -Force -Path "electron/dist/api" | Out-Null
-Remove-Item "electron/dist/api/*" -Recurse -Force -ErrorAction SilentlyContinue
-# 复制到 electron/dist/api/（不是 electron/dist/，确保 api/ 子目录存在）
-Copy-Item "$apiDist/*" "electron/dist/api/" -Recurse -Force
+# 使用绝对路径确保复制正确
+$srcDir = Join-Path $absProjectRoot $apiDist
+$destDir = Join-Path $absProjectRoot "electron/dist/api"
+Write-Host "  源: $srcDir"
+Write-Host "  目标: $destDir"
+New-Item -ItemType Directory -Force -Path $destDir | Out-Null
+# 用 Get-ChildItem 显式枚举，避免通配符展开问题
+Get-ChildItem $srcDir -Recurse | ForEach-Object {
+    $relPath = $_.FullName.Substring($srcDir.Length)
+    $destPath = Join-Path $destDir $relPath
+    if ($_.PSIsContainer) {
+        New-Item -ItemType Directory -Force -Path $destPath | Out-Null
+    } else {
+        $destFileDir = Split-Path $destPath -Parent
+        New-Item -ItemType Directory -Force -Path $destFileDir | Out-Null
+        Copy-Item $_.FullName -Destination $destPath -Force
+    }
+}
 
-if (-not (Test-Path "electron/dist/api/api-engine.exe")) {
-    Write-Host "ERROR: electron/dist/api/api-engine.exe not found after copy" -ForegroundColor Red
+if (-not (Test-Path (Join-Path $destDir "api-engine.exe"))) {
+    Write-Host "ERROR: $destDir\api-engine.exe not found after copy" -ForegroundColor Red
     exit 1
 }
 
