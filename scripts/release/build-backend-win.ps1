@@ -1,15 +1,9 @@
 #!/usr/bin/env pwsh
-# PodGist Windows 后端 PyInstaller 构建脚本
-#
-# 用法：powershell -ExecutionPolicy Bypass -File scripts/release/build-backend-win.ps1
-
+# PodGist Windows backend build script
 $ErrorActionPreference = "Stop"
 
-# 解析项目根目录（脚本在 scripts/release/，项目根是其父的父）
 $scriptRoot = Split-Path -Parent $PSScriptRoot
 $projectRoot = Split-Path -Parent $scriptRoot
-
-# 使用绝对路径，后续所有路径操作基于此
 $absProjectRoot = (Resolve-Path $projectRoot).Path
 $absBackendDir = Join-Path $absProjectRoot "backend"
 $absApiSpec = Join-Path $absBackendDir "api.spec"
@@ -18,21 +12,21 @@ $absApiOutput = Join-Path $absApiDist "api"
 $absElectronDist = Join-Path $absProjectRoot "electron/dist"
 $absElectronApi = Join-Path $absElectronDist "api"
 
-Write-Host "=== PodGist Windows 后端构建 ===" -ForegroundColor Cyan
-Write-Host "项目目录: $absProjectRoot"
+Write-Host "=== PodGist Windows Backend Build ===" -ForegroundColor Cyan
+Write-Host "Project: $absProjectRoot"
 
-# ===== 语法检查 =====
-Write-Host "`n[1/5] 运行后端语法检查..." -ForegroundColor Yellow
+# Step 1: Syntax check
+Write-Host "`n[1/5] Running syntax check..." -ForegroundColor Yellow
 $checkScript = Join-Path $absProjectRoot "scripts/check_backend.py"
 python $checkScript
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "ERROR: 后端语法检查失败" -ForegroundColor Red
+    Write-Host "ERROR: Syntax check failed" -ForegroundColor Red
     exit 1
 }
-Write-Host "语法检查通过" -ForegroundColor Green
+Write-Host "Syntax check OK" -ForegroundColor Green
 
-# ===== 验证必需文件存在 =====
-Write-Host "`n[2/5] 验证后端文件..." -ForegroundColor Yellow
+# Step 2: Verify required files
+Write-Host "`n[2/5] Verifying files..." -ForegroundColor Yellow
 $required = @(
     (Join-Path $absBackendDir "start_electron.py"),
     (Join-Path $absBackendDir "__init__.py"),
@@ -55,14 +49,13 @@ foreach ($f in $required) {
         exit 1
     }
 }
-Write-Host "文件验证通过" -ForegroundColor Green
+Write-Host "File verification OK" -ForegroundColor Green
 
-# ===== PyInstaller 构建 =====
-Write-Host "`n[3/5] 运行 PyInstaller..." -ForegroundColor Yellow
+# Step 3: PyInstaller build
+Write-Host "`n[3/5] Running PyInstaller..." -ForegroundColor Yellow
 $env:PYTHONOPTIMIZE = "1"
 
-# 清理旧输出
-Write-Host "  清理旧输出..."
+Write-Host "  Cleaning old output..."
 if (Test-Path $absApiDist) {
     Remove-Item $absApiDist -Recurse -Force -ErrorAction SilentlyContinue
 }
@@ -71,36 +64,37 @@ if (Test-Path $absBuildDir) {
     Remove-Item $absBuildDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-# 在 backend/ 目录下运行 pyinstaller
-Write-Host "  运行 pyinstaller --onedir --specpath $absBackendDir $absApiSpec ..."
+Write-Host "  Running pyinstaller..."
+Write-Host "    Spec: $absApiSpec"
+Write-Host "    CWD: $absBackendDir"
+
 Push-Location $absBackendDir
 try {
-    pyinstaller --clean --onedir --specpath $absBackendDir $absApiSpec 2>&1 | ForEach-Object {
+    pyinstaller --clean --onedir $absApiSpec 2>&1 | ForEach-Object {
         Write-Host "    $_"
     }
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "ERROR: PyInstaller 失败，exit code=$LASTEXITCODE" -ForegroundColor Red
+        Write-Host "ERROR: PyInstaller failed with exit code $LASTEXITCODE" -ForegroundColor Red
         exit 1
     }
 } finally {
     Pop-Location
 }
 
-# ===== 定位输出目录 =====
-Write-Host "`n[4/5] 定位输出目录..." -ForegroundColor Yellow
+# Step 4: Locate output
+Write-Host "`n[4/5] Locating output..." -ForegroundColor Yellow
 if (Test-Path $absApiOutput) {
-    Write-Host "输出目录: $absApiOutput" -ForegroundColor Green
+    Write-Host "Output: $absApiOutput" -ForegroundColor Green
 } else {
-    Write-Host "ERROR: api dist 目录不存在: $absApiOutput" -ForegroundColor Red
-    # 列出 backend/dist 内容用于调试
+    Write-Host "ERROR: Output dir not found: $absApiOutput" -ForegroundColor Red
     if (Test-Path $absApiDist) {
         Get-ChildItem $absApiDist -Recurse | Select-Object -First 20 FullName
     }
     exit 1
 }
 
-# ===== 验证 PyInstaller 产物 =====
-Write-Host "`n[5/5] 验证构建产物..." -ForegroundColor Yellow
+# Step 5: Verify PyInstaller output
+Write-Host "`n[5/5] Verifying build artifacts..." -ForegroundColor Yellow
 $requiredDlls = @(
     "api-engine.exe",
     "_internal\python311.dll",
@@ -120,51 +114,40 @@ foreach ($dll in $requiredDlls) {
 }
 
 if (-not $allOk) {
-    Write-Host "ERROR: PyInstaller 产物不完整" -ForegroundColor Red
+    Write-Host "ERROR: PyInstaller artifacts incomplete" -ForegroundColor Red
     exit 1
 }
 
-# ===== 复制到 electron/dist/api =====
-Write-Host "`n复制到 electron/dist/api..." -ForegroundColor Yellow
-Write-Host "  源: $absApiOutput"
-Write-Host "  目标: $absElectronApi"
+# Copy to electron/dist/api
+Write-Host "`nCopying to electron/dist/api..." -ForegroundColor Yellow
+Write-Host "  Source: $absApiOutput"
+Write-Host "  Dest: $absElectronApi"
 
-# 创建目标目录
 New-Item -ItemType Directory -Force -Path $absElectronApi | Out-Null
 
-# 用 robocopy 镜像复制（确保所有嵌套文件正确复制）
-Write-Host "  执行 robocopy..."
-$robocopyResult = robocopy $absApiOutput $absElectronApi /MIR /NFL /NDL /NJH /NJS /NC /NS /NP
+Write-Host "  Running robocopy..."
+$robocopyCmd = "robocopy `"$absApiOutput`" `"$absElectronApi`" /MIR /NFL /NDL /NJH /NJS /NC /NS /NP"
+$robocopyResult = Invoke-Expression $robocopyCmd
 $robocopyExit = $LASTEXITCODE
 Write-Host "  robocopy exit code: $robocopyExit"
 if ($robocopyExit -ge 8) {
-    Write-Host "ERROR: robocopy 复制失败，exit code=$robocopyExit" -ForegroundColor Red
+    Write-Host "ERROR: robocopy failed with exit code $robocopyExit" -ForegroundColor Red
     exit 1
 }
 
-# 验证复制结果
 $destApiEngine = Join-Path $absElectronApi "api-engine.exe"
 if (-not (Test-Path $destApiEngine)) {
-    Write-Host "ERROR: 复制后 api-engine.exe 不存在: $destApiEngine" -ForegroundColor Red
-    # 列出目标目录内容
-    if (Test-Path $absElectronApi) {
-        Write-Host "  $absElectronApi 内容:"
-        Get-ChildItem $absElectronApi -Recurse | Select-Object -First 20 FullName
-    }
+    Write-Host "ERROR: api-engine.exe not found after copy: $destApiEngine" -ForegroundColor Red
     exit 1
 }
 
-# 列出复制后的内容（用于调试）
-Write-Host "  复制后 $absElectronApi 内容:"
+Write-Host "`nContents of $absElectronApi:"
 Get-ChildItem $absElectronApi | ForEach-Object {
-    if ($_.PSIsContainer) {
-        Write-Host "    $($_.Name)/"
-    } else {
-        Write-Host "    $($_.Name)"
-    }
+    $suffix = if ($_.PSIsContainer) { "/" } else { "" }
+    Write-Host "  $($_.Name)$suffix"
 }
 
 Write-Host ""
-Write-Host "=== Windows 后端构建成功 ===" -ForegroundColor Green
-Write-Host "产物: $destApiEngine"
+Write-Host "=== Windows Backend Build SUCCESS ===" -ForegroundColor Green
+Write-Host "Output: $destApiEngine"
 exit 0
