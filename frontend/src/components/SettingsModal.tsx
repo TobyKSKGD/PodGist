@@ -111,10 +111,6 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
             </button>
           </nav>
 
-          <div className="mt-auto px-3">
-            <p className="text-xs text-slate-400">PodGist v1.1</p>
-            <p className="text-xs text-slate-400">云端 AI 驱动</p>
-          </div>
         </div>
 
         {/* 右侧内容区 */}
