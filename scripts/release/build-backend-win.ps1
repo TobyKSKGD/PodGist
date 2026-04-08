@@ -54,7 +54,8 @@ Write-Host "文件验证通过" -ForegroundColor Green
 # ===== PyInstaller 构建 =====
 Write-Host "`n[3/5] 运行 PyInstaller..." -ForegroundColor Yellow
 $env:PYTHONOPTIMIZE = "1"
-pyinstaller --clean --noconfirm backend/api.spec
+# 使用 --distpath 显式指定输出到 backend/dist/api，避免默认路径歧义
+pyinstaller --clean --noconfirm --distpath backend/dist --workpath backend/build backend/api.spec
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: PyInstaller 失败，exit code=$LASTEXITCODE" -ForegroundColor Red
     exit 1
@@ -103,7 +104,8 @@ if (-not $allOk) {
 Write-Host "`n复制到 electron/dist/api..." -ForegroundColor Yellow
 New-Item -ItemType Directory -Force -Path "electron/dist" | Out-Null
 Remove-Item "electron/dist/api" -Recurse -Force -ErrorAction SilentlyContinue
-Copy-Item $apiDist "electron/dist/" -Recurse -Force
+# 使用 /* 显式复制目录内容，避免 PowerShell 路径解析歧义
+Copy-Item "$apiDist/*" "electron/dist/" -Recurse -Force
 
 if (-not (Test-Path "electron/dist/api/api-engine.exe")) {
     Write-Host "ERROR: electron/dist/api/api-engine.exe not found after copy" -ForegroundColor Red
