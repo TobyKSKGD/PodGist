@@ -303,17 +303,17 @@ export default function TaskQueue({
             <div className="text-2xl font-bold text-[#009A94] w-8">{stats?.pending || 0}</div>
             <div className="text-xs text-[#009A94]">等待中</div>
           </div>
-          <div className="bg-[#D1FAF5] rounded-lg p-3 border border-[#0891B2]">
-            <div className="text-2xl font-bold text-[#00ADA6] w-8">{stats?.processing || 0}</div>
-            <div className="text-xs text-[#00ADA6]">处理中</div>
+          <div className="bg-[#E1F5FE] rounded-lg p-3 border border-[#0891B2]">
+            <div className="text-2xl font-bold text-[#009A94] w-8">{stats?.processing || 0}</div>
+            <div className="text-xs text-[#009A94]">处理中</div>
           </div>
-          <div className="bg-[#D1FAF5] rounded-lg p-3 border border-[#10B981]">
-            <div className="text-2xl font-bold text-[#10B981] w-8">{stats?.completed || 0}</div>
-            <div className="text-xs text-[#10B981]">已完成</div>
+          <div className="bg-[#E1F5FE] rounded-lg p-3 border border-[#0891B2]">
+            <div className="text-2xl font-bold text-[#009A94] w-8">{stats?.completed || 0}</div>
+            <div className="text-xs text-[#009A94]">已完成</div>
           </div>
-          <div className="bg-[#FFF1F3] rounded-lg p-3 border border-[#E11D48]">
-            <div className="text-2xl font-bold text-[#E11D48] w-8">{stats?.failed || 0}</div>
-            <div className="text-xs text-[#E11D48]">失败</div>
+          <div className="bg-[#E1F5FE] rounded-lg p-3 border border-[#0891B2]">
+            <div className="text-2xl font-bold text-[#009A94] w-8">{stats?.failed || 0}</div>
+            <div className="text-xs text-[#009A94]">失败</div>
           </div>
         </div>
 
