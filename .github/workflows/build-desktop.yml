@@ -42,7 +42,6 @@ jobs:
             TAG="${{ github.ref_name }}"
             echo "Event: push tag = $TAG"
           else
-            # workflow_dispatch: 只在用户明确提供 tag 时才创建 release
             if [ -n "${{ inputs.tag }}" ]; then
               TAG="${{ inputs.tag }}"
               echo "Event: workflow_dispatch with explicit tag = $TAG"
@@ -145,31 +144,188 @@ jobs:
         if: matrix.platform == 'mac'
         run: python scripts/check_backend.py
 
-      # ===== Electron 构建 =====
+      # ===== Electron 安装依赖 =====
       - name: Install electron deps
         run: npm ci
         working-directory: electron
 
+      # ===== Electron 构建（走完整构建链：包含 prebuild） =====
       - name: Build Electron (${{ matrix.platform }})
         run: |
           echo "electron-builder version: $(node -p 'require("./package.json").version')"
-          npm run build:ci:${{ matrix.platform }}
+          npm run build:${{ matrix.platform }}
         working-directory: electron
 
-      # ===== 查找产物 =====
-      - name: Find artifact (Windows)
+      # ===== 查找 unpacked 目录（用于验包） =====
+      - name: Locate unpacked app (Windows)
+        if: matrix.platform == 'win'
+        id: locate-win-unpacked
+        shell: pwsh
+        run: |
+          $unpacked = Get-ChildItem "electron/release" -Directory | Where-Object { $_.Name -like "*-win-unpacked" } | Select-Object -First 1
+          if ($unpacked) {
+            $path = $unpacked.FullName
+            echo "path=$path" >> $env:GITHUB_OUTPUT
+            echo "Found: $path"
+          } else {
+            # 尝试 electron/out 目录
+            $unpacked = Get-ChildItem "electron/out" -Directory | Where-Object { $_.Name -like "*-win-unpacked" } | Select-Object -First 1
+            if ($unpacked) {
+              $path = $unpacked.FullName
+              echo "path=$path" >> $env:GITHUB_OUTPUT
+              echo "Found (out/): $path"
+            } else {
+              Write-Host "ERROR: No win-unpacked directory found"
+              exit 1
+            }
+          }
+
+      - name: Locate unpacked app (macOS)
+        if: matrix.platform == 'mac'
+        id: locate-mac-unpacked
+        run: |
+          # macOS DMG 里包含 unpacked app，直接在 release 目录查找 .app
+          for dir in electron/release release electron/out; do
+            app=$(find "$dir" -name "PodGist.app" -type d 2>/dev/null | head -1)
+            if [ -n "$app" ]; then
+              echo "path=$app" >> $GITHUB_OUTPUT
+              echo "Found: $app"
+              exit 0
+            fi
+          done
+          echo "ERROR: No PodGist.app found"
+          exit 1
+
+      # ===== 目标二：验包（打包完成后验证关键文件） =====
+      - name: Verify Windows package contents
+        if: matrix.platform == 'win'
+        shell: pwsh
+        run: |
+          $unpacked = "${{ steps.locate-win-unpacked.outputs.path }}"
+          $errors = @()
+
+          Write-Host "=== 验包: Windows unpacked ==="
+          Write-Host "Unpacked path: $unpacked"
+
+          # 检查 api-engine.exe
+          $apiEngine = Join-Path $unpacked "resources\api\api-engine.exe"
+          if (Test-Path $apiEngine) {
+            $size = [math]::Round((Get-Item $apiEngine).Length / 1MB, 2)
+            Write-Host "[OK] resources/api/api-engine.exe ($size MB)" -ForegroundColor Green
+          } else {
+            Write-Host "[MISSING] resources/api/api-engine.exe" -ForegroundColor Red
+            $errors += "api-engine.exe"
+          }
+
+          # 检查 ffmpeg.exe
+          $ffmpeg = Join-Path $unpacked "resources\ffmpeg\ffmpeg.exe"
+          if (Test-Path $ffmpeg) {
+            Write-Host "[OK] resources/ffmpeg/ffmpeg.exe" -ForegroundColor Green
+          } else {
+            Write-Host "[MISSING] resources/ffmpeg/ffmpeg.exe" -ForegroundColor Red
+            $errors += "ffmpeg.exe"
+          }
+
+          # 检查 ffprobe.exe
+          $ffprobe = Join-Path $unpacked "resources\ffmpeg\ffprobe.exe"
+          if (Test-Path $ffprobe) {
+            Write-Host "[OK] resources/ffmpeg/ffprobe.exe" -ForegroundColor Green
+          } else {
+            Write-Host "[MISSING] resources/ffmpeg/ffprobe.exe" -ForegroundColor Red
+            $errors += "ffprobe.exe"
+          }
+
+          # 列出 resources 目录内容（用于调试）
+          Write-Host ""
+          Write-Host "=== resources/ 目录内容 ==="
+          $resourcesDir = Join-Path $unpacked "resources"
+          if (Test-Path $resourcesDir) {
+            Get-ChildItem $resourcesDir | ForEach-Object { Write-Host "  $($_.Name)/" }
+          } else {
+            Write-Host "  (resources dir not found!)" -ForegroundColor Red
+          }
+
+          # 验包失败则禁止上传
+          if ($errors.Count -gt 0) {
+            Write-Host ""
+            Write-Host "ERROR: 验包失败，以下文件缺失: $($errors -join ', ')" -ForegroundColor Red
+            exit 1
+          }
+
+          Write-Host ""
+          Write-Host "=== 验包通过 ===" -ForegroundColor Green
+
+      - name: Verify macOS package contents
+        if: matrix.platform == 'mac'
+        run: |
+          set -e
+          APP_PATH="${{ steps.locate-mac-unpacked.outputs.path }}"
+          ERRORS=0
+
+          echo "=== 验包: macOS PodGist.app ==="
+          echo "App path: $APP_PATH"
+
+          # 检查 start_electron.py
+          START_SCRIPT="$APP_PATH/Contents/Resources/app.asar.unpacked/backend/start_electron.py"
+          if [ -f "$START_SCRIPT" ]; then
+            echo "[OK] app.asar.unpacked/backend/start_electron.py"
+          else
+            echo "[MISSING] app.asar.unpacked/backend/start_electron.py"
+            ERRORS=$((ERRORS+1))
+          fi
+
+          # 检查 python_venv
+          VENV_PATH="$APP_PATH/Contents/Resources/python_venv"
+          if [ -d "$VENV_PATH" ]; then
+            echo "[OK] Contents/Resources/python_venv/"
+          else
+            echo "[MISSING] Contents/Resources/python_venv/"
+            ERRORS=$((ERRORS+1))
+          fi
+
+          # 检查 ffmpeg
+          FFMPEG="$APP_PATH/Contents/Resources/ffmpeg/ffmpeg"
+          if [ -f "$FFMPEG" ]; then
+            echo "[OK] Contents/Resources/ffmpeg/ffmpeg"
+          else
+            echo "[MISSING] Contents/Resources/ffmpeg/ffmpeg"
+            ERRORS=$((ERRORS+1))
+          fi
+
+          # 检查 ffprobe
+          FFPROBE="$APP_PATH/Contents/Resources/ffmpeg/ffprobe"
+          if [ -f "$FFPROBE" ]; then
+            echo "[OK] Contents/Resources/ffmpeg/ffprobe"
+          else
+            echo "[MISSING] Contents/Resources/ffmpeg/ffprobe"
+            ERRORS=$((ERRORS+1))
+          fi
+
+          # 列出 Resources 目录内容
+          echo ""
+          echo "=== Contents/Resources/ 目录 ==="
+          ls -la "$APP_PATH/Contents/Resources/" 2>/dev/null || true
+
+          # 验包失败则禁止上传
+          if [ $ERRORS -gt 0 ]; then
+            echo ""
+            echo "ERROR: 验包失败，$ERRORS 个文件/目录缺失"
+            exit 1
+          fi
+
+          echo ""
+          echo "=== 验包通过 ===" -ForegroundColor Green
+
+      # ===== 查找最终安装包产物 =====
+      - name: Find installer (Windows)
         if: matrix.platform == 'win'
         shell: pwsh
         id: find-win
         run: |
-          echo "=== Searching for .exe artifacts ==="
-          echo "Searching electron/release/:"
+          echo "=== Searching for .exe installer ==="
           $artifacts = Get-ChildItem "electron/release" -Filter "*.exe" -Recurse -ErrorAction SilentlyContinue
           if (-not $artifacts) {
             $artifacts = Get-ChildItem "release" -Filter "*.exe" -Recurse -ErrorAction SilentlyContinue
-            $searchDir = "release"
-          } else {
-            $searchDir = "electron/release"
           }
           if ($artifacts) {
             $artifacts | ForEach-Object {
@@ -180,47 +336,29 @@ jobs:
             Add-Content -Path $env:GITHUB_OUTPUT -Value "name=$($first.Name)"
             Add-Content -Path $env:GITHUB_OUTPUT -Value "size=$([math]::Round($first.Length / 1MB, 2)) MB"
           } else {
-            Write-Host "ERROR: No .exe found in electron/release/ or release/"
+            Write-Host "ERROR: No .exe installer found"
             exit 1
           }
 
-      - name: Find artifact (macOS)
+      - name: Find installer (macOS)
         if: matrix.platform == 'mac'
         id: find-mac
         run: |
-          echo "=== Searching for .dmg artifacts ==="
-          echo "Searching electron/release/:"
-          find electron/release/ -name "*.dmg" -type f 2>/dev/null || echo "  (not found)"
-          echo "Searching release/:"
-          find release/ -name "*.dmg" -type f 2>/dev/null || echo "  (not found)"
-          echo "Searching electron/out/:"
-          find electron/out/ -name "*.dmg" -type f 2>/dev/null || echo "  (not found)"
-          echo "Listing electron/ directory:"
-          ls -la electron/ 2>/dev/null || echo "  (not found)"
-          echo "Listing release/ directory:"
-          ls -la release/ 2>/dev/null || echo "  (not found)"
-
-          # 查找 dmg（搜索多个可能的位置）
-          DMG_PATH=""
+          echo "=== Searching for .dmg installer ==="
           for dir in electron/release release electron/out; do
             dmgs=$(find "$dir" -name "*.dmg" -type f 2>/dev/null | head -1)
             if [ -n "$dmgs" ]; then
-              DMG_PATH="$dmgs"
-              break
+              echo "Found DMG: $dmgs"
+              echo "path=$dmgs" >> $GITHUB_OUTPUT
+              echo "name=$(basename $dmgs)" >> $GITHUB_OUTPUT
+              exit 0
             fi
           done
+          echo "ERROR: No .dmg found"
+          exit 1
 
-          if [ -n "$DMG_PATH" ]; then
-            echo "Found DMG: $DMG_PATH"
-            echo "path=$DMG_PATH" >> $GITHUB_OUTPUT
-            echo "name=$(basename $DMG_PATH)" >> $GITHUB_OUTPUT
-          else
-            echo "ERROR: No .dmg found"
-            exit 1
-          fi
-
-      # ===== 上传 artifact（由 publish-assets job 统一发布） =====
-      - name: Upload artifact (Windows)
+      # ===== 上传 installer artifact =====
+      - name: Upload installer artifact (Windows)
         if: matrix.platform == 'win'
         uses: actions/upload-artifact@v4
         with:
@@ -228,7 +366,7 @@ jobs:
           path: ${{ steps.find-win.outputs.path }}
           retention-days: 5
 
-      - name: Upload artifact (macOS)
+      - name: Upload installer artifact (macOS)
         if: matrix.platform == 'mac'
         uses: actions/upload-artifact@v4
         with:
@@ -240,7 +378,6 @@ jobs:
   publish-assets:
     needs: [create-release, build]
     runs-on: ubuntu-latest
-    # 只有在 create-release 确定了 tag 时才运行
     if: needs.create-release.outputs.tag != ''
     steps:
       - name: Checkout
@@ -275,7 +412,6 @@ jobs:
           ASSET_PATH: ${{ steps.artifacts.outputs.win_path }}
         run: |
           echo "Uploading Windows artifact to release $TAG..."
-          echo "Path: $ASSET_PATH"
           gh release upload "$TAG" "$ASSET_PATH" --clobber
 
       - name: Upload macOS artifact to Release
@@ -285,7 +421,6 @@ jobs:
           ASSET_PATH: ${{ steps.artifacts.outputs.mac_path }}
         run: |
           echo "Uploading macOS artifact to release $TAG..."
-          echo "Path: $ASSET_PATH"
           gh release upload "$TAG" "$ASSET_PATH" --clobber
 
       - name: Verify release assets
@@ -294,4 +429,4 @@ jobs:
           TAG: ${{ needs.create-release.outputs.tag }}
         run: |
           echo "=== Verifying release $TAG assets ==="
-          gh release view "$TAG" --json assets --jq '.assets[] | "\(.name) (\(.size) bytes)"'
+          gh release view "$TAG" --json assets --jq '.assets[] | "\(.name) (\(.size | tonumber / 1024 / 1024 | floor) MB)"'
