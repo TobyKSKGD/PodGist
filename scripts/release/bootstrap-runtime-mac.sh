@@ -89,42 +89,43 @@ if [ -n "$FFMPEG_BIN" ]; then
         echo "  ffprobe 已存在，跳过"
     fi
 else
-    echo "  警告: 未找到系统 FFmpeg，尝试下载..."
-    # 使用 BtbN FFmpeg-Builds（GitHub 官方打包，包含 macOS ARM64）
-    FFMPEG_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-macos-arm64-gpl.zip"
+    echo "  警告: 未找到系统 FFmpeg，尝试用 brew 安装..."
+    # macOS CI 环境用 brew 安装
+    if command -v brew &> /dev/null; then
+        echo "  使用 brew install ffmpeg..."
+        # brew 安装到 Cellar，我们从 Cellar 复制
+        BREW_FFMPEG=$(brew --prefix)/Cellar/ffmpeg/*/bin/ffmpeg 2>/dev/null || true
+        BREW_FFPROBE=$(brew --prefix)/Cellar/ffmpeg/*/bin/ffprobe 2>/dev/null || true
 
-    if [ ! -f "$FFMPEG_DIR/ffmpeg" ]; then
-        echo "  下载 ffmpeg from $FFMPEG_URL"
-        if curl -sL --fail "$FFMPEG_URL" -o /tmp/ffmpeg.zip; then
-            unzip -o /tmp/ffmpeg.zip -d /tmp/ffmpeg_extracted
-            FFmpeg_BIN=$(find /tmp/ffmpeg_extracted -name "ffmpeg" -type f | head -1)
-            if [ -n "$FFmpeg_BIN" ]; then
-                cp "$FFmpeg_BIN" "$FFMPEG_DIR/ffmpeg"
+        if [ -n "$BREW_FFMPEG" ] && [ -f "$BREW_FFMPEG" ]; then
+            if [ ! -f "$FFMPEG_DIR/ffmpeg" ]; then
+                cp "$BREW_FFMPEG" "$FFMPEG_DIR/ffmpeg"
                 chmod +x "$FFMPEG_DIR/ffmpeg"
-                echo "  ffmpeg 下载成功: $FFmpeg_BIN -> $FFMPEG_DIR/ffmpeg"
-            else
-                echo "  错误: 解压后未找到 ffmpeg 二进制文件"
-                ls -la /tmp/ffmpeg_extracted/
+                echo "  ffmpeg (brew) -> $FFMPEG_DIR/ffmpeg"
+            fi
+            if [ -n "$BREW_FFPROBE" ] && [ -f "$BREW_FFPROBE" ] && [ ! -f "$FFMPEG_DIR/ffprobe" ]; then
+                cp "$BREW_FFPROBE" "$FFMPEG_DIR/ffprobe"
+                chmod +x "$FFMPEG_DIR/ffprobe"
+                echo "  ffprobe (brew) -> $FFMPEG_DIR/ffprobe"
             fi
         else
-            echo "  ffmpeg 下载失败 (curl error)"
+            # 直接 brew install（如果 Cellar 里没有）
+            echo "  Cellar 中未找到，尝试直接 brew install..."
+            brew install ffmpeg
+            BREW_FFMPEG=$(brew --prefix)/Cellar/ffmpeg/*/bin/ffmpeg
+            BREW_FFPROBE=$(brew --prefix)/Cellar/ffmpeg/*/bin/ffprobe
+            if [ -f "$BREW_FFMPEG" ] && [ ! -f "$FFMPEG_DIR/ffmpeg" ]; then
+                cp "$BREW_FFMPEG" "$FFMPEG_DIR/ffmpeg"
+                chmod +x "$FFMPEG_DIR/ffmpeg"
+            fi
+            if [ -f "$BREW_FFPROBE" ] && [ ! -f "$FFMPEG_DIR/ffprobe" ]; then
+                cp "$BREW_FFPROBE" "$FFMPEG_DIR/ffprobe"
+                chmod +x "$FFMPEG_DIR/ffprobe"
+            fi
         fi
     else
-        echo "  ffmpeg 已存在，跳过"
-    fi
-
-    if [ ! -f "$FFMPEG_DIR/ffprobe" ]; then
-        echo "  尝试从同一 zip 包中提取 ffprobe..."
-        FFprobe_BIN=$(find /tmp/ffmpeg_extracted -name "ffprobe" -type f | head -1)
-        if [ -n "$FFprobe_BIN" ]; then
-            cp "$FFprobe_BIN" "$FFMPEG_DIR/ffprobe"
-            chmod +x "$FFMPEG_DIR/ffprobe"
-            echo "  ffprobe 提取成功: $FFprobe_BIN -> $FFMPEG_DIR/ffprobe"
-        else
-            echo "  ffprobe 不在 zip 包中，跳过（部分功能可能受影响）"
-        fi
-    else
-        echo "  ffprobe 已存在，跳过"
+        echo "  错误: brew 不可用，且未找到系统 FFmpeg"
+        echo "  FFmpeg 将不可用（播客解析等功能可能受影响）"
     fi
 fi
 
