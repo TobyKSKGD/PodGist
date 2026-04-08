@@ -220,24 +220,40 @@ jobs:
       # ===== 上传到 GitHub Release =====
       - name: Upload to Release (Windows)
         if: matrix.platform == 'win' && needs.create-release.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.create-release.outputs.tag }}
+          ASSET_PATH: ${{ steps.find-win.outputs.path }}
+          ASSET_NAME: ${{ steps.find-win.outputs.name }}
         run: |
-          echo "Uploading ${{ steps.find-win.outputs.name }} (${{ steps.find-win.outputs.size }}) to release ${{ needs.create-release.outputs.tag }}"
-          gh release upload "${{ needs.create-release.outputs.tag }}" "${{ steps.find-win.outputs.path }}" --clobber
+          echo "Uploading $env:ASSET_NAME to release $env:TAG"
+          gh release upload "$env:TAG" "$env:ASSET_PATH" --clobber
 
       - name: Upload to Release (macOS)
         if: matrix.platform == 'mac' && needs.create-release.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.create-release.outputs.tag }}
+          ASSET_PATH: ${{ steps.find-mac.outputs.path }}
+          ASSET_NAME: ${{ steps.find-mac.outputs.name }}
         run: |
-          echo "Uploading ${{ steps.find-mac.outputs.name }} to release ${{ needs.create-release.outputs.tag }}"
-          gh release upload "${{ needs.create-release.outputs.tag }}" "${{ steps.find-mac.outputs.path }}" --clobber
+          echo "Uploading $ASSET_NAME to release $TAG"
+          gh release upload "$TAG" "$ASSET_PATH" --clobber
 
       - name: Verify upload (Windows)
         if: matrix.platform == 'win' && needs.create-release.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.create-release.outputs.tag }}
         run: |
-          echo "Verifying Windows artifact in release ${{ needs.create-release.outputs.tag }}..."
-          gh release view "${{ needs.create-release.outputs.tag }}" --json assets --jq '.assets[].name'
+          echo "Verifying Windows artifact in release $TAG..."
+          gh release view "$TAG" --json assets --jq '.assets[].name'
 
       - name: Verify upload (macOS)
         if: matrix.platform == 'mac' && needs.create-release.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.create-release.outputs.tag }}
         run: |
-          echo "Verifying macOS artifact in release ${{ needs.create-release.outputs.tag }}..."
-          gh release view "${{ needs.create-release.outputs.tag }}" --json assets --jq '.assets[].name'
+          echo "Verifying macOS artifact in release $TAG..."
+          gh release view "$TAG" --json assets --jq '.assets[].name'
