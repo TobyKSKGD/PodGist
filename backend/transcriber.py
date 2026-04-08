@@ -2,11 +2,17 @@
 语音转录模块 - 使用 DashScope 远程 ASR API
 
 本版本移除了所有本地模型（Whisper / SenseVoice / PyTorch），
-改用 DashScope 云端 ASR API（qwen3-asr-flash + paraformer）进行语音识别。
+改用 DashScope 云端 ASR API 进行语音识别。
 
-两个 API 入口：
-- qwen3-asr-flash 系列 → dashscope.audio.qwen_asr.QwenTranscription（function="transcription"）
-- paraformer 系列 → dashscope.Transcription（function="conversation"）
+ASR 决策逻辑：
+- 短音频（≤30分钟 且 文件≤60MB）：qwen3-asr-flash → MultiModalConversation.call
+- 长音频（>30分钟 或 文件>60MB）：paraformer-v1 → Transcription.async_call
+- qwen3-asr-flash-filetrans：仅当外部传入公网 URL 时启用（非默认）
+
+模型命名：
+- qwen3-asr-flash：短音频同步模型（MultiModalConversation.call）
+- qwen3-asr-flash-filetrans：长音频异步模型（QwenTranscription.async_call，需公网 URL）
+- paraformer-v1：长音频异步模型（Transcription.async_call）
 """
 
 import os
@@ -15,22 +21,25 @@ import time
 import requests
 from typing import Optional
 
-# DashScope ASR API 配置
-# qwen3-asr-flash-2026-02-10 需要使用 QwenTranscription API（function="transcription"）
-# paraformer 系列需要使用 Transcription API（function="conversation"）
-DASHSCOPE_ASR_MODEL = "qwen3-asr-flash-2026-02-10"
-PARAFORMER_ASR_MODEL = "paraformer-v1"
+# DashScope ASR 模型
+# qwen3-asr-flash：短音频同步模型（MultiModalConversation.call）
+# qwen3-asr-flash-filetrans：长音频异步模型（QwenTranscription.async_call，仅公网 URL）
+# paraformer-v1：长音频异步模型（Transcription.async_call）
+QwenFlashShortModel = "qwen3-asr-flash"          # 稳定名，用于 MultiModalConversation
+QwenFlashFiletransModel = "qwen3-asr-flash-filetrans"  # 长音频，需公网 URL
+ParaformerModel = "paraformer-v1"
+
+# 短音频判定阈值
+MAX_DURATION_SECONDS = 30 * 60   # 30 分钟
+MAX_FILE_SIZE_BYTES = 60 * 1024 * 1024  # 60 MB（30分钟音频约 30MB）
 
 
 def get_dashscope_api_key() -> str:
     """从环境变量或 .env 文件获取 DashScope API Key"""
-    # 优先从环境变量读取（Electron 打包时由 backendStarter 注入）
-    # 注意：即使是空字符串也要继续尝试 .env 文件
     env_api_key = os.environ.get('DASHSCOPE_API_KEY', None)
     if env_api_key:
         return env_api_key
 
-    # 回退到 .env 文件（Electron 打包环境）
     data_dir = os.environ.get('PODGIST_DATA_DIR')
     if data_dir:
         env_path = os.path.join(data_dir, '.env')
@@ -41,7 +50,6 @@ def get_dashscope_api_key() -> str:
                     if line.startswith('DASHSCOPE_API_KEY='):
                         return line.split('=', 1)[1].strip().strip('"\'')
 
-    # 最后回退到项目根目录（开发环境）
     env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env')
     if os.path.exists(env_path):
         with open(env_path, 'r', encoding='utf-8') as f:
@@ -53,6 +61,57 @@ def get_dashscope_api_key() -> str:
     return ""
 
 
+def get_audio_duration(file_path: str) -> float:
+    """
+    使用 ffprobe 获取音频时长（秒）。
+    ffprobe 比 mutagen 更准确，且项目已有 ffmpeg 依赖。
+    失败时返回 0（表示未知时长，走长音频路径）。
+    """
+    import subprocess
+    try:
+        cmd = [
+            'ffprobe',
+            '-v', 'error',
+            '-show_entries', 'format=duration',
+            '-of', 'default=noprint_wrappers=1:nokey=1',
+            file_path
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode == 0 and result.stdout.strip():
+            return float(result.stdout.strip())
+    except Exception as e:
+        print(f"[DashScope ASR] ffprobe 获取时长失败: {e}")
+    return 0  # 失败时默认返回 0，走长音频路径
+
+
+def is_short_audio(file_path: str) -> bool:
+    """
+    判断是否为短音频（≤5分钟 且 ≤10MB）。
+    同时满足两个条件才走 qwen3-asr-flash 短音频路径。
+    """
+    # 检查文件大小
+    try:
+        file_size = os.path.getsize(file_path)
+        if file_size > MAX_FILE_SIZE_BYTES:
+            print(f"[DashScope ASR] 文件大小 {file_size} bytes > {MAX_FILE_SIZE_BYTES}，判定为长音频")
+            return False
+    except Exception as e:
+        print(f"[DashScope ASR] 获取文件大小失败: {e}")
+
+    # 检查时长
+    duration = get_audio_duration(file_path)
+    if duration <= 0:
+        # 无法获取时长，保守起见按长音频处理
+        print(f"[DashScope ASR] 无法获取音频时长，判定为长音频")
+        return False
+    if duration > MAX_DURATION_SECONDS:
+        print(f"[DashScope ASR] 音频时长 {duration:.0f}s > {MAX_DURATION_SECONDS}s，判定为长音频")
+        return False
+
+    print(f"[DashScope ASR] 音频时长 {duration:.0f}s，文件大小正常，判定为短音频")
+    return True
+
+
 def clean_asr_text(text: str) -> str:
     """清洗 ASR 输出，移除特殊标记"""
     text = re.sub(r'<\|[^|]*\|>', '', text)
@@ -61,35 +120,129 @@ def clean_asr_text(text: str) -> str:
     return text
 
 
-def _upload_to_dashscope(audio_file_path: str, api_key: str) -> Optional[str]:
+# ==================== qwen3-asr-flash 短音频（MultiModalConversation）====================
+
+def _call_qwen_flash_short(audio_file_path: str, api_key: str) -> dict:
     """
-    将本地音频文件上传到 DashScope，返回可访问的 URL。
+    使用 qwen3-asr-flash 短音频模型，通过 MultiModalConversation.call 接口。
+    适用：≤5分钟 且 ≤10MB 的音频。
+
+    qwen3-asr-flash 是同步调用，不需要轮询，直接返回结果。
+    模型名使用稳定名 'qwen3-asr-flash'，而非 snapshot 名。
     """
-    from dashscope import Files
+    from dashscope import MultiModalConversation
+
+    if not os.path.exists(audio_file_path):
+        return {"error": f"音频文件不存在: {audio_file_path}"}
+
+    # MultiModalConversation 格式：audio 参数传本地文件路径
+    messages = [
+        {
+            'role': 'user',
+            'content': [
+                {'audio': audio_file_path},
+                {'text': '请转录这段音频的完整内容，逐字输出。'}
+            ]
+        }
+    ]
+
+    print(f"[DashScope ASR] 调用 qwen3-asr-flash (MultiModalConversation)，文件: {audio_file_path}")
 
     try:
-        upload_response = Files.upload(
-            file_path=audio_file_path,
-            purpose='inference',
+        response = MultiModalConversation.call(
+            model=QwenFlashShortModel,
+            messages=messages,
             api_key=api_key
         )
 
-        if upload_response.status_code != 200:
-            print(f"[DashScope ASR] Upload failed: {upload_response.output}")
-            return None
+        print(f"[DashScope ASR] MultiModalConversation 响应: status_code={response.status_code}")
 
-        file_id = upload_response.output['uploaded_files'][0]['file_id']
-        file_info = Files.get(file_id, api_key=api_key)
-        if file_info.status_code != 200:
-            print(f"[DashScope ASR] Get file info failed: {file_info.output}")
-            return None
+        if response.status_code != 200:
+            err_msg = f"status={response.status_code} code={getattr(response, 'code', None)} message={getattr(response, 'message', None)}"
+            print(f"[DashScope ASR] qwen3-asr-flash 调用失败: {err_msg}")
+            return {"error": err_msg}
 
-        return file_info.output['url']
+        # 解析输出
+        # response.output.choices[0].message.content 是列表，通常为 [{text: "..."}]
+        content = response.output.choices[0].message.content
+        if isinstance(content, list) and len(content) > 0:
+            text = content[0].get('text', '') if isinstance(content[0], dict) else str(content[0])
+        elif isinstance(content, str):
+            text = content
+        else:
+            text = ''
+
+        text = clean_asr_text(text)
+        print(f"[DashScope ASR] qwen3-asr-flash 转录成功，文本长度: {len(text)}")
+
+        # qwen3-asr-flash 短音频通常无逐句时间戳，返回纯文本
+        # 时间戳在后续统一添加 [00:00]
+        if text:
+            return {"text": text, "sentences": [{"begin_time": 0, "end_time": 0, "text": text}]}
+        return {"text": "", "sentences": []}
 
     except Exception as e:
-        print(f"[DashScope ASR] Upload error: {e}")
-        return None
+        print(f"[DashScope ASR] qwen3-asr-flash 异常: {type(e).__name__}: {e}")
+        return {"error": f"{type(e).__name__}: {e}"}
 
+
+# ==================== qwen3-asr-flash-filetrans 长音频（QwenTranscription）====================
+
+def _call_qwen_flash_filetrans(audio_url: str, api_key: str) -> dict:
+    """
+    使用 qwen3-asr-flash-filetrans 长音频异步模型，通过 QwenTranscription.async_call 接口。
+    仅当有公网可访问 URL 时启用。
+
+    qwen3-asr-flash-filetrans 要求音频 URL 必须公网可访问。
+    如果没有公网 URL，应跳过此函数直接走 paraformer。
+    """
+    from dashscope.audio.qwen_asr import QwenTranscription
+
+    print(f"[DashScope ASR] 调用 qwen3-asr-flash-filetrans (QwenTranscription)，URL: {audio_url}")
+
+    try:
+        task = QwenTranscription.async_call(
+            model=QwenFlashFiletransModel,
+            file_url=audio_url,
+            api_key=api_key
+        )
+
+        if task.status_code != 200:
+            err_msg = f"status={task.status_code} code={getattr(task, 'code', None)} message={getattr(task, 'message', None)}"
+            print(f"[DashScope ASR] QwenTranscription async_call 失败: {err_msg}")
+            return {"error": err_msg}
+
+        task_id = task.output.get('task_id') or task.output.task_id
+        print(f"[DashScope ASR] qwen3-asr-flash-filetrans task_id: {task_id}")
+
+        for _ in range(60):
+            result = QwenTranscription.wait(task_id, api_key=api_key)
+            status = result.output.get('task_status') or result.output.task_status
+
+            if status == 'SUCCEEDED':
+                transcription_url = result.output.get('transcription_url')
+                if transcription_url:
+                    return _fetch_transcription_from_url(transcription_url)
+                text = result.output.get('text')
+                if text:
+                    return {"text": text, "sentences": []}
+                return {"text": "", "sentences": []}
+
+            elif status == 'FAILED':
+                error_msg = result.output.get('message') or str(result.output)
+                print(f"[DashScope ASR] qwen3-asr-flash-filetrans FAILED: {error_msg}")
+                return {"error": error_msg}
+
+            time.sleep(2)
+
+        return {"error": "Timeout waiting for qwen3-asr-flash-filetrans"}
+
+    except Exception as e:
+        print(f"[DashScope ASR] qwen3-asr-flash-filetrans 异常: {type(e).__name__}: {e}")
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
+# ==================== paraformer 长音频（Transcription.async_call）====================
 
 def _fetch_transcription_from_url(transcription_url: str) -> dict:
     """
@@ -104,20 +257,17 @@ def _fetch_transcription_from_url(transcription_url: str) -> dict:
 
         data = resp.json()
 
-        # 解析 transcripts 结构
         transcripts = data.get("transcripts", [])
         if not transcripts:
             return {"text": "", "sentences": []}
 
-        transcript = transcripts[0]  # 取第一个 channel
+        transcript = transcripts[0]
         full_text = transcript.get("text", "")
 
-        # 提取句子级别时间戳（如果有的话）
         sentences_data = transcript.get("sentences", [])
         sentences = []
 
         if sentences_data:
-            # sentences 格式: [{"begin_time": ..., "end_time": ..., "text": "..."}]
             for sent in sentences_data:
                 sentences.append({
                     "begin_time": sent.get("begin_time", 0),
@@ -126,10 +276,8 @@ def _fetch_transcription_from_url(transcription_url: str) -> dict:
                 })
         else:
             # 没有句子级别时间戳，按固定间隔分段
-            # 尝试从 text 和 duration 估算
             duration_ms = data.get("properties", {}).get("original_duration_in_milliseconds", 0)
             if full_text and duration_ms > 0:
-                # 粗略分段：每 30 秒一个时间戳
                 chunk_duration = 30000
                 current_pos = 0
                 text_len = len(full_text)
@@ -137,7 +285,6 @@ def _fetch_transcription_from_url(transcription_url: str) -> dict:
 
                 while current_pos < text_len:
                     end_pos = min(current_pos + chunk_size, text_len)
-                    # 找最后一个句号或逗号切分
                     cut_pos = end_pos
                     for p in range(min(end_pos, text_len - 1), current_pos, -1):
                         if full_text[p] in '。！？，、':
@@ -160,145 +307,155 @@ def _fetch_transcription_from_url(transcription_url: str) -> dict:
         return {"text": "", "sentences": []}
 
 
-def _call_qwen_transcription(audio_url: str, api_key: str, model: str) -> dict:
+def _call_paraformer_transcription(audio_url: str, api_key: str, model: str = ParaformerModel) -> dict:
     """
-    使用 QwenTranscription API（function="transcription"）进行语音识别。
-    qwen3-asr-flash 系列必须使用此 API。
-    """
-    from dashscope.audio.qwen_asr import QwenTranscription
-
-    task = QwenTranscription.async_call(
-        model=model,
-        file_url=audio_url,
-        api_key=api_key
-    )
-
-    if task.status_code != 200:
-        # 打印详细信息帮助诊断
-        print(f"[DashScope ASR] QwenTranscription async_call failed: status={task.status_code} code={getattr(task, 'code', None)} message={getattr(task, 'message', None)} output={getattr(task, 'output', None)}")
-        return {"error": f"status={task.status_code} code={getattr(task, 'code', None)} message={getattr(task, 'message', None)}"}
-
-    task_id = task.output.get('task_id') or task.output.task_id
-
-    for _ in range(60):
-        result = QwenTranscription.wait(task_id, api_key=api_key)
-        status = result.output.get('task_status') or result.output.task_status
-
-        if status == 'SUCCEEDED':
-            # QwenTranscription 返回的 output 中，transcription_url 在 kwargs 里
-            transcription_url = result.output.get('transcription_url')
-            if transcription_url:
-                return _fetch_transcription_from_url(transcription_url)
-            # 也可能直接返回 text（某些模型）
-            text = result.output.get('text')
-            if text:
-                return {"text": text, "sentences": []}
-            return {"text": "", "sentences": []}
-
-        elif status == 'FAILED':
-            error_msg = result.output.get('message') or str(result.output)
-            return {"error": error_msg}
-
-        time.sleep(2)
-
-    return {"error": "Timeout waiting for transcription"}
-
-
-def _call_paraformer_transcription(audio_url: str, api_key: str, model: str = PARAFORMER_ASR_MODEL) -> dict:
-    """
-    使用 Transcription API（function="conversation"）进行语音识别。
-    paraformer 系列使用此 API。
+    使用 Transcription API（function="conversation"）进行长音频语音识别。
+    paraformer 系列使用此 API，无需公网 URL（通过 Files.upload 上传）。
+    失败后自动降级：paraformer-v1 → paraformer-8k-v1 → paraformer-mtl-v1
     """
     from dashscope import Transcription
 
-    task = Transcription.async_call(
-        model=model,
-        file_urls=[audio_url],
-        timestamp_alignment_enabled=True,
-        api_key=api_key
-    )
+    print(f"[DashScope ASR] 调用 {model} (Transcription.async_call)，URL: {audio_url}")
 
-    if task.status_code != 200:
-        print(f"[DashScope ASR] Transcription async_call failed: status={task.status_code} code={getattr(task, 'code', None)} message={getattr(task, 'message', None)}")
-        if model == PARAFORMER_ASR_MODEL:
-            print(f"[DashScope ASR] {model} failed, trying paraformer-8k-v1...")
-            return _call_paraformer_transcription(audio_url, api_key, model="paraformer-8k-v1")
-        return {"error": f"status={task.status_code} code={getattr(task, 'code', None)} message={getattr(task, 'message', None)}"}
+    try:
+        task = Transcription.async_call(
+            model=model,
+            file_urls=[audio_url],
+            timestamp_alignment_enabled=True,
+            api_key=api_key
+        )
 
-    task_id = task.output.get('task_id') or task.output.task_id
-
-    for _ in range(60):
-        result = Transcription.wait(task_id, api_key=api_key)
-        status = result.output.get('task_status') or result.output.task_status
-
-        if status == 'SUCCEEDED':
-            # 从 transcription_url 获取实际转录内容
-            transcription_url = result.output.get('transcription_url')
-            if transcription_url:
-                return _fetch_transcription_from_url(transcription_url)
-            # 备选：从 results 结构获取
-            results = result.output.get('results')
-            if results:
-                transcription_url = results[0].get('transcription_url') if isinstance(results[0], dict) else getattr(results[0], 'transcription_url', None)
-                if transcription_url:
-                    return _fetch_transcription_from_url(transcription_url)
-            return {"text": "", "sentences": []}
-
-        elif status == 'FAILED':
-            error_msg = result.output.get('message') or str(result.output)
-            print(f"[DashScope ASR] Paraformer task failed: {error_msg}")
-            if model == PARAFORMER_ASR_MODEL:
-                print(f"[DashScope ASR] Retrying with paraformer-8k-v1...")
+        if task.status_code != 200:
+            err_msg = f"status={task.status_code} code={getattr(task, 'code', None)} message={getattr(task, 'message', None)}"
+            print(f"[DashScope ASR] Transcription async_call 失败: {err_msg}")
+            if model == ParaformerModel:
+                print(f"[DashScope ASR] {model} 失败，降级到 paraformer-8k-v1...")
                 return _call_paraformer_transcription(audio_url, api_key, model="paraformer-8k-v1")
             elif model == "paraformer-8k-v1":
-                print(f"[DashScope ASR] paraformer-8k-v1 also failed, trying paraformer-mtl-v1...")
+                print(f"[DashScope ASR] paraformer-8k-v1 失败，降级到 paraformer-mtl-v1...")
                 return _call_paraformer_transcription(audio_url, api_key, model="paraformer-mtl-v1")
-            return {"error": error_msg}
+            return {"error": err_msg}
 
-        time.sleep(2)
+        task_id = task.output.get('task_id') or task.output.task_id
+        print(f"[DashScope ASR] {model} task_id: {task_id}")
 
-    return {"error": "Timeout waiting for transcription"}
+        for _ in range(60):
+            result = Transcription.wait(task_id, api_key=api_key)
+            status = result.output.get('task_status') or result.output.task_status
+
+            if status == 'SUCCEEDED':
+                transcription_url = result.output.get('transcription_url')
+                if transcription_url:
+                    return _fetch_transcription_from_url(transcription_url)
+                results = result.output.get('results')
+                if results:
+                    transcription_url = results[0].get('transcription_url') if isinstance(results[0], dict) else getattr(results[0], 'transcription_url', None)
+                    if transcription_url:
+                        return _fetch_transcription_from_url(transcription_url)
+                return {"text": "", "sentences": []}
+
+            elif status == 'FAILED':
+                error_msg = result.output.get('message') or str(result.output)
+                print(f"[DashScope ASR] {model} 任务失败: {error_msg}")
+                if model == ParaformerModel:
+                    print(f"[DashScope ASR] 降级到 paraformer-8k-v1...")
+                    return _call_paraformer_transcription(audio_url, api_key, model="paraformer-8k-v1")
+                elif model == "paraformer-8k-v1":
+                    print(f"[DashScope ASR] 降级到 paraformer-mtl-v1...")
+                    return _call_paraformer_transcription(audio_url, api_key, model="paraformer-mtl-v1")
+                return {"error": error_msg}
+
+            time.sleep(2)
+
+        return {"error": "Timeout waiting for transcription"}
+
+    except Exception as e:
+        print(f"[DashScope ASR] {model} 异常: {type(e).__name__}: {e}")
+        return {"error": f"{type(e).__name__}: {e}"}
 
 
-def _call_dashscope_asr(audio_url: str, api_key: str, model: str = DASHSCOPE_ASR_MODEL) -> dict:
+# ==================== 文件上传（仅 paraformer 需要）====================
+
+def _upload_to_dashscope(audio_file_path: str, api_key: str) -> Optional[str]:
     """
-    调用 DashScope ASR API。
-    qwen3-asr-flash → QwenTranscription API
-    paraformer → Transcription API
-
-    优先使用 qwen3-asr-flash，失败后自动降级到 paraformer。
+    将本地音频文件上传到 DashScope，返回可访问的 URL（仅供 paraformer 使用）。
+    qwen3-asr-flash 短音频不走此函数（直接 MultiModalConversation.call）。
+    qwen3-asr-flash-filetrans 需要公网 URL，不走此上传。
     """
-    # qwen3-asr-flash 必须用 QwenTranscription
-    if 'qwen' in model.lower() and 'paraformer' not in model.lower():
-        result = _call_qwen_transcription(audio_url, api_key, model)
-        if "error" not in result:
-            return result
-        # qwen3-asr-flash 失败，降级到 paraformer
-        print(f"[DashScope ASR] qwen3-asr-flash 失败，降级到 paraformer...")
-        return _call_paraformer_transcription(audio_url, api_key, PARAFORMER_ASR_MODEL)
-    # paraformer 用 Transcription API
-    return _call_paraformer_transcription(audio_url, api_key, model)
+    from dashscope import Files
 
+    try:
+        upload_response = Files.upload(
+            file_path=audio_file_path,
+            purpose='inference',
+            api_key=api_key
+        )
+
+        if upload_response.status_code != 200:
+            print(f"[DashScope ASR] Upload failed: {upload_response.output}")
+            return None
+
+        file_id = upload_response.output['uploaded_files'][0]['file_id']
+        file_info = Files.get(file_id, api_key=api_key)
+        if file_info.status_code != 200:
+            print(f"[DashScope ASR] Get file info failed: {file_info.output}")
+            return None
+
+        url = file_info.output['url']
+        print(f"[DashScope ASR] 文件上传成功，URL: {url}")
+        return url
+
+    except Exception as e:
+        print(f"[DashScope ASR] Upload error: {e}")
+        return None
+
+
+# ==================== 主入口：智能路由 ========================
 
 def transcribe_with_dashscope(audio_file_path: str, api_key: str) -> str:
     """
     使用 DashScope ASR API 转录音频文件，返回带时间戳的文本。
+
+    决策逻辑：
+    1. 短音频（≤5分钟 且 ≤10MB）→ qwen3-asr-flash（MultiModalConversation.call）
+    2. 长音频 → paraformer（Transcription.async_call）
+       - 先上传文件到 DashScope 获取 URL
+       - paraformer 失败后降级到 paraformer-8k-v1 → paraformer-mtl-v1
+    3. qwen3-asr-flash-filetrans：仅当 external_public_url 参数传入公网 URL 时启用
     """
     if not api_key:
         raise ValueError("未配置 DashScope API Key，请在设置中添加 DASHSCOPE_API_KEY")
 
-    print(f"[DashScope ASR] Uploading {audio_file_path}...")
+    # 步骤 1：判定音频类型
+    if is_short_audio(audio_file_path):
+        # ===== 短音频：qwen3-asr-flash =====
+        print(f"[DashScope ASR] 短音频路径: qwen3-asr-flash (MultiModalConversation)")
+        result = _call_qwen_flash_short(audio_file_path, api_key)
+
+        if "error" not in result:
+            return _build_timestamped_text(result)
+
+        # qwen3-asr-flash 失败，尝试长音频路径（升级为 paraformer）
+        print(f"[DashScope ASR] qwen3-asr-flash 失败，降级到 paraformer 长音频路径: {result.get('error')}")
+
+    # ===== 长音频：paraformer =====
+    print(f"[DashScope ASR] 长音频路径: paraformer (Transcription.async_call)")
+
+    print(f"[DashScope ASR] 上传音频文件...")
     audio_url = _upload_to_dashscope(audio_file_path, api_key)
     if not audio_url:
         raise RuntimeError("文件上传失败，无法获取访问 URL")
 
-    print(f"[DashScope ASR] File uploaded, calling ASR...")
-    result = _call_dashscope_asr(audio_url, api_key)
+    result = _call_paraformer_transcription(audio_url, api_key)
 
     if "error" in result:
         raise RuntimeError(f"ASR 转录失败: {result['error']}")
 
-    # 生成带时间戳的文本
+    return _build_timestamped_text(result)
+
+
+def _build_timestamped_text(result: dict) -> str:
+    """将转录结果转换为带时间戳的文本"""
     lines = []
     for sent in result.get("sentences", []):
         begin_time = int(sent.get('begin_time', 0))
@@ -319,7 +476,7 @@ def transcribe_with_dashscope(audio_file_path: str, api_key: str) -> str:
     return '\n'.join(lines)
 
 
-# ================= 兼容层（供 api.py 统一调用）=================
+# ==================== 兼容层（供 api.py / worker.py 统一调用）====================
 
 def get_available_devices():
     """返回可用设备（远程 API 模式下始终返回云端）"""
