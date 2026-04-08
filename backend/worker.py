@@ -293,23 +293,10 @@ def process_single_task(task, api_key):
         with open(raw_path, "w", encoding="utf-8") as f:
             f.write(podcast_text)
 
-        # 保存 summary.md（确保有 H1 标题）
+        # 保存 summary.md（直接写入 LLM 输出，不重新解析格式）
         summary_path = os.path.join(archive_path, "summary.md")
-
-        # 提取标题和内容
-        lines = raw_summary.strip().split('\n')
-        if lines:
-            first_line = lines[0].strip()
-            # 如果第一行已经是标题格式，使用它；否则使用 title
-            if first_line.startswith('#'):
-                ai_title = first_line.lstrip('#').strip()
-                clean_summary = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
-            else:
-                ai_title = first_line if first_line else title
-                clean_summary = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
-
         with open(summary_path, "w", encoding="utf-8") as f:
-            f.write(f"# {ai_title}\n\n{clean_summary}")
+            f.write(raw_summary)
 
         task_queue.update_progress_status(task_id, "归档完成")
 
