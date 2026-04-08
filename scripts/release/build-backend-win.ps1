@@ -54,8 +54,11 @@ Write-Host "文件验证通过" -ForegroundColor Green
 # ===== PyInstaller 构建 =====
 Write-Host "`n[3/5] 运行 PyInstaller..." -ForegroundColor Yellow
 $env:PYTHONOPTIMIZE = "1"
-# 使用 --distpath 显式指定输出到 backend/dist/api，避免默认路径歧义
-pyinstaller --clean --noconfirm --distpath backend/dist --workpath backend/build backend/api.spec
+# 清理旧输出，避免残留文件干扰
+Remove-Item backend/dist -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item backend/build -Recurse -Force -ErrorAction SilentlyContinue
+# --distpath 显式指定输出到 backend/dist/api（确保与 api.spec 的 COLLECT name="api" 一致）
+pyinstaller --clean --noconfirm --distpath backend/dist backend/api.spec
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: PyInstaller 失败，exit code=$LASTEXITCODE" -ForegroundColor Red
     exit 1
