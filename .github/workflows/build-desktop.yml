@@ -222,14 +222,14 @@ jobs:
       # ===== 上传到 GitHub Release =====
       - name: Upload to Release (Windows)
         if: matrix.platform == 'win' && needs.create-release.outputs.tag != ''
-        uses: actions/upload-release-asset@v1
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ${{ steps.find-win.outputs.path }}
-          asset_name: ${{ steps.find-win.outputs.name }}
-          asset_content_type: application/x-msdownload
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.create-release.outputs.tag }}
+          ASSET_PATH: ${{ steps.find-win.outputs.path }}
+          ASSET_NAME: ${{ steps.find-win.outputs.name }}
+        run: |
+          echo "Uploading $ASSET_NAME to release $TAG"
+          gh release upload "$TAG" "$ASSET_PATH" --clobber
 
       - name: Upload to Release (macOS)
         if: matrix.platform == 'mac' && needs.create-release.outputs.tag != ''
