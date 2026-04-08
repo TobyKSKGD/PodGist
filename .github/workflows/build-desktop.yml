@@ -160,7 +160,15 @@ jobs:
         shell: pwsh
         id: find-win
         run: |
-          $artifacts = Get-ChildItem "release" -Filter "*.exe" -Recurse
+          echo "=== Searching for .exe artifacts ==="
+          echo "Searching electron/release/:"
+          $artifacts = Get-ChildItem "electron/release" -Filter "*.exe" -Recurse -ErrorAction SilentlyContinue
+          if (-not $artifacts) {
+            $artifacts = Get-ChildItem "release" -Filter "*.exe" -Recurse -ErrorAction SilentlyContinue
+            $searchDir = "release"
+          } else {
+            $searchDir = "electron/release"
+          }
           if ($artifacts) {
             $artifacts | ForEach-Object {
               Write-Host "Found: $($_.FullName) ($([math]::Round($_.Length / 1MB, 2)) MB)"
@@ -170,7 +178,7 @@ jobs:
             Write-Host "name=$($first.Name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
             Write-Host "size=$([math]::Round($first.Length / 1MB, 2)) MB" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           } else {
-            Write-Host "ERROR: No .exe found in release/"
+            Write-Host "ERROR: No .exe found in electron/release/ or release/"
             exit 1
           }
 
