@@ -174,7 +174,9 @@ def _call_qwen_transcription(audio_url: str, api_key: str, model: str) -> dict:
     )
 
     if task.status_code != 200:
-        return {"error": f"Task creation failed: {task.output}"}
+        # 打印详细信息帮助诊断
+        print(f"[DashScope ASR] QwenTranscription async_call failed: status={task.status_code} code={getattr(task, 'code', None)} message={getattr(task, 'message', None)} output={getattr(task, 'output', None)}")
+        return {"error": f"status={task.status_code} code={getattr(task, 'code', None)} message={getattr(task, 'message', None)}"}
 
     task_id = task.output.get('task_id') or task.output.task_id
 
@@ -217,10 +219,11 @@ def _call_paraformer_transcription(audio_url: str, api_key: str, model: str = PA
     )
 
     if task.status_code != 200:
+        print(f"[DashScope ASR] Transcription async_call failed: status={task.status_code} code={getattr(task, 'code', None)} message={getattr(task, 'message', None)}")
         if model == PARAFORMER_ASR_MODEL:
-            print(f"[DashScope ASR] {model} failed (status={task.status_code}), trying paraformer-8k-v1...")
+            print(f"[DashScope ASR] {model} failed, trying paraformer-8k-v1...")
             return _call_paraformer_transcription(audio_url, api_key, model="paraformer-8k-v1")
-        return {"error": f"Task creation failed: {task.output}"}
+        return {"error": f"status={task.status_code} code={getattr(task, 'code', None)} message={getattr(task, 'message', None)}"}
 
     task_id = task.output.get('task_id') or task.output.task_id
 
