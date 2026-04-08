@@ -112,23 +112,18 @@ if (-not $allOk) {
 
 # ===== 复制到 electron/dist/api =====
 Write-Host "`n复制到 electron/dist/api..." -ForegroundColor Yellow
-# 使用绝对路径确保复制正确
+# 使用绝对路径
 $srcDir = Join-Path $absProjectRoot $apiDist
 $destDir = Join-Path $absProjectRoot "electron/dist/api"
 Write-Host "  源: $srcDir"
 Write-Host "  目标: $destDir"
-New-Item -ItemType Directory -Force -Path $destDir | Out-Null
-# 用 Get-ChildItem 显式枚举，避免通配符展开问题
-Get-ChildItem $srcDir -Recurse | ForEach-Object {
-    $relPath = $_.FullName.Substring($srcDir.Length)
-    $destPath = Join-Path $destDir $relPath
-    if ($_.PSIsContainer) {
-        New-Item -ItemType Directory -Force -Path $destPath | Out-Null
-    } else {
-        $destFileDir = Split-Path $destPath -Parent
-        New-Item -ItemType Directory -Force -Path $destFileDir | Out-Null
-        Copy-Item $_.FullName -Destination $destPath -Force
-    }
+# 用 robocopy 镜像复制（更可靠，支持嵌套目录）
+$robocopyResult = robocopy $srcDir $destDir /MIR /NFL /NDL /NJH /NJS /NC /NS /NP
+$robocopyExit = $LASTEXITCODE
+Write-Host "  robocopy exit code: $robocopyExit"
+if ($robocopyExit -ge 8) {
+    Write-Host "ERROR: robocopy 复制失败，exit code=$robocopyExit" -ForegroundColor Red
+    exit 1
 }
 
 if (-not (Test-Path (Join-Path $destDir "api-engine.exe"))) {
