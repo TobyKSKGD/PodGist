@@ -53,6 +53,7 @@ a = Analysis(
     [os.path.join(project_root, "backend", "start_electron.py")],
     pathex=[project_root],
     binaries=extra_runtime_binaries,
+    workpath='build/',
     datas=[
         (os.path.join(project_root, "backend"), "backend"),
         (os.path.join(project_root, "api.py"), "."),
