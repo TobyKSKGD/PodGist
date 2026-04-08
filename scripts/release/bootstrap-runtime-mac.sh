@@ -93,9 +93,9 @@ else
     # macOS CI 环境用 brew 安装
     if command -v brew &> /dev/null; then
         echo "  使用 brew install ffmpeg..."
-        # brew 安装到 Cellar，我们从 Cellar 复制
-        BREW_FFMPEG=$(brew --prefix)/Cellar/ffmpeg/*/bin/ffmpeg 2>/dev/null || true
-        BREW_FFPROBE=$(brew --prefix)/Cellar/ffmpeg/*/bin/ffprobe 2>/dev/null || true
+        # brew 安装到 Cellar，我们从 Cellar 复制（使用 find 避免 glob 在引号内失效）
+        BREW_FFMPEG=$(find $(brew --prefix)/Cellar/ffmpeg -name "ffmpeg" -type f 2>/dev/null | head -1) || true
+        BREW_FFPROBE=$(find $(brew --prefix)/Cellar/ffmpeg -name "ffprobe" -type f 2>/dev/null | head -1) || true
 
         if [ -n "$BREW_FFMPEG" ] && [ -f "$BREW_FFMPEG" ]; then
             if [ ! -f "$FFMPEG_DIR/ffmpeg" ]; then
@@ -112,8 +112,8 @@ else
             # 直接 brew install（如果 Cellar 里没有）
             echo "  Cellar 中未找到，尝试直接 brew install..."
             brew install ffmpeg
-            BREW_FFMPEG=$(brew --prefix)/Cellar/ffmpeg/*/bin/ffmpeg
-            BREW_FFPROBE=$(brew --prefix)/Cellar/ffmpeg/*/bin/ffprobe
+            BREW_FFMPEG=$(find $(brew --prefix)/Cellar/ffmpeg -name "ffmpeg" -type f | head -1)
+            BREW_FFPROBE=$(find $(brew --prefix)/Cellar/ffmpeg -name "ffprobe" -type f | head -1)
             if [ -f "$BREW_FFMPEG" ] && [ ! -f "$FFMPEG_DIR/ffmpeg" ]; then
                 cp "$BREW_FFMPEG" "$FFMPEG_DIR/ffmpeg"
                 chmod +x "$FFMPEG_DIR/ffmpeg"
