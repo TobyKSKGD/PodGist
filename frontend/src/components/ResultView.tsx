@@ -312,29 +312,76 @@ export default function ResultView({ archiveId, onBack, onJumpToChat }: ResultVi
 
 // Simple markdown renderer
 function renderMarkdown(md: string): string {
-  return (
-    md
-      // Timestamps [MM:SS] or [MM:SS.SS] or [H:MM:SS] etc. - green badges
-      .replace(/\[(\d+:\d{2}(?:\.\d+)?)\]/g, '<span class="inline-flex items-center px-1.5 py-0.5 rounded bg-[#D1FAF5] text-[#10B981] text-xs font-mono font-medium">$1</span>')
-      // Headers
-      .replace(/^### (.*$)/gim, '<h3 class="text-lg font-semibold text-slate-800 mt-6 mb-3">$1</h3>')
-      .replace(/^## (.*$)/gim, '<h2 class="text-xl font-bold text-slate-800 mt-8 mb-4">$1</h2>')
-      .replace(/^# (.*$)/gim, '<h1 class="text-2xl font-bold text-slate-800 mt-8 mb-4">$1</h1>')
-      // Bold
-      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-      // Blockquote
-      .replace(/^> (.*$)/gim, '<blockquote class="border-l-4 border-[#00ADA6] pl-4 py-2 my-4 bg-slate-50 text-slate-600">$1</blockquote>')
-      // List items
-      .replace(/^- (.*$)/gim, '<li class="ml-4 py-1 text-slate-700">$1</li>')
-      // Paragraphs
-      .replace(/\n\n/g, '</p><p class="my-4 text-slate-700 leading-relaxed">')
-      // Wrap in paragraph if not already wrapped
-      .replace(/^(.+)$/gim, (match) => {
-        if (match.startsWith('<')) return match;
-        return `<p class="my-4 text-slate-700 leading-relaxed">${match}</p>`;
-      })
-      // Fix double paragraph wrapping
-      .replace(/<p class="my-4[^"]*"><(h[123]|blockquote|li)/g, '<$1')
-      .replace(/<\/(h[123]|blockquote|li)><\/p>/g, '</$1>')
-  );
+  const lines = md.split('\n');
+  const output: string[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // H1 title: # 标题
+    if (/^# /.test(line)) {
+      const text = line.replace(/^# /, '');
+      output.push(`<h1 class="text-2xl font-bold text-slate-800 mt-6 mb-4">${text}</h1>`);
+      i++;
+      continue;
+    }
+
+    // Multi-line blockquote: > line1 > line2
+    if (/^> /.test(line)) {
+      const quoteLines: string[] = [];
+      while (i < lines.length && /^> /.test(lines[i])) {
+        quoteLines.push(lines[i].replace(/^> /, ''));
+        i++;
+      }
+      const content = quoteLines.join('<br>').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+      output.push(`<blockquote class="border-l-4 border-[#00ADA6] pl-4 py-2 my-4 bg-slate-50 text-slate-600 text-sm leading-relaxed">${content}</blockquote>`);
+      continue;
+    }
+
+    // H3 header: ### 标题
+    if (/^### /.test(line)) {
+      const text = line.replace(/^### /, '');
+      output.push(`<h3 class="text-lg font-semibold text-slate-800 mt-6 mb-3 flex items-center gap-2">${text}</h3>`);
+      i++;
+      continue;
+    }
+
+    // Timeline item: - [MM:SS] text...
+    const timelineMatch = line.match(/^- \[(\d+:\d{2}(?:\.\d+)?)\] (.+)/);
+    if (timelineMatch) {
+      const ts = timelineMatch[1];
+      const text = timelineMatch[2].replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+      output.push(`<li class="ml-4 py-1.5 text-slate-700 list-none flex items-start gap-2">` +
+        `<span class="inline-flex items-center px-1.5 py-0.5 rounded bg-[#D1FAF5] text-[#10B981] text-xs font-mono font-medium mt-0.5 shrink-0">[${ts}]</span>` +
+        `<span class="flex-1">${text}</span></li>`);
+      i++;
+      continue;
+    }
+
+    // Regular list item: - text
+    if (/^- /.test(line)) {
+      const text = line.replace(/^- /, '').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+      output.push(`<li class="ml-4 py-1 text-slate-700 list-disc">${text}</li>`);
+      i++;
+      continue;
+    }
+
+    // Blank line
+    if (line.trim() === '') {
+      i++;
+      continue;
+    }
+
+    // Plain paragraph text (may contain **bold**)
+    let para = line.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    // Timestamps inside paragraphs: [MM:SS]
+    para = para.replace(/\[(\d+:\d{2}(?:\.\d+)?)\]/g,
+      '<span class="inline-flex items-center px-1.5 py-0.5 rounded bg-[#D1FAF5] text-[#10B981] text-xs font-mono font-medium">[$1]</span>'
+    );
+    output.push(`<p class="my-3 text-slate-700 leading-relaxed">${para}</p>`);
+    i++;
+  }
+
+  return output.join('\n');
 }
