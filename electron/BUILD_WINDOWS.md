@@ -90,8 +90,8 @@ npm run build:win
 
 | 类型 | 路径 |
 |------|------|
-| 便携版 | `release\1.0.0\win-unpacked\PodGist.exe` |
-| 安装版 | `release\1.0.0\PodGist-*-win-*.exe` |
+| 便携版 | `release\${version}\win-unpacked\PodGist.exe` |
+| 安装版 | `release\${version}\PodGist-*-win-*.exe` |
 
 ---
 

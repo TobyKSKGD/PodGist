@@ -4,6 +4,23 @@
 
 ---
 
+## [0.1.0] - 2026-04-08
+
+> Early version - 新版本起点，验证双平台安装、转录、总结链路
+
+### 新增
+
+- **DashScope ASR 路由重构**：短音频（≤30分钟/60MB）使用 `qwen3-asr-flash`（MultiModalConversation），长音频使用 `paraformer-v1`（Transcription.async_call）
+- **短音频阈值调整**：从 5 分钟放宽至 30 分钟，文件上限从 10MB 调整至 60MB
+- **dashscope SDK 升级**：从 ≥1.20.0 升级至 ≥1.21.0
+
+### 修复
+
+- **qwen3-asr-flash 调用错误**：修复 `InvalidParameter / url error` — qwen3-asr-flash 短音频模型应使用 `MultiModalConversation.call` 而非 `QwenTranscription.async_call`
+- **paraformer 上传用途错误**：修复 `Files.upload purpose='audio'` 无效问题，改为 `purpose='inference'`
+
+---
+
 ## [1.0.0] - 2026-04-03
 
 > 首发版本 - macOS Lite
