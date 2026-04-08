@@ -60,8 +60,8 @@ Windows 不在本地构建。通过 GitHub Actions 统一 workflow：
 
 ```bash
 # 推送一个 v* tag 即可同时触发 mac + win 构建
-git tag v1.0.1
-git push origin v1.0.1
+git tag v0.1.1
+git push origin v0.1.1
 ```
 
 ### 或手动触发
@@ -107,7 +107,7 @@ git push origin v1.0.1
 
 ## 版本规则
 
-- **正式版本**：tag `v1.0.0`、`v1.0.1` 等
+- **正式版本**：tag `v0.1.0`、`v0.1.1` 等
 - **不再使用**：`v*-windows` 这种 tag 格式
 - 同一个 tag 产生同一个 release 页面，包含 mac + win 两个安装包
 

@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag (e.g. v1.0.0) - leave empty to skip release creation'
+        description: 'Release tag (e.g. v0.1.0) - leave empty to skip release creation'
         required: false
         default: ''
       platform:
