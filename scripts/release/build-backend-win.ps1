@@ -54,14 +54,15 @@ Write-Host "文件验证通过" -ForegroundColor Green
 # ===== PyInstaller 构建 =====
 Write-Host "`n[3/5] 运行 PyInstaller..." -ForegroundColor Yellow
 $env:PYTHONOPTIMIZE = "1"
-# 清理旧输出
-Remove-Item backend/dist -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item backend/build -Recurse -Force -ErrorAction SilentlyContinue
-# 从 backend/ 目录运行 pyinstaller，让所有路径相对于 backend/
-# SPECPATH 将是 backend/api.spec，pathex=[project_root] 会解析到 backend/
-Push-Location backend
+# 清理旧输出（绝对路径确保在 repo root 执行）
+$absProjectRoot = (Resolve-Path $projectRoot).Path
+Remove-Item "$absProjectRoot/backend/dist" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item "$absProjectRoot/backend/build" -Recurse -Force -ErrorAction SilentlyContinue
+# 使用绝对路径运行 pyinstaller，确保路径解析正确
+$specFile = Join-Path $absProjectRoot "backend/api.spec"
+Push-Location (Join-Path $absProjectRoot "backend")
 try {
-    pyinstaller --clean --noconfirm api.spec
+    pyinstaller --clean --noconfirm $specFile
     if ($LASTEXITCODE -ne 0) {
         Write-Host "ERROR: PyInstaller 失败，exit code=$LASTEXITCODE" -ForegroundColor Red
         exit 1
@@ -111,10 +112,10 @@ if (-not $allOk) {
 
 # ===== 复制到 electron/dist/api =====
 Write-Host "`n复制到 electron/dist/api..." -ForegroundColor Yellow
-New-Item -ItemType Directory -Force -Path "electron/dist" | Out-Null
-Remove-Item "electron/dist/api" -Recurse -Force -ErrorAction SilentlyContinue
-# 使用 /* 显式复制目录内容，避免 PowerShell 路径解析歧义
-Copy-Item "$apiDist/*" "electron/dist/" -Recurse -Force
+New-Item -ItemType Directory -Force -Path "electron/dist/api" | Out-Null
+Remove-Item "electron/dist/api/*" -Recurse -Force -ErrorAction SilentlyContinue
+# 复制到 electron/dist/api/（不是 electron/dist/，确保 api/ 子目录存在）
+Copy-Item "$apiDist/*" "electron/dist/api/" -Recurse -Force
 
 if (-not (Test-Path "electron/dist/api/api-engine.exe")) {
     Write-Host "ERROR: electron/dist/api/api-engine.exe not found after copy" -ForegroundColor Red
