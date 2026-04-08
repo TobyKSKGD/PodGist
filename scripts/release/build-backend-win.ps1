@@ -70,7 +70,10 @@ Write-Host "    CWD: ${absBackendDir}"
 
 Push-Location $absBackendDir
 try {
-    cmd /c "pyinstaller --clean --onedir `"$absApiSpec`" >nul 2>nul"
+    # 运行 pyinstaller，输出到 stdout 用于调试
+    cmd /c "pyinstaller --clean --onedir `"$absApiSpec`" 2>&1" | ForEach-Object {
+        Write-Host "    pyinstaller: $_"
+    }
     if ($LASTEXITCODE -notin @(0, 1)) {
         Write-Host "ERROR: PyInstaller failed with exit code $LASTEXITCODE" -ForegroundColor Red
         exit 1
