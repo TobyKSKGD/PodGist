@@ -7,7 +7,7 @@
 # 用法：powershell -ExecutionPolicy Bypass -File scripts/release/build-backend-win.ps1
 
 $ErrorActionPreference = "Stop"
-$projectRoot = Split-Path -Parent $PSScriptRoot
+$projectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 
 Write-Host "=== PodGist Windows 后端构建 ===" -ForegroundColor Cyan
 Write-Host "项目目录: $projectRoot"
