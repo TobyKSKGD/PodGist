@@ -162,20 +162,21 @@ jobs:
         id: locate-win-unpacked
         shell: pwsh
         run: |
-          $unpacked = Get-ChildItem "electron/release" -Directory | Where-Object { $_.Name -like "*-win-unpacked" } | Select-Object -First 1
+          # electron-builder 将 unpacked 输出到 release/ (repo root)，不是 electron/release/
+          $unpacked = Get-ChildItem "release" -Directory | Where-Object { $_.Name -like "*-win-unpacked" } | Select-Object -First 1
           if ($unpacked) {
             $path = $unpacked.FullName
             echo "path=$path" >> $env:GITHUB_OUTPUT
             echo "Found: $path"
           } else {
-            # 尝试 electron/out 目录
-            $unpacked = Get-ChildItem "electron/out" -Directory | Where-Object { $_.Name -like "*-win-unpacked" } | Select-Object -First 1
+            # 尝试 electron/release/ 目录
+            $unpacked = Get-ChildItem "electron/release" -Directory | Where-Object { $_.Name -like "*-win-unpacked" } | Select-Object -First 1
             if ($unpacked) {
               $path = $unpacked.FullName
               echo "path=$path" >> $env:GITHUB_OUTPUT
-              echo "Found (out/): $path"
+              echo "Found (electron/release/): $path"
             } else {
-              Write-Host "ERROR: No win-unpacked directory found"
+              Write-Host "ERROR: No win-unpacked directory found in release/ or electron/release/"
               exit 1
             }
           }
@@ -184,8 +185,9 @@ jobs:
         if: matrix.platform == 'mac'
         id: locate-mac-unpacked
         run: |
-          # macOS DMG 里包含 unpacked app，直接在 release 目录查找 .app
-          for dir in electron/release release electron/out; do
+          # macOS DMG 挂载后包含 unpacked .app
+          # electron-builder 输出到 release/ (repo root)
+          for dir in release electron/release electron/out; do
             app=$(find "$dir" -name "PodGist.app" -type d 2>/dev/null | head -1)
             if [ -n "$app" ]; then
               echo "path=$app" >> $GITHUB_OUTPUT
@@ -193,7 +195,7 @@ jobs:
               exit 0
             fi
           done
-          echo "ERROR: No PodGist.app found"
+          echo "ERROR: No PodGist.app found in release/ or electron/release/"
           exit 1
 
       # ===== 目标二：验包（打包完成后验证关键文件） =====

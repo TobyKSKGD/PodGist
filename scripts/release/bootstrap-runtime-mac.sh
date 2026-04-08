@@ -90,20 +90,44 @@ if [ -n "$FFMPEG_BIN" ]; then
     fi
 else
     echo "  警告: 未找到系统 FFmpeg，尝试下载..."
-    # 从可靠源下载静态 FFmpeg
-    FFMPEG_URL="https://evermeet.cx/ffmpeg/getRelease/ffmpeg"
-    FFPROBE_URL="https://evermeet.cx/ffmpeg/getRelease/ffprobe"
+    # 从 John's FFmpeg builds 下载静态 FFmpeg（支持 Apple Silicon）
+    FFMPEG_URL="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64.zip"
+    FFPROBE_URL="https://johnvansickle.com/ffmpeg/releases/ffprobe-release-arm64.zip"
 
     if [ ! -f "$FFMPEG_DIR/ffmpeg" ]; then
         echo "  下载 ffmpeg from $FFMPEG_URL"
-        curl -sL "$FFMPEG_URL" -o "$FFMPEG_DIR/ffmpeg" && chmod +x "$FFMPEG_DIR/ffmpeg" && echo "  ffmpeg 下载成功" || echo "  ffmpeg 下载失败"
+        if curl -sL "$FFMPEG_URL" -o /tmp/ffmpeg.zip; then
+            unzip -o /tmp/ffmpeg.zip -d /tmp/ffmpeg_extracted
+            FFmpeg_BIN=$(find /tmp/ffmpeg_extracted -name "ffmpeg" -type f | head -1)
+            if [ -n "$FFmpeg_BIN" ]; then
+                cp "$FFmpeg_BIN" "$FFMPEG_DIR/ffmpeg"
+                chmod +x "$FFMPEG_DIR/ffmpeg"
+                echo "  ffmpeg 下载成功: $FFmpeg_BIN -> $FFMPEG_DIR/ffmpeg"
+            else
+                echo "  错误: 解压后未找到 ffmpeg 二进制文件"
+            fi
+        else
+            echo "  ffmpeg 下载失败"
+        fi
     else
         echo "  ffmpeg 已存在，跳过"
     fi
 
     if [ ! -f "$FFMPEG_DIR/ffprobe" ]; then
         echo "  下载 ffprobe from $FFPROBE_URL"
-        curl -sL "$FFPROBE_URL" -o "$FFMPEG_DIR/ffprobe" && chmod +x "$FFMPEG_DIR/ffprobe" && echo "  ffprobe 下载成功" || echo "  ffprobe 下载失败"
+        if curl -sL "$FFPROBE_URL" -o /tmp/ffprobe.zip; then
+            unzip -o /tmp/ffprobe.zip -d /tmp/ffprobe_extracted
+            FFprobe_BIN=$(find /tmp/ffprobe_extracted -name "ffprobe" -type f | head -1)
+            if [ -n "$FFprobe_BIN" ]; then
+                cp "$FFprobe_BIN" "$FFMPEG_DIR/ffprobe"
+                chmod +x "$FFMPEG_DIR/ffprobe"
+                echo "  ffprobe 下载成功: $FFprobe_BIN -> $FFMPEG_DIR/ffprobe"
+            else
+                echo "  错误: 解压后未找到 ffprobe 二进制文件"
+            fi
+        else
+            echo "  ffprobe 下载失败"
+        fi
     else
         echo "  ffprobe 已存在，跳过"
     fi
