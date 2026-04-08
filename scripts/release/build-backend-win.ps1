@@ -1,23 +1,30 @@
 #!/usr/bin/env pwsh
 # PodGist Windows 后端 PyInstaller 构建脚本
 #
-# 从根目录 backend/ 构建 Windows 可执行文件
-# 产物：backend/dist/api/api-engine.exe
-#
 # 用法：powershell -ExecutionPolicy Bypass -File scripts/release/build-backend-win.ps1
 
 $ErrorActionPreference = "Stop"
-$projectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+
+# 解析项目根目录（脚本在 scripts/release/，项目根是其父的父）
+$scriptRoot = Split-Path -Parent $PSScriptRoot
+$projectRoot = Split-Path -Parent $scriptRoot
+
+# 使用绝对路径，后续所有路径操作基于此
+$absProjectRoot = (Resolve-Path $projectRoot).Path
+$absBackendDir = Join-Path $absProjectRoot "backend"
+$absApiSpec = Join-Path $absBackendDir "api.spec"
+$absApiDist = Join-Path $absBackendDir "dist"
+$absApiOutput = Join-Path $absApiDist "api"
+$absElectronDist = Join-Path $absProjectRoot "electron/dist"
+$absElectronApi = Join-Path $absElectronDist "api"
 
 Write-Host "=== PodGist Windows 后端构建 ===" -ForegroundColor Cyan
-Write-Host "项目目录: $projectRoot"
-
-# 切换到项目根目录
-Set-Location $projectRoot
+Write-Host "项目目录: $absProjectRoot"
 
 # ===== 语法检查 =====
 Write-Host "`n[1/5] 运行后端语法检查..." -ForegroundColor Yellow
-python scripts/check_backend.py
+$checkScript = Join-Path $absProjectRoot "scripts/check_backend.py"
+python $checkScript
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: 后端语法检查失败" -ForegroundColor Red
     exit 1
@@ -27,22 +34,21 @@ Write-Host "语法检查通过" -ForegroundColor Green
 # ===== 验证必需文件存在 =====
 Write-Host "`n[2/5] 验证后端文件..." -ForegroundColor Yellow
 $required = @(
-    "backend/start_electron.py",
-    "backend/__init__.py",
-    "backend/downloader.py",
-    "backend/transcriber.py",
-    "backend/worker.py",
-    "backend/llm_agent.py",
-    "backend/rag_retriever.py",
-    "backend/diagnostics.py",
-    "backend/rag_db.py",
-    "backend/task_queue.py",
-    "backend/api.spec",
-    "api.py"
+    (Join-Path $absBackendDir "start_electron.py"),
+    (Join-Path $absBackendDir "__init__.py"),
+    (Join-Path $absBackendDir "downloader.py"),
+    (Join-Path $absBackendDir "transcriber.py"),
+    (Join-Path $absBackendDir "worker.py"),
+    (Join-Path $absBackendDir "llm_agent.py"),
+    (Join-Path $absBackendDir "rag_retriever.py"),
+    (Join-Path $absBackendDir "diagnostics.py"),
+    (Join-Path $absBackendDir "rag_db.py"),
+    (Join-Path $absBackendDir "task_queue.py"),
+    $absApiSpec,
+    (Join-Path $absProjectRoot "api.py")
 )
 foreach ($f in $required) {
-    $fullPath = Join-Path $projectRoot $f
-    if (Test-Path $fullPath) {
+    if (Test-Path $f) {
         Write-Host "  OK: $f"
     } else {
         Write-Host "  MISSING: $f" -ForegroundColor Red
@@ -54,15 +60,24 @@ Write-Host "文件验证通过" -ForegroundColor Green
 # ===== PyInstaller 构建 =====
 Write-Host "`n[3/5] 运行 PyInstaller..." -ForegroundColor Yellow
 $env:PYTHONOPTIMIZE = "1"
-# 清理旧输出（绝对路径确保在 repo root 执行）
-$absProjectRoot = (Resolve-Path $projectRoot).Path
-Remove-Item "$absProjectRoot/backend/dist" -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item "$absProjectRoot/backend/build" -Recurse -Force -ErrorAction SilentlyContinue
-# 使用绝对路径运行 pyinstaller，确保路径解析正确
-$specFile = Join-Path $absProjectRoot "backend/api.spec"
-Push-Location (Join-Path $absProjectRoot "backend")
+
+# 清理旧输出
+Write-Host "  清理旧输出..."
+if (Test-Path $absApiDist) {
+    Remove-Item $absApiDist -Recurse -Force -ErrorAction SilentlyContinue
+}
+$absBuildDir = Join-Path $absBackendDir "build"
+if (Test-Path $absBuildDir) {
+    Remove-Item $absBuildDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# 在 backend/ 目录下运行 pyinstaller
+Write-Host "  运行 pyinstaller --onedir --specpath $absBackendDir $absApiSpec ..."
+Push-Location $absBackendDir
 try {
-    pyinstaller --clean --noconfirm $specFile
+    pyinstaller --clean --onedir --specpath $absBackendDir $absApiSpec 2>&1 | ForEach-Object {
+        Write-Host "    $_"
+    }
     if ($LASTEXITCODE -ne 0) {
         Write-Host "ERROR: PyInstaller 失败，exit code=$LASTEXITCODE" -ForegroundColor Red
         exit 1
@@ -73,17 +88,16 @@ try {
 
 # ===== 定位输出目录 =====
 Write-Host "`n[4/5] 定位输出目录..." -ForegroundColor Yellow
-$apiDist = $null
-if (Test-Path "backend/dist/api") {
-    $apiDist = "backend/dist/api"
-} elseif (Test-Path "dist/api") {
-    $apiDist = "dist/api"
+if (Test-Path $absApiOutput) {
+    Write-Host "输出目录: $absApiOutput" -ForegroundColor Green
 } else {
-    Write-Host "ERROR: api dist not found" -ForegroundColor Red
-    Get-ChildItem . -Recurse -Filter "*.exe" -ErrorAction SilentlyContinue | Select-Object -First 10 FullName
+    Write-Host "ERROR: api dist 目录不存在: $absApiOutput" -ForegroundColor Red
+    # 列出 backend/dist 内容用于调试
+    if (Test-Path $absApiDist) {
+        Get-ChildItem $absApiDist -Recurse | Select-Object -First 20 FullName
+    }
     exit 1
 }
-Write-Host "输出目录: $apiDist" -ForegroundColor Green
 
 # ===== 验证 PyInstaller 产物 =====
 Write-Host "`n[5/5] 验证构建产物..." -ForegroundColor Yellow
@@ -96,7 +110,7 @@ $requiredDlls = @(
 )
 $allOk = $true
 foreach ($dll in $requiredDlls) {
-    $fullPath = Join-Path $apiDist $dll
+    $fullPath = Join-Path $absApiOutput $dll
     if (Test-Path $fullPath) {
         Write-Host "  OK: $dll"
     } else {
@@ -112,13 +126,15 @@ if (-not $allOk) {
 
 # ===== 复制到 electron/dist/api =====
 Write-Host "`n复制到 electron/dist/api..." -ForegroundColor Yellow
-# 使用绝对路径
-$srcDir = Join-Path $absProjectRoot $apiDist
-$destDir = Join-Path $absProjectRoot "electron/dist/api"
-Write-Host "  源: $srcDir"
-Write-Host "  目标: $destDir"
-# 用 robocopy 镜像复制（更可靠，支持嵌套目录）
-$robocopyResult = robocopy $srcDir $destDir /MIR /NFL /NDL /NJH /NJS /NC /NS /NP
+Write-Host "  源: $absApiOutput"
+Write-Host "  目标: $absElectronApi"
+
+# 创建目标目录
+New-Item -ItemType Directory -Force -Path $absElectronApi | Out-Null
+
+# 用 robocopy 镜像复制（确保所有嵌套文件正确复制）
+Write-Host "  执行 robocopy..."
+$robocopyResult = robocopy $absApiOutput $absElectronApi /MIR /NFL /NDL /NJH /NJS /NC /NS /NP
 $robocopyExit = $LASTEXITCODE
 Write-Host "  robocopy exit code: $robocopyExit"
 if ($robocopyExit -ge 8) {
@@ -126,12 +142,29 @@ if ($robocopyExit -ge 8) {
     exit 1
 }
 
-if (-not (Test-Path (Join-Path $destDir "api-engine.exe"))) {
-    Write-Host "ERROR: $destDir\api-engine.exe not found after copy" -ForegroundColor Red
+# 验证复制结果
+$destApiEngine = Join-Path $absElectronApi "api-engine.exe"
+if (-not (Test-Path $destApiEngine)) {
+    Write-Host "ERROR: 复制后 api-engine.exe 不存在: $destApiEngine" -ForegroundColor Red
+    # 列出目标目录内容
+    if (Test-Path $absElectronApi) {
+        Write-Host "  $absElectronApi 内容:"
+        Get-ChildItem $absElectronApi -Recurse | Select-Object -First 20 FullName
+    }
     exit 1
+}
+
+# 列出复制后的内容（用于调试）
+Write-Host "  复制后 $absElectronApi 内容:"
+Get-ChildItem $absElectronApi | ForEach-Object {
+    if ($_.PSIsContainer) {
+        Write-Host "    $($_.Name)/"
+    } else {
+        Write-Host "    $($_.Name)"
+    }
 }
 
 Write-Host ""
 Write-Host "=== Windows 后端构建成功 ===" -ForegroundColor Green
-Write-Host "产物: electron/dist/api/api-engine.exe"
+Write-Host "产物: $destApiEngine"
 exit 0
