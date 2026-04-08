@@ -127,20 +127,26 @@ def get_api_key():
     其次回退到项目根目录（开发环境）。
 
     返回:
-        str: API Key
+        str: 干净的 API Key（不含 DASHSCOPE_API_KEY= 前缀）
     """
     # 优先使用 PODGIST_DATA_DIR（打包环境）
     data_dir = os.environ.get('PODGIST_DATA_DIR')
     if data_dir:
         env_path = os.path.join(data_dir, ".env")
         if os.path.exists(env_path):
-            with open(env_path, "r") as f:
-                return f.read().strip()
+            with open(env_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("DASHSCOPE_API_KEY="):
+                        return line.split("=", 1)[1].strip().strip("'\"")
     # 回退到项目根目录（开发环境）
     env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
     if os.path.exists(env_path):
-        with open(env_path, "r") as f:
-            return f.read().strip()
+        with open(env_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("DASHSCOPE_API_KEY="):
+                    return line.split("=", 1)[1].strip().strip("'\"")
     return None
 
 
