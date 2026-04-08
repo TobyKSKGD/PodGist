@@ -70,7 +70,7 @@ def _upload_to_dashscope(audio_file_path: str, api_key: str) -> Optional[str]:
     try:
         upload_response = Files.upload(
             file_path=audio_file_path,
-            purpose='audio',
+            purpose='inference',
             api_key=api_key
         )
 
