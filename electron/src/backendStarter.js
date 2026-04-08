@@ -23,6 +23,9 @@ class BackendStarter {
     this._backendErrorLogPath = null;
     // 外部设置的致命错误回调（由 main.js 注入）
     this._onBackendFatal = null;
+    // 运行时路径（由 preparePythonVenv 设置）
+    this._apiEngineExe = null;
+    this._startScript = null;
   }
 
   get isPackaged() {
@@ -109,6 +112,32 @@ class BackendStarter {
     }
   }
 
+  _logResourcesDir() {
+    // 记录 resources 目录内容，便于定位路径问题
+    try {
+      const resourcesPath = process.resourcesPath;
+      this._appendLog(BACKEND_ERROR_LOG, `process.resourcesPath = ${resourcesPath}`);
+      if (fs.existsSync(resourcesPath)) {
+        const entries = fs.readdirSync(resourcesPath, { withFileTypes: true });
+        const entryList = entries.map(e => e.isDirectory() ? `${e.name}/` : e.name).join(', ');
+        this._appendLog(BACKEND_ERROR_LOG, `resources/ contents: ${entryList}`);
+      } else {
+        this._appendLog(BACKEND_ERROR_LOG, `resourcesPath does not exist: ${resourcesPath}`);
+      }
+    } catch (e) {
+      this._appendLog(BACKEND_ERROR_LOG, `_logResourcesDir error: ${e.message}`);
+    }
+  }
+
+  _findFirstExist(candidates) {
+    for (const p of candidates) {
+      if (fs.existsSync(p)) {
+        return p;
+      }
+    }
+    return null;
+  }
+
   async prepareFFmpeg() {
     const platform = process.platform;
 
@@ -180,35 +209,60 @@ class BackendStarter {
 
     // Windows: 使用 PyInstaller 打包的 api-engine.exe，不需要 python_venv
     if (platform === 'win32') {
-      // Windows 关键文件预检
-      const apiEngineExe = path.join(process.resourcesPath, 'api', 'api-engine.exe');
-      this._assertFileExists(apiEngineExe, 'api-engine.exe');
-      this._appendLog(BACKEND_LOG, `Windows API engine: ${apiEngineExe}`);
-      console.log('[BackendStarter] Windows 模式: 使用 PyInstaller 打包的后端');
+      // 候选路径列表（按优先级顺序）
+      const apiEngineCandidates = [
+        path.join(process.resourcesPath, 'api', 'api-engine.exe'),
+        path.join(process.resourcesPath, 'app.asar.unpacked', 'api', 'api-engine.exe'),
+        path.join(process.resourcesPath, 'app.asar.unpacked', 'dist', 'api', 'api-engine.exe'),
+      ];
+
+      const apiEngineExe = this._findFirstExist(apiEngineCandidates);
+      if (apiEngineExe) {
+        this._apiEngineExe = apiEngineExe;
+        this._appendLog(BACKEND_LOG, `Windows API engine found: ${apiEngineExe}`);
+        console.log('[BackendStarter] Windows 模式: 使用 PyInstaller 打包的后端:', apiEngineExe);
+      } else {
+        // 路径全不存在，记录详细日志后抛出
+        this._logResourcesDir();
+        const tried = apiEngineCandidates.join(', ');
+        const msg = `[BackendStarter] Windows api-engine.exe 未找到，已尝试: ${tried}`;
+        this._appendLog(BACKEND_ERROR_LOG, msg);
+        console.error(msg);
+        throw new Error(msg);
+      }
       return;
     }
 
     const bundledVenv = this.getResourcePath('python_venv');
 
+    // macOS: 候选 start_electron.py 路径
+    const startScriptCandidates = [
+      path.join(process.resourcesPath, 'app.asar.unpacked', 'backend', 'start_electron.py'),
+      path.join(process.resourcesPath, 'backend', 'start_electron.py'),
+    ];
+
+    const startScript = this._findFirstExist(startScriptCandidates);
+    if (!startScript) {
+      this._logResourcesDir();
+      const tried = startScriptCandidates.join(', ');
+      const msg = `[BackendStarter] start_electron.py 未找到，已尝试: ${tried}`;
+      this._appendLog(BACKEND_ERROR_LOG, msg);
+      throw new Error(msg);
+    }
+
     if (!fs.existsSync(bundledVenv)) {
+      this._logResourcesDir();
       const msg = `[BackendStarter] Python 虚拟环境未找到: ${bundledVenv}`;
       this._appendLog(BACKEND_ERROR_LOG, msg);
       throw new Error(msg);
     }
 
-    // macOS: 预检 start_electron.py 是否存在
-    const startScript = path.join(
-      process.resourcesPath,
-      'app.asar.unpacked',
-      'backend',
-      'start_electron.py'
-    );
-    this._assertFileExists(startScript, 'start_electron.py');
-    this._assertFileExists(bundledVenv, 'python_venv');
-
     this._appendLog(BACKEND_LOG, `Python 虚拟环境已就绪: ${bundledVenv}`);
+    this._appendLog(BACKEND_LOG, `start_electron.py: ${startScript}`);
     console.log('[BackendStarter] Python 虚拟环境已就绪:', bundledVenv);
+    console.log('[BackendStarter] start_electron.py:', startScript);
     this.pythonVenvPath = bundledVenv;
+    this._startScript = startScript;
   }
 
   async prepareModelsFull() {
@@ -255,28 +309,17 @@ class BackendStarter {
     const backendUrl = 'http://127.0.0.1:8000';
 
     if (platform === 'win32') {
-      const apiEngineExe = path.join(
-        process.resourcesPath,
-        'api',
-        'api-engine.exe'
-      );
-      pythonPath = apiEngineExe;
+      pythonPath = this._apiEngineExe;
       pythonArgs = [
         '--data-dir', this.userDataPath,
         '--resources-path', process.resourcesPath
       ];
-      this._appendLog(BACKEND_LOG, `Windows 模式启动: ${apiEngineExe}`);
-      console.log('[BackendStarter] Windows 模式: 使用 PyInstaller 打包的后端');
+      this._appendLog(BACKEND_LOG, `Windows 模式启动: ${this._apiEngineExe}`);
+      console.log('[BackendStarter] Windows 模式: 使用 PyInstaller 打包的后端:', this._apiEngineExe);
     } else {
       pythonPath = path.join(this.pythonVenvPath, 'bin', 'python3');
-      const startScript = path.join(
-        process.resourcesPath,
-        'app.asar.unpacked',
-        'backend',
-        'start_electron.py'
-      );
       pythonArgs = [
-        startScript,
+        this._startScript,
         '--data-dir', this.userDataPath,
         '--resources-path', process.resourcesPath
       ];
