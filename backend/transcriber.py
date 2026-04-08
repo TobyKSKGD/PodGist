@@ -2,7 +2,11 @@
 语音转录模块 - 使用 DashScope 远程 ASR API
 
 本版本移除了所有本地模型（Whisper / SenseVoice / PyTorch），
-改用 DashScope 云端 ASR API（paraformer-v1）进行语音识别。
+改用 DashScope 云端 ASR API（qwen3-asr-flash + paraformer）进行语音识别。
+
+两个 API 入口：
+- qwen3-asr-flash 系列 → dashscope.audio.qwen_asr.QwenTranscription（function="transcription"）
+- paraformer 系列 → dashscope.Transcription（function="conversation"）
 """
 
 import os
@@ -12,10 +16,10 @@ import requests
 from typing import Optional
 
 # DashScope ASR API 配置
-# 注意：qwen3-asr-flash-2026-02-10 不是 Transcription API 的有效模型名，
-# DashScope Python SDK Transcription.Models 仅支持: paraformer-v1, paraformer-8k-v1, paraformer-mtl-v1
-DASHSCOPE_ASR_MODEL = "paraformer-v1"
-FALLBACK_ASR_MODEL = "paraformer-8k-v1"
+# qwen3-asr-flash-2026-02-10 需要使用 QwenTranscription API（function="transcription"）
+# paraformer 系列需要使用 Transcription API（function="conversation"）
+DASHSCOPE_ASR_MODEL = "qwen3-asr-flash-2026-02-10"
+PARAFORMER_ASR_MODEL = "paraformer-v1"
 
 
 def get_dashscope_api_key() -> str:
@@ -156,9 +160,52 @@ def _fetch_transcription_from_url(transcription_url: str) -> dict:
         return {"text": "", "sentences": []}
 
 
-def _call_dashscope_asr(audio_url: str, api_key: str, model: str = DASHSCOPE_ASR_MODEL) -> dict:
+def _call_qwen_transcription(audio_url: str, api_key: str, model: str) -> dict:
     """
-    调用 DashScope ASR API 进行语音识别。
+    使用 QwenTranscription API（function="transcription"）进行语音识别。
+    qwen3-asr-flash 系列必须使用此 API。
+    """
+    from dashscope.audio.qwen_asr import QwenTranscription
+
+    task = QwenTranscription.async_call(
+        model=model,
+        file_url=audio_url,
+        api_key=api_key
+    )
+
+    if task.status_code != 200:
+        return {"error": f"Task creation failed: {task.output}"}
+
+    task_id = task.output.get('task_id') or task.output.task_id
+
+    for _ in range(60):
+        result = QwenTranscription.wait(task_id, api_key=api_key)
+        status = result.output.get('task_status') or result.output.task_status
+
+        if status == 'SUCCEEDED':
+            # QwenTranscription 返回的 output 中，transcription_url 在 kwargs 里
+            transcription_url = result.output.get('transcription_url')
+            if transcription_url:
+                return _fetch_transcription_from_url(transcription_url)
+            # 也可能直接返回 text（某些模型）
+            text = result.output.get('text')
+            if text:
+                return {"text": text, "sentences": []}
+            return {"text": "", "sentences": []}
+
+        elif status == 'FAILED':
+            error_msg = result.output.get('message') or str(result.output)
+            return {"error": error_msg}
+
+        time.sleep(2)
+
+    return {"error": "Timeout waiting for transcription"}
+
+
+def _call_paraformer_transcription(audio_url: str, api_key: str, model: str = PARAFORMER_ASR_MODEL) -> dict:
+    """
+    使用 Transcription API（function="conversation"）进行语音识别。
+    paraformer 系列使用此 API。
     """
     from dashscope import Transcription
 
@@ -170,38 +217,64 @@ def _call_dashscope_asr(audio_url: str, api_key: str, model: str = DASHSCOPE_ASR
     )
 
     if task.status_code != 200:
-        if model == DASHSCOPE_ASR_MODEL:
-            print(f"[DashScope ASR] {model} failed (status={task.status_code}), trying {FALLBACK_ASR_MODEL}...")
-            return _call_dashscope_asr(audio_url, api_key, model=FALLBACK_ASR_MODEL)
+        if model == PARAFORMER_ASR_MODEL:
+            print(f"[DashScope ASR] {model} failed (status={task.status_code}), trying paraformer-8k-v1...")
+            return _call_paraformer_transcription(audio_url, api_key, model="paraformer-8k-v1")
         return {"error": f"Task creation failed: {task.output}"}
 
-    task_id = task.output['task_id']
+    task_id = task.output.get('task_id') or task.output.task_id
 
     for _ in range(60):
         result = Transcription.wait(task_id, api_key=api_key)
-        status = result.output.task_status
+        status = result.output.get('task_status') or result.output.task_status
 
         if status == 'SUCCEEDED':
             # 从 transcription_url 获取实际转录内容
-            transcription_url = result.output.results[0].get('transcription_url')
+            transcription_url = result.output.get('transcription_url')
             if transcription_url:
                 return _fetch_transcription_from_url(transcription_url)
+            # 备选：从 results 结构获取
+            results = result.output.get('results')
+            if results:
+                transcription_url = results[0].get('transcription_url') if isinstance(results[0], dict) else getattr(results[0], 'transcription_url', None)
+                if transcription_url:
+                    return _fetch_transcription_from_url(transcription_url)
             return {"text": "", "sentences": []}
 
         elif status == 'FAILED':
-            error_msg = result.output.message
-            print(f"[DashScope ASR] Task failed: {error_msg}")
-            if model == DASHSCOPE_ASR_MODEL:
-                print(f"[DashScope ASR] Retrying with {FALLBACK_ASR_MODEL}...")
-                return _call_dashscope_asr(audio_url, api_key, model=FALLBACK_ASR_MODEL)
-            elif model == FALLBACK_ASR_MODEL:
-                print(f"[DashScope ASR] {FALLBACK_ASR_MODEL} also failed, trying paraformer-mtl-v1...")
-                return _call_dashscope_asr(audio_url, api_key, model="paraformer-mtl-v1")
+            error_msg = result.output.get('message') or str(result.output)
+            print(f"[DashScope ASR] Paraformer task failed: {error_msg}")
+            if model == PARAFORMER_ASR_MODEL:
+                print(f"[DashScope ASR] Retrying with paraformer-8k-v1...")
+                return _call_paraformer_transcription(audio_url, api_key, model="paraformer-8k-v1")
+            elif model == "paraformer-8k-v1":
+                print(f"[DashScope ASR] paraformer-8k-v1 also failed, trying paraformer-mtl-v1...")
+                return _call_paraformer_transcription(audio_url, api_key, model="paraformer-mtl-v1")
             return {"error": error_msg}
 
         time.sleep(2)
 
     return {"error": "Timeout waiting for transcription"}
+
+
+def _call_dashscope_asr(audio_url: str, api_key: str, model: str = DASHSCOPE_ASR_MODEL) -> dict:
+    """
+    调用 DashScope ASR API。
+    qwen3-asr-flash → QwenTranscription API
+    paraformer → Transcription API
+
+    优先使用 qwen3-asr-flash，失败后自动降级到 paraformer。
+    """
+    # qwen3-asr-flash 必须用 QwenTranscription
+    if 'qwen' in model.lower() and 'paraformer' not in model.lower():
+        result = _call_qwen_transcription(audio_url, api_key, model)
+        if "error" not in result:
+            return result
+        # qwen3-asr-flash 失败，降级到 paraformer
+        print(f"[DashScope ASR] qwen3-asr-flash 失败，降级到 paraformer...")
+        return _call_paraformer_transcription(audio_url, api_key, PARAFORMER_ASR_MODEL)
+    # paraformer 用 Transcription API
+    return _call_paraformer_transcription(audio_url, api_key, model)
 
 
 def transcribe_with_dashscope(audio_file_path: str, api_key: str) -> str:
