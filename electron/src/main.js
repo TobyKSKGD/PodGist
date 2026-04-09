@@ -46,17 +46,22 @@ function appendStartupLog(message) {
 // 加载错误页面（后端启动失败时显示给用户）
 function loadErrorPage(errorMessage, logPath) {
   if (!mainWindow || mainWindow.isDestroyed()) {
-    // 窗口还未创建，创建它
     createWindowWithError(errorMessage, logPath);
     return;
   }
+
+  // 分析错误类型，返回用户友好的分类和解决提示
+  const errorInfo = categorizeError(errorMessage);
+  const hintHtml = errorInfo.hints.map(h =>
+    `<li style="margin-bottom:0.5rem">${escapeHtml(h)}</li>`
+  ).join('');
 
   const errorHtml = `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PodGist - 启动失败</title>
+  <title>PodGist - ${errorInfo.title}</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -69,67 +74,55 @@ function loadErrorPage(errorMessage, logPath) {
       justify-content: center;
       padding: 2rem;
     }
-    .container {
-      max-width: 600px;
-      width: 100%;
-    }
-    h1 {
-      font-size: 1.5rem;
-      color: #e74c3c;
-      margin-bottom: 1rem;
-    }
+    .container { max-width: 600px; width: 100%; }
+    h1 { font-size: 1.5rem; color: #e74c3c; margin-bottom: 1rem; }
+    h2 { font-size: 1rem; color: #aaa; margin-bottom: 0.75rem; margin-top: 1.25rem; }
     .error-box {
-      background: #2d2d44;
-      border: 1px solid #e74c3c;
-      border-radius: 8px;
-      padding: 1.25rem;
+      background: #2d2d44; border: 1px solid #e74c3c; border-radius: 8px;
+      padding: 1.25rem; margin-bottom: 1rem;
+      font-family: 'SF Mono', 'Menlo', monospace; font-size: 0.875rem;
+      white-space: pre-wrap; word-break: break-all; color: #ff8a80;
+      max-height: 200px; overflow-y: auto;
+    }
+    .hint-box {
+      background: #222; border-radius: 8px; padding: 1rem;
       margin-bottom: 1rem;
-      font-family: 'SF Mono', 'Menlo', monospace;
-      font-size: 0.875rem;
-      white-space: pre-wrap;
-      word-break: break-all;
-      color: #ff8a80;
     }
-    .hint {
-      font-size: 0.875rem;
-      color: #888;
-      line-height: 1.6;
+    .hint-box ul { margin: 0; padding-left: 1.25rem; font-size: 0.875rem; color: #ccc; }
+    .detail-box {
+      background: #2d2d44; border-radius: 4px; padding: 0.75rem;
+      font-size: 0.8rem; color: #888; font-family: monospace;
+      white-space: pre-wrap; word-break: break-all; margin-top: 0.5rem;
     }
-    .log-path {
-      background: #222;
-      border-radius: 4px;
-      padding: 0.5rem;
-      font-family: monospace;
-      font-size: 0.8rem;
-      color: #aaa;
-      word-break: break-all;
-      margin-top: 0.5rem;
+    .label {
+      font-size: 0.75rem; color: #666; text-transform: uppercase;
+      letter-spacing: 0.05em; margin-bottom: 0.25rem;
     }
     .btn {
-      display: inline-block;
-      margin-top: 1rem;
-      padding: 0.5rem 1rem;
-      background: #4361ee;
-      color: white;
-      border: none;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 0.875rem;
+      display: inline-block; margin-top: 1rem; padding: 0.5rem 1rem;
+      background: #4361ee; color: white; border: none; border-radius: 6px;
+      cursor: pointer; font-size: 0.875rem;
     }
     .btn:hover { background: #3250ee; }
+    code { background: #333; padding: 0.1em 0.3em; border-radius: 3px; font-size: 0.85em; }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>后端启动失败</h1>
-    <div class="error-box">${escapeHtml(errorMessage)}</div>
-    <div class="hint">
-      请查看完整日志获取详细信息：
-      <div class="log-path">${escapeHtml(logPath)}</div>
+    <h1>${escapeHtml(errorInfo.title)}</h1>
+    <div class="error-box">${escapeHtml(errorInfo.summary)}</div>
+
+    <h2>可能的原因和解决方法</h2>
+    <div class="hint-box">
+      <ul>${hintHtml}</ul>
     </div>
-    <p class="hint" style="margin-top:1rem">
-      日志文件位置：<code>${escapeHtml(logPath)}</code>
-    </p>
+
+    <div class="label">详细错误（供开发者参考）</div>
+    <div class="detail-box">${escapeHtml(errorMessage)}</div>
+
+    <div class="label" style="margin-top:1rem">日志文件位置</div>
+    <div class="detail-box">${escapeHtml(logPath)}</div>
+
     <button class="btn" onclick="window.close()">关闭应用</button>
   </div>
   <script>
@@ -143,6 +136,74 @@ function loadErrorPage(errorMessage, logPath) {
 </html>`;
 
   mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(errorHtml)}`);
+}
+
+function categorizeError(errorMessage) {
+  const msg = errorMessage || '';
+  const lower = msg.toLowerCase();
+
+  // 端口占用
+  if (lower.includes('8000') && (lower.includes('占用') || lower.includes('in use') || lower.includes('address already') || lower.includes('port'))) {
+    return {
+      title: '后端端口被占用',
+      summary: '端口 8000 已被其他程序占用，PodGist 无法启动。',
+      hints: [
+        '关闭其他占用 8000 端口的程序（如其他 PodGist 进程、Python 调试服务器等）',
+        '在终端执行 <code>lsof -i :8000</code> 查找占用端口的进程',
+        '如果是残留进程，执行 <code>kill $(lsof -ti :8000)</code> 强制关闭'
+      ]
+    };
+  }
+
+  // FFmpeg 找不到
+  if (lower.includes('ffmpeg') && (lower.includes('not found') || lower.includes('no such file') || lower.includes('找不到') || lower.includes('does not exist'))) {
+    return {
+      title: 'FFmpeg 未找到',
+      summary: '音视频处理工具 FFmpeg 不存在或不可执行。',
+      hints: [
+        '重新安装 PodGist（预览版需要完整安装流程）',
+        '如果手动放行，执行：<code>sudo xattr -rd com.apple.quarantine /Applications/PodGist.app</code>',
+        '然后再次打开 PodGist'
+      ]
+    };
+  }
+
+  // 后端连续崩溃
+  if (lower.includes('连续退出') || lower.includes('restart') || lower.includes('maxrestart') || lower.includes('restartcount')) {
+    return {
+      title: '后端启动后立即崩溃',
+      summary: '后端进程启动后迅速退出，可能是环境配置问题。',
+      hints: [
+        '查看详细错误（上方"详细错误"区域）',
+        '打开 <code>~/Library/Logs/PodGist/backend-error.log</code> 查看后端崩溃原因',
+        '可能是 Python 依赖缺失或 AI 模型加载失败'
+      ]
+    };
+  }
+
+  // api-engine 找不到
+  if (lower.includes('api-engine') || lower.includes('start_electron') || lower.includes('pythonexe')) {
+    return {
+      title: '后端二进制文件缺失',
+      summary: '找不到 PodGist 后端执行文件。',
+      hints: [
+        '重新下载并安装 PodGist',
+        '安装包可能已损坏，删除后重新从 GitHub Release 下载'
+      ]
+    };
+  }
+
+  // 默认兜底
+  return {
+    title: '后端启动失败',
+    summary: 'PodGist 后端引擎启动时遇到未知错误。',
+    hints: [
+      '重启 PodGist 应用',
+      '查看上方"详细错误"了解具体原因',
+      '如果问题持续，请将详细错误信息反馈给开发者'
+    ]
+  };
+}
 }
 
 function escapeHtml(text) {

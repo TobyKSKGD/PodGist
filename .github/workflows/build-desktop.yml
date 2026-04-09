@@ -65,21 +65,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # ===== Job B: 构建矩阵 (mac + win) =====
-  build:
+  # ===== Job B: macOS 构建 =====
+  build-mac:
     needs: create-release
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest
-            platform: mac
-            artifact_pattern: '*.dmg'
-          - os: windows-latest
-            platform: win
-            artifact_pattern: '*.exe'
-
+    runs-on: macos-latest
+    if: github.event.inputs.platform == 'all' || github.event.inputs.platform == 'mac'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -89,47 +79,15 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      # ===== 前端构建 (两个平台都需要) =====
+      # ===== 前端构建 =====
       - name: Build frontend
         run: |
           npm install
           npm run build
         working-directory: frontend
 
-      # ===== Windows 专属步骤 =====
-      - name: Setup Python (Windows)
-        if: matrix.platform == 'win'
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: 'pip'
-          cache-dependency-path: requirements.txt
-
-      - name: Install Python deps (Windows)
-        if: matrix.platform == 'win'
-        run: pip install -r requirements.txt
-
-      - name: Install PyInstaller (Windows)
-        if: matrix.platform == 'win'
-        run: pip install pyinstaller==6.19.0
-
-      - name: Syntax check backend
-        if: matrix.platform == 'win'
-        run: python scripts/check_backend.py
-
-      - name: Build backend (Windows)
-        if: matrix.platform == 'win'
-        shell: pwsh
-        run: powershell -ExecutionPolicy Bypass -File scripts/release/build-backend-win.ps1
-
-      - name: Fetch FFmpeg (Windows)
-        if: matrix.platform == 'win'
-        shell: pwsh
-        run: powershell -ExecutionPolicy Bypass -File scripts/release/fetch-ffmpeg-win.ps1
-
       # ===== macOS 专属步骤 =====
       - name: Setup Python (macOS)
-        if: matrix.platform == 'mac'
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -137,21 +95,17 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - name: Bootstrap runtime (macOS)
-        if: matrix.platform == 'mac'
         run: bash scripts/release/bootstrap-runtime-mac.sh
 
       - name: Install PyInstaller (macOS)
-        if: matrix.platform == 'mac'
         run: |
           VENV_PYTHON="$GITHUB_WORKSPACE/electron/resources/python_venv/bin/python3"
           "$VENV_PYTHON" -m pip install pyinstaller==6.19.0
 
       - name: Syntax check backend (macOS)
-        if: matrix.platform == 'mac'
         run: python scripts/check_backend.py
 
       - name: Build backend (macOS)
-        if: matrix.platform == 'mac'
         env:
           PROJECT_ROOT: ${{ github.workspace }}
         run: bash scripts/release/build-backend-mac.sh
@@ -161,36 +115,15 @@ jobs:
         run: npm ci
         working-directory: electron
 
-      # ===== Electron 构建（走完整构建链：包含 prebuild） =====
-      - name: Build Electron (${{ matrix.platform }})
+      # ===== Electron 构建 =====
+      - name: Build Electron (mac)
         run: |
           echo "electron-builder version: $(node -p 'require("./package.json").version')"
-          npm run build:${{ matrix.platform }}
+          npm run build:mac
         working-directory: electron
 
       # ===== 查找 unpacked 目录（用于验包） =====
-      - name: Locate unpacked app (Windows)
-        if: matrix.platform == 'win'
-        id: locate-win-unpacked
-        shell: pwsh
-        run: |
-          # electron-builder 将 unpacked 输出到 repo root release/{version}/win-unpacked
-          Set-Location $env:GITHUB_WORKSPACE
-          Write-Host "Current directory: $PWD"
-          # 递归查找 win-unpacked 目录
-          $unpacked = Get-ChildItem "release" -Directory -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq "win-unpacked" } | Select-Object -First 1
-          if ($unpacked) {
-            $path = $unpacked.FullName
-            echo "path=$path" >> $env:GITHUB_OUTPUT
-            echo "Found: $path"
-          } else {
-            Write-Host "ERROR: No win-unpacked directory found in release/"
-            Get-ChildItem "release" -Recurse -Directory -ErrorAction SilentlyContinue | Select-Object -First 10 FullName
-            exit 1
-          }
-
       - name: Locate unpacked app (macOS)
-        if: matrix.platform == 'mac'
         id: locate-mac-unpacked
         run: |
           # macOS DMG 挂载后包含 unpacked .app
@@ -206,67 +139,8 @@ jobs:
           echo "ERROR: No PodGist.app found in release/ or electron/release/"
           exit 1
 
-      # ===== 目标二：验包（打包完成后验证关键文件） =====
-      - name: Verify Windows package contents
-        if: matrix.platform == 'win'
-        shell: pwsh
-        run: |
-          $unpacked = "${{ steps.locate-win-unpacked.outputs.path }}"
-          $errors = @()
-
-          Write-Host "=== 验包: Windows unpacked ==="
-          Write-Host "Unpacked path: $unpacked"
-
-          # 检查 api-engine.exe
-          $apiEngine = Join-Path $unpacked "resources\api\api-engine.exe"
-          if (Test-Path $apiEngine) {
-            $size = [math]::Round((Get-Item $apiEngine).Length / 1MB, 2)
-            Write-Host "[OK] resources/api/api-engine.exe ($size MB)" -ForegroundColor Green
-          } else {
-            Write-Host "[MISSING] resources/api/api-engine.exe" -ForegroundColor Red
-            $errors += "api-engine.exe"
-          }
-
-          # 检查 ffmpeg.exe
-          $ffmpeg = Join-Path $unpacked "resources\ffmpeg\ffmpeg.exe"
-          if (Test-Path $ffmpeg) {
-            Write-Host "[OK] resources/ffmpeg/ffmpeg.exe" -ForegroundColor Green
-          } else {
-            Write-Host "[MISSING] resources/ffmpeg/ffmpeg.exe" -ForegroundColor Red
-            $errors += "ffmpeg.exe"
-          }
-
-          # 检查 ffprobe.exe
-          $ffprobe = Join-Path $unpacked "resources\ffmpeg\ffprobe.exe"
-          if (Test-Path $ffprobe) {
-            Write-Host "[OK] resources/ffmpeg/ffprobe.exe" -ForegroundColor Green
-          } else {
-            Write-Host "[MISSING] resources/ffmpeg/ffprobe.exe" -ForegroundColor Red
-            $errors += "ffprobe.exe"
-          }
-
-          # 列出 resources 目录内容（用于调试）
-          Write-Host ""
-          Write-Host "=== resources/ 目录内容 ==="
-          $resourcesDir = Join-Path $unpacked "resources"
-          if (Test-Path $resourcesDir) {
-            Get-ChildItem $resourcesDir | ForEach-Object { Write-Host "  $($_.Name)/" }
-          } else {
-            Write-Host "  (resources dir not found!)" -ForegroundColor Red
-          }
-
-          # 验包失败则禁止上传
-          if ($errors.Count -gt 0) {
-            Write-Host ""
-            Write-Host "ERROR: 验包失败，以下文件缺失: $($errors -join ', ')" -ForegroundColor Red
-            exit 1
-          }
-
-          Write-Host ""
-          Write-Host "=== 验包通过 ===" -ForegroundColor Green
-
+      # ===== 验包（打包完成后验证关键文件） =====
       - name: Verify macOS package contents
-        if: matrix.platform == 'mac'
         run: |
           set -e
           APP_PATH="${{ steps.locate-mac-unpacked.outputs.path }}"
@@ -473,11 +347,172 @@ jobs:
             echo "WARNING: $WARNINGS 个警告（但验包通过）"
           fi
           echo ""
-          echo "=== 验包通过 ===" -ForegroundColor Green
+          echo "=== 验包通过 ==="
+
+      # ===== 查找最终安装包产物 =====
+      - name: Find installer (macOS)
+        id: find-mac
+        run: |
+          echo "=== Searching for .dmg installer ==="
+          for dir in electron/release release electron/out; do
+            dmgs=$(find "$dir" -name "*.dmg" -type f 2>/dev/null | head -1)
+            if [ -n "$dmgs" ]; then
+              echo "Found DMG: $dmgs"
+              echo "path=$dmgs" >> $GITHUB_OUTPUT
+              echo "name=$(basename $dmgs)" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+          done
+          echo "ERROR: No .dmg found"
+          exit 1
+
+      # ===== 上传 installer artifact =====
+      - name: Upload installer artifact (macOS)
+        uses: actions/upload-artifact@v4
+        with:
+          name: podgist-macos
+          path: ${{ steps.find-mac.outputs.path }}
+          retention-days: 5
+
+  # ===== Job C: Windows 构建 =====
+  build-win:
+    needs: create-release
+    runs-on: windows-latest
+    if: github.event.inputs.platform == 'all' || github.event.inputs.platform == 'win'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # ===== 前端构建 =====
+      - name: Build frontend
+        run: |
+          npm install
+          npm run build
+        working-directory: frontend
+
+      # ===== Windows 专属步骤 =====
+      - name: Setup Python (Windows)
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+
+      - name: Bootstrap runtime (Windows)
+        shell: pwsh
+        run: bash scripts/release/bootstrap-runtime-win.ps1
+
+      - name: Install PyInstaller (Windows)
+        shell: pwsh
+        run: |
+          python -m pip install pyinstaller==6.19.0
+
+      - name: Syntax check backend
+        shell: pwsh
+        run: python scripts/check_backend.py
+
+      - name: Build backend (Windows)
+        shell: pwsh
+        env:
+          PROJECT_ROOT: ${{ github.workspace }}
+        run: bash scripts/release/build-backend-win.ps1
+
+      # ===== Electron 安装依赖 =====
+      - name: Install electron deps
+        run: npm ci
+        working-directory: electron
+
+      # ===== Electron 构建 =====
+      - name: Build Electron (Windows)
+        shell: pwsh
+        run: |
+          npm run build:win
+        working-directory: electron
+
+      # ===== 查找 unpacked 目录（用于验包） =====
+      - name: Locate unpacked app (Windows)
+        id: locate-win-unpacked
+        shell: pwsh
+        run: |
+          Set-Location $env:GITHUB_WORKSPACE
+          Write-Host "Current directory: $PWD"
+          # 递归查找 win-unpacked 目录
+          $unpacked = Get-ChildItem "release" -Directory -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq "win-unpacked" } | Select-Object -First 1
+          if ($unpacked) {
+            $path = $unpacked.FullName
+            echo "path=$path" >> $env:GITHUB_OUTPUT
+            echo "Found: $path"
+          } else {
+            Write-Host "ERROR: No win-unpacked directory found in release/"
+            Get-ChildItem "release" -Recurse -Directory -ErrorAction SilentlyContinue | Select-Object -First 10 FullName
+            exit 1
+          }
+
+      # ===== 验包（打包完成后验证关键文件） =====
+      - name: Verify Windows package contents
+        shell: pwsh
+        run: |
+          $unpacked = "${{ steps.locate-win-unpacked.outputs.path }}"
+          $errors = @()
+
+          Write-Host "=== 验包: Windows unpacked ==="
+          Write-Host "Unpacked path: $unpacked"
+
+          # 检查 api-engine.exe
+          $apiEngine = Join-Path $unpacked "resources\api\api-engine.exe"
+          if (Test-Path $apiEngine) {
+            $size = [math]::Round((Get-Item $apiEngine).Length / 1MB, 2)
+            Write-Host "[OK] resources/api/api-engine.exe ($size MB)" -ForegroundColor Green
+          } else {
+            Write-Host "[MISSING] resources/api/api-engine.exe" -ForegroundColor Red
+            $errors += "api-engine.exe"
+          }
+
+          # 检查 ffmpeg.exe
+          $ffmpeg = Join-Path $unpacked "resources\ffmpeg\ffmpeg.exe"
+          if (Test-Path $ffmpeg) {
+            Write-Host "[OK] resources/ffmpeg/ffmpeg.exe" -ForegroundColor Green
+          } else {
+            Write-Host "[MISSING] resources/ffmpeg/ffmpeg.exe" -ForegroundColor Red
+            $errors += "ffmpeg.exe"
+          }
+
+          # 检查 ffprobe.exe
+          $ffprobe = Join-Path $unpacked "resources\ffmpeg\ffprobe.exe"
+          if (Test-Path $ffprobe) {
+            Write-Host "[OK] resources/ffmpeg/ffprobe.exe" -ForegroundColor Green
+          } else {
+            Write-Host "[MISSING] resources/ffmpeg/ffprobe.exe" -ForegroundColor Red
+            $errors += "ffprobe.exe"
+          }
+
+          # 列出 resources 目录内容（用于调试）
+          Write-Host ""
+          Write-Host "=== resources/ 目录内容 ==="
+          $resourcesDir = Join-Path $unpacked "resources"
+          if (Test-Path $resourcesDir) {
+            Get-ChildItem $resourcesDir | ForEach-Object { Write-Host "  $($_.Name)/" }
+          } else {
+            Write-Host "  (resources dir not found!)" -ForegroundColor Red
+          }
+
+          # 验包失败则禁止上传
+          if ($errors.Count -gt 0) {
+            Write-Host ""
+            Write-Host "ERROR: 验包失败，以下文件缺失: $($errors -join ', ')" -ForegroundColor Red
+            exit 1
+          }
+
+          Write-Host ""
+          Write-Host "=== 验包通过 ===" -ForegroundColor Green
 
       # ===== 查找最终安装包产物 =====
       - name: Find installer (Windows)
-        if: matrix.platform == 'win'
         shell: pwsh
         id: find-win
         run: |
@@ -499,43 +534,17 @@ jobs:
             exit 1
           }
 
-      - name: Find installer (macOS)
-        if: matrix.platform == 'mac'
-        id: find-mac
-        run: |
-          echo "=== Searching for .dmg installer ==="
-          for dir in electron/release release electron/out; do
-            dmgs=$(find "$dir" -name "*.dmg" -type f 2>/dev/null | head -1)
-            if [ -n "$dmgs" ]; then
-              echo "Found DMG: $dmgs"
-              echo "path=$dmgs" >> $GITHUB_OUTPUT
-              echo "name=$(basename $dmgs)" >> $GITHUB_OUTPUT
-              exit 0
-            fi
-          done
-          echo "ERROR: No .dmg found"
-          exit 1
-
       # ===== 上传 installer artifact =====
       - name: Upload installer artifact (Windows)
-        if: matrix.platform == 'win'
         uses: actions/upload-artifact@v4
         with:
           name: podgist-windows
           path: ${{ steps.find-win.outputs.path }}
           retention-days: 5
 
-      - name: Upload installer artifact (macOS)
-        if: matrix.platform == 'mac'
-        uses: actions/upload-artifact@v4
-        with:
-          name: podgist-macos
-          path: ${{ steps.find-mac.outputs.path }}
-          retention-days: 5
-
-  # ===== Job C: 统一发布（Linux 中执行 gh release upload） =====
+  # ===== Job D: 统一发布（Linux 中执行 gh release upload） =====
   publish-assets:
-    needs: [create-release, build]
+    needs: [create-release, build-mac, build-win]
     runs-on: ubuntu-latest
     if: needs.create-release.outputs.tag != ''
     steps:
