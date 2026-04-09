@@ -288,14 +288,15 @@ jobs:
           fi
 
           # =============================================
-          # 2. 检查 python_venv 目录结构
+          # 2. python_venv 已废弃：使用独立 api-engine 二进制
+          #    保留检查但将缺失改为 WARNING（非 ERROR）
           # =============================================
           VENV_PATH="$APP_PATH/Contents/Resources/python_venv"
           if [ -d "$VENV_PATH" ]; then
-            echo "[OK] Contents/Resources/python_venv/ (directory exists)"
+            echo "[DEPRECATED] Contents/Resources/python_venv/ (已废弃，请使用 api-engine)"
+            WARNINGS=$((WARNINGS+1))
           else
-            echo "[MISSING] Contents/Resources/python_venv/"
-            ERRORS=$((ERRORS+1))
+            echo "[INFO] Contents/Resources/python_venv/ 不存在（使用独立 api-engine 二进制）"
           fi
 
           VENV_BIN_PYTHON3="$VENV_PATH/bin/python3"
@@ -304,62 +305,67 @@ jobs:
 
           # =============================================
           # 3. 检查 python3 是否为符号链接（破坏可移植性）
+          #    仅在 python_venv 存在时检查
           # =============================================
           echo ""
           echo "=== venv 可移植性诊断 ==="
-          if [ -L "$VENV_BIN_PYTHON3" ]; then
-            TARGET=$(readlink "$VENV_BIN_PYTHON3")
-            echo "[FAIL] python3 is a SYMLINK: $VENV_BIN_PYTHON3 -> $TARGET"
-            if echo "$TARGET" | grep -q "^/"; then
-              echo "       *** ABSOLUTE symlink detected - will BREAK on end-user machines!"
-              echo "       *** This venv was created WITHOUT --copies flag!"
-              ERRORS=$((ERRORS+1))
+          if [ -d "$VENV_PATH" ]; then
+            if [ -L "$VENV_BIN_PYTHON3" ]; then
+              TARGET=$(readlink "$VENV_BIN_PYTHON3")
+              echo "[FAIL] python3 is a SYMLINK: $VENV_BIN_PYTHON3 -> $TARGET"
+              if echo "$TARGET" | grep -q "^/"; then
+                echo "       *** ABSOLUTE symlink detected - will BREAK on end-user machines!"
+                echo "       *** This venv was created WITHOUT --copies flag!"
+                ERRORS=$((ERRORS+1))
+              else
+                echo "       [INFO] Relative symlink (unusual but may work)"
+                WARNINGS=$((WARNINGS+1))
+              fi
+            elif [ -f "$VENV_BIN_PYTHON3" ]; then
+              echo "[OK] python3 is a regular file (not symlink)"
             else
-              echo "       [INFO] Relative symlink (unusual but may work)"
+              echo "[MISSING] python3 not found at all"
               WARNINGS=$((WARNINGS+1))
             fi
-          elif [ -f "$VENV_BIN_PYTHON3" ]; then
-            echo "[OK] python3 is a regular file (not symlink)"
-          else
-            echo "[MISSING] python3 not found at all"
-            ERRORS=$((ERRORS+1))
-          fi
 
-          # =============================================
-          # 4. 检查 python 符号链接
-          # =============================================
-          if [ -L "$VENV_BIN_PYTHON" ]; then
-            TARGET=$(readlink "$VENV_BIN_PYTHON")
-            echo "[FAIL] python is a SYMLINK: $VENV_BIN_PYTHON -> $TARGET"
-            if echo "$TARGET" | grep -q "^/"; then
-              echo "       *** ABSOLUTE symlink - will BREAK on end-user machines!"
-              ERRORS=$((ERRORS+1))
+            # =============================================
+            # 4. 检查 python 符号链接
+            # =============================================
+            if [ -L "$VENV_BIN_PYTHON" ]; then
+              TARGET=$(readlink "$VENV_BIN_PYTHON")
+              echo "[FAIL] python is a SYMLINK: $VENV_BIN_PYTHON -> $TARGET"
+              if echo "$TARGET" | grep -q "^/"; then
+                echo "       *** ABSOLUTE symlink - will BREAK on end-user machines!"
+                ERRORS=$((ERRORS+1))
+              fi
+            elif [ -f "$VENV_BIN_PYTHON" ]; then
+              echo "[OK] python is a regular file (not symlink)"
             fi
-          elif [ -f "$VENV_BIN_PYTHON" ]; then
-            echo "[OK] python is a regular file (not symlink)"
-          fi
 
-          # =============================================
-          # 5. 检查 pyvenv.cfg 是否含 CI 构建机路径
-          # =============================================
-          echo ""
-          echo "=== pyvenv.cfg 内容检查 ==="
-          if [ -f "$VENV_PYVENV_CFG" ]; then
-            echo "pyvenv.cfg contents:"
-            cat "$VENV_PYVENV_CFG" | sed 's/^/  /'
-            if grep -q "/Users/runner/" "$VENV_PYVENV_CFG" 2>/dev/null; then
-              echo "[FAIL] CI runner path detected in pyvenv.cfg!"
-              echo "       Path contains /Users/runner/ - will break on other machines!"
-              ERRORS=$((ERRORS+1))
-            elif grep -q "/home/" "$VENV_PYVENV_CFG" 2>/dev/null; then
-              echo "[FAIL] Linux home path detected in pyvenv.cfg!"
-              ERRORS=$((ERRORS+1))
+            # =============================================
+            # 5. 检查 pyvenv.cfg 是否含 CI 构建机路径
+            # =============================================
+            echo ""
+            echo "=== pyvenv.cfg 内容检查 ==="
+            if [ -f "$VENV_PYVENV_CFG" ]; then
+              echo "pyvenv.cfg contents:"
+              cat "$VENV_PYVENV_CFG" | sed 's/^/  /'
+              if grep -q "/Users/runner/" "$VENV_PYVENV_CFG" 2>/dev/null; then
+                echo "[FAIL] CI runner path detected in pyvenv.cfg!"
+                echo "       Path contains /Users/runner/ - will break on other machines!"
+                ERRORS=$((ERRORS+1))
+              elif grep -q "/home/" "$VENV_PYVENV_CFG" 2>/dev/null; then
+                echo "[FAIL] Linux home path detected in pyvenv.cfg!"
+                ERRORS=$((ERRORS+1))
+              else
+                echo "[OK] No CI/Linux path detected in pyvenv.cfg"
+              fi
             else
-              echo "[OK] No CI/Linux path detected in pyvenv.cfg"
+              echo "[MISSING] pyvenv.cfg not found"
+              WARNINGS=$((WARNINGS+1))
             fi
           else
-            echo "[MISSING] pyvenv.cfg not found"
-            ERRORS=$((ERRORS+1))
+            echo "[INFO] python_venv 不存在，跳过 venv 可移植性检查"
           fi
 
           # =============================================
@@ -407,11 +413,11 @@ jobs:
           fi
 
           # =============================================
-          # 9. NON-PORTABLE VENV 警告标记
+          # 9. NON-PORTABLE VENV 警告标记（仅在 python_venv 存在时相关）
           # =============================================
-          if [ -L "$VENV_BIN_PYTHON3" ] || grep -q "/Users/runner/" "$VENV_PYVENV_CFG" 2>/dev/null; then
+          if [ -d "$VENV_PATH" ] && ([ -L "$VENV_BIN_PYTHON3" ] || grep -q "/Users/runner/" "$VENV_PYVENV_CFG" 2>/dev/null); then
             echo ""
-            echo "!!! NON-PORTABLE VENV DETECTED !!!" -ForegroundColor Red
+            echo "!!! NON-PORTABLE VENV DETECTED !!!"
             echo "    This venv will NOT work on end-user machines!"
             echo "    Recommendation: Use standalone api-engine binary instead."
           fi
