@@ -3,8 +3,22 @@
 # Uses PyInstaller to bundle backend into a standalone executable (like api-engine on Windows)
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# PROJECT_ROOT is passed in by the CI workflow; fall back to deriving from script location for local runs
+if [ -z "$PROJECT_ROOT" ]; then
+    # When run from project root as: bash scripts/release/build-backend-mac.sh
+    # BASH_SOURCE[0] = scripts/release/build-backend-mac.sh
+    # dirname gives scripts/release, two levels up = project root
+    _src="${BASH_SOURCE[0]}"
+    if [ -n "$_src" ] && [ "$_src" != "${0}" ]; then
+        _script_dir="$(dirname "$_src")"
+        _script_dir="$(cd "$_script_dir" && pwd -P)"
+        PROJECT_ROOT="$(cd "${_script_dir}/../.." && pwd -P)"
+    else
+        # Fallback: assume we are in the project root
+        PROJECT_ROOT="$(pwd -P)"
+    fi
+    unset _src _script_dir
+fi
 ELECTRON_DIR="$PROJECT_ROOT/electron"
 BACKEND_DIR="$PROJECT_ROOT/backend"
 API_SPEC="$BACKEND_DIR/api.spec"
