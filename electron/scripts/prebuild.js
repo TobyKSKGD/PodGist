@@ -14,7 +14,7 @@ const os = require('os');
 const electronDir = path.dirname(__dirname);  // electron/ 目录
 const projectRoot = path.dirname(electronDir);  // PodGist/ 目录
 
-function copyDir(src, dest) {
+function copyDir(src, dest, excludeDirs = []) {
   // 先删除目标如果存在
   if (fs.existsSync(dest)) {
     if (fs.statSync(dest).isDirectory()) {
@@ -29,13 +29,27 @@ function copyDir(src, dest) {
   const entries = fs.readdirSync(src, { withFileTypes: true });
 
   for (const entry of entries) {
+    // 跳过排除的目录
+    if (excludeDirs.includes(entry.name)) {
+      continue;
+    }
+
     const srcPath = path.join(src, entry.name);
     const destPath = path.join(dest, entry.name);
 
     if (entry.isDirectory()) {
-      copyDir(srcPath, destPath);
+      copyDir(srcPath, destPath, excludeDirs);
     } else {
-      fs.copyFileSync(srcPath, destPath);
+      try {
+        fs.copyFileSync(srcPath, destPath);
+      } catch (err) {
+        // 跳过不支持的文件类型（如 macOS framework sockets）
+        if (err.code === 'ENOTSUP' || err.code === 'ENOENT') {
+          console.warn(`[prebuild] 跳过不支持的文件: ${srcPath} (${err.code})`);
+        } else {
+          throw err;
+        }
+      }
     }
   }
 }
@@ -85,11 +99,12 @@ if (fs.existsSync(reqSrc)) {
 }
 
 // 复制 backend/（根目录为唯一真源 -> electron/backend/）
+// 排除 dist/ 目录（PyInstaller 产物由单独的后端构建脚本处理）
 const backendSrc = path.join(projectRoot, 'backend');
 const backendDest = path.join(electronDir, 'backend');
 if (fs.existsSync(backendSrc)) {
-  console.log('[prebuild] 复制 backend/ -> electron/backend/');
-  copyDir(backendSrc, backendDest);
+  console.log('[prebuild] 复制 backend/ -> electron/backend/ (排除 dist/)');
+  copyDir(backendSrc, backendDest, ['dist']);
 } else {
   console.error('[prebuild] 错误: backend/ 目录不存在');
 }
