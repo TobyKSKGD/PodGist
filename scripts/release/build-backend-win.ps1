@@ -9,8 +9,8 @@ $absBackendDir = Join-Path $absProjectRoot "backend"
 $absApiSpec = Join-Path $absBackendDir "api.spec"
 $absApiDist = Join-Path $absBackendDir "dist"
 $absApiOutput = Join-Path $absApiDist "api"
-$absElectronDist = Join-Path $absProjectRoot "electron/dist"
-$absElectronApi = Join-Path $absElectronDist "api"
+$absBuildDir = Join-Path $absBackendDir "build"
+$absElectronApi = Join-Path $absProjectRoot "electron/dist/api"
 
 Write-Host "=== PodGist Windows Backend Build ===" -ForegroundColor Cyan
 Write-Host "Project: ${absProjectRoot}"
@@ -59,42 +59,35 @@ Write-Host "  Cleaning old output..."
 if (Test-Path $absApiDist) {
     Remove-Item $absApiDist -Recurse -Force -ErrorAction SilentlyContinue
 }
-$absBuildDir = Join-Path $absBackendDir "build"
 if (Test-Path $absBuildDir) {
     Remove-Item $absBuildDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Write-Host "  Running pyinstaller..."
+Write-Host "  Running PyInstaller..."
 Write-Host "    Spec: ${absApiSpec}"
-Write-Host "    CWD: ${absBackendDir}"
+Write-Host "    distpath: ${absApiDist}"
+Write-Host "    workpath: ${absBuildDir}"
 
-Push-Location $absBackendDir
-try {
-    # 运行 pyinstaller，输出到 stdout 用于调试
-    cmd /c "pyinstaller --clean `"$absApiSpec`" 2>&1" | ForEach-Object {
-        Write-Host "    pyinstaller: $_"
-    }
-    if ($LASTEXITCODE -notin @(0, 1)) {
-        Write-Host "ERROR: PyInstaller failed with exit code $LASTEXITCODE" -ForegroundColor Red
-        exit 1
-    }
-    Write-Host "  PyInstaller completed (exit code: $LASTEXITCODE)"
-    Write-Host "  PyInstaller completed successfully"
-} finally {
-    Pop-Location
+# 不加 --onedir/--onefile，spec 文件已包含此配置
+# 不使用 cmd /c | ForEach-Object，直接运行
+python -m PyInstaller --clean --noconfirm --distpath $absApiDist --workpath $absBuildDir $absApiSpec
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERROR: PyInstaller failed with exit code $LASTEXITCODE" -ForegroundColor Red
+    exit 1
 }
+Write-Host "  PyInstaller done" -ForegroundColor Green
 
 # Step 4: Locate output
 Write-Host "`n[4/5] Locating output..." -ForegroundColor Yellow
-if (Test-Path $absApiOutput) {
-    Write-Host "Output: ${absApiOutput}" -ForegroundColor Green
-} else {
-    Write-Host "ERROR: Output dir not found: ${absApiOutput}" -ForegroundColor Red
-    if (Test-Path $absApiDist) {
-        Get-ChildItem $absApiDist -Recurse | Select-Object -First 20 FullName
-    }
+if (-not (Test-Path $absApiDist)) {
+    Write-Host "ERROR: dist dir not found: ${absApiDist}" -ForegroundColor Red
     exit 1
 }
+if (-not (Test-Path $absApiOutput)) {
+    Write-Host "ERROR: api output dir not found: ${absApiOutput}" -ForegroundColor Red
+    exit 1
+}
+Write-Host "Output: ${absApiOutput}" -ForegroundColor Green
 
 # Step 5: Verify PyInstaller output
 Write-Host "`n[5/5] Verifying build artifacts..." -ForegroundColor Yellow
@@ -120,6 +113,7 @@ if (-not $allOk) {
     Write-Host "ERROR: PyInstaller artifacts incomplete" -ForegroundColor Red
     exit 1
 }
+Write-Host "All artifacts verified" -ForegroundColor Green
 
 # Copy to electron/dist/api
 Write-Host "`nCopying to electron/dist/api..." -ForegroundColor Yellow
@@ -128,9 +122,9 @@ Write-Host "  Dest: ${absElectronApi}"
 
 New-Item -ItemType Directory -Force -Path $absElectronApi | Out-Null
 
-Write-Host "  Running robocopy..."
-$robocopyCmd = "robocopy `"$absApiOutput`" `"$absElectronApi`" /MIR /NFL /NDL /NJH /NJS /NC /NS /NP"
-$robocopyResult = Invoke-Expression $robocopyCmd
+# robocopy /MIR 镜像复制，/S 复制子目录
+# robocopy exit 0-7 都是成功
+robocopy $absApiOutput $absElectronApi /MIR /S /NFL /NDL /NJH /NJS /NC /NS /NP
 $robocopyExit = $LASTEXITCODE
 Write-Host "  robocopy exit code: $robocopyExit"
 if ($robocopyExit -ge 8) {
@@ -138,19 +132,15 @@ if ($robocopyExit -ge 8) {
     exit 1
 }
 
+# 严格检查复制结果
 $destApiEngine = Join-Path $absElectronApi "api-engine.exe"
 if (-not (Test-Path $destApiEngine)) {
-    Write-Host "ERROR: api-engine.exe not found after copy: $destApiEngine" -ForegroundColor Red
+    Write-Host "ERROR: api-engine.exe not found after copy: ${destApiEngine}" -ForegroundColor Red
     exit 1
 }
-
-Write-Host "`nContents of ${absElectronApi}:"
-Get-ChildItem $absElectronApi | ForEach-Object {
-    $suffix = if ($_.PSIsContainer) { "/" } else { "" }
-    Write-Host "  $($_.Name)$suffix"
-}
+Write-Host "  Copy verified: ${destApiEngine}" -ForegroundColor Green
 
 Write-Host ""
 Write-Host "=== Windows Backend Build SUCCESS ===" -ForegroundColor Green
-Write-Host "Output: $destApiEngine"
+Write-Host "Output: ${destApiEngine}"
 exit 0
