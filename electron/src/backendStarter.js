@@ -23,9 +23,12 @@ class BackendStarter {
     this._backendErrorLogPath = null;
     // 外部设置的致命错误回调（由 main.js 注入）
     this._onBackendFatal = null;
-    // 运行时路径（由 preparePythonVenv 设置）
+    // 运行时路径（由 preparePythonVenv / prepareFFmpeg 设置）
     this._apiEngineExe = null;
     this._startScript = null;
+    this._ffmpegRuntimeDir = null;
+    this._ffmpegExe = null;
+    this._ffprobeExe = null;
   }
 
   get isPackaged() {
@@ -238,6 +241,11 @@ class BackendStarter {
         this._appendLog(BACKEND_ERROR_LOG, '警告: 未找到打包的 FFmpeg');
       }
 
+      // 记录 Windows FFmpeg 运行时路径
+      this._ffmpegRuntimeDir = destDir;
+      this._ffmpegExe = destFFmpeg;
+      this._ffprobeExe = destFFprobe;
+
       process.env.PATH = `${destDir};${process.env.PATH}`;
       process.env.FFMPEG_BINARY = destFFmpeg;
 
@@ -255,16 +263,37 @@ class BackendStarter {
       if (!fs.existsSync(destFFmpeg) && fs.existsSync(bundledFFmpeg)) {
         fs.copyFileSync(bundledFFmpeg, destFFmpeg);
         fs.chmodSync(destFFmpeg, 0o755);
-        this._appendLog(BACKEND_LOG, `FFmpeg 已准备: ${destFFmpeg}`);
+        this._appendLog(BACKEND_LOG, `FFmpeg 已复制到: ${destFFmpeg}`);
       }
       if (!fs.existsSync(destFFprobe) && fs.existsSync(bundledFFprobe)) {
         fs.copyFileSync(bundledFFprobe, destFFprobe);
         fs.chmodSync(destFFprobe, 0o755);
+        this._appendLog(BACKEND_LOG, `FFprobe 已复制到: ${destFFprobe}`);
       }
 
-      if (fs.existsSync(bundledFFmpeg)) {
-        console.log('[BackendStarter] FFmpeg 已准备:', destFFmpeg);
-      } else {
+      // 记录 macOS FFmpeg 运行时路径（唯一真源）
+      this._ffmpegRuntimeDir = destDir;
+      this._ffmpegExe = destFFmpeg;
+      this._ffprobeExe = destFFprobe;
+
+      // 启动前检查：确认 ffmpeg/ffprobe 存在且可执行
+      const fxOk = (p) => {
+        if (!fs.existsSync(p)) return `MISSING: ${p}`;
+        try {
+          fs.accessSync(p, fs.constants.X_OK);
+          return `OK: ${p}`;
+        } catch {
+          return `NOT EXECUTABLE: ${p}`;
+        }
+      };
+      const ffmpegStatus = fxOk(destFFmpeg);
+      const ffprobeStatus = fxOk(destFFprobe);
+      this._appendLog(BACKEND_LOG, `FFmpeg 检查: ${ffmpegStatus}`);
+      this._appendLog(BACKEND_LOG, `FFprobe 检查: ${ffprobeStatus}`);
+      console.log(`[BackendStarter] FFmpeg: ${ffmpegStatus}`);
+      console.log(`[BackendStarter] FFprobe: ${ffprobeStatus}`);
+
+      if (!fs.existsSync(bundledFFmpeg)) {
         console.warn('[BackendStarter] 警告: 未找到打包的 FFmpeg，尝试使用系统 FFmpeg');
         this._appendLog(BACKEND_ERROR_LOG, '警告: 未找到打包的 FFmpeg');
       }
@@ -478,17 +507,29 @@ class BackendStarter {
       NODE_ENV: process.env.NODE_ENV || 'production'
     };
 
-    // macOS/Windows: 注入 FFmpeg/FFprobe 路径到环境变量
-    const ffmpegDir = path.join(process.resourcesPath, 'ffmpeg');
-    if (platform === 'win32') {
-      env.PATH = `${ffmpegDir};${env.PATH}`;
-      env.FFMPEG_BINARY = path.join(ffmpegDir, 'ffmpeg.exe');
-      env.FFPROBE_BINARY = path.join(ffmpegDir, 'ffprobe.exe');
-    } else {
-      // macOS: 将 ffmpeg 目录添加到 PATH 最前面
-      env.PATH = `${ffmpegDir}:${env.PATH}`;
-      env.FFMPEG_BINARY = path.join(ffmpegDir, 'ffmpeg');
-      env.FFPROBE_BINARY = path.join(ffmpegDir, 'ffprobe');
+    // macOS: 注入运行时 FFmpeg 路径（唯一真源 = userData/bin/）
+    // 不再使用 process.resourcesPath/ffmpeg（那是打包资源，不一定可执行）
+    if (platform === 'darwin') {
+      if (this._ffmpegRuntimeDir && this._ffmpegExe && this._ffprobeExe) {
+        env.PATH = `${this._ffmpegRuntimeDir}:${env.PATH}`;
+        env.FFMPEG_BINARY = this._ffmpegExe;
+        env.FFPROBE_BINARY = this._ffprobeExe;
+        env.PODGIST_FFMPEG_DIR = this._ffmpegRuntimeDir;
+        this._appendLog(BACKEND_LOG, `macOS FFmpeg env: PATH=...:${this._ffmpegRuntimeDir}, FFMPEG_BINARY=${this._ffmpegExe}`);
+      } else {
+        const msg = `[BackendStarter] macOS _ffmpegRuntimeDir 未设置，但需要启动后端`;
+        this._appendLog(BACKEND_ERROR_LOG, msg);
+        throw new Error(msg);
+      }
+    } else if (platform === 'win32') {
+      // Windows: 使用 prepareFFmpeg 复制到 userData/bin 的路径
+      const destDir = path.join(this.userDataPath, 'bin');
+      const destFFmpeg = path.join(destDir, 'ffmpeg.exe');
+      const destFFprobe = path.join(destDir, 'ffprobe.exe');
+      env.PATH = `${destDir};${env.PATH}`;
+      env.FFMPEG_BINARY = destFFmpeg;
+      env.FFPROBE_BINARY = destFFprobe;
+      env.PODGIST_FFMPEG_DIR = destDir;
     }
 
     this._appendLog(BACKEND_LOG, `用户数据目录: ${this.userDataPath}`);

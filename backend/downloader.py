@@ -40,17 +40,66 @@ def _sanitize_title(title):
 
 def _get_ffmpeg_dir():
     """获取 ffmpeg 目录路径，用于 yt-dlp 的 ffmpeg_location 参数。
-    优先用 shutil.which 找系统 ffmpeg，否则用 backend/__init__.py 的 get_ffmpeg_path。
+
+    优先级（从高到低）：
+    1. PODGIST_FFMPEG_DIR  — backendStarter.js 注入的运行时路径（userData/bin/）
+    2. FFMPEG_BINARY / FFPROBE_BINARY — backendStarter.js 注入的明确路径
+    3. shutil.which('ffmpeg') — 系统 PATH 中找
+    4. get_ffmpeg_path() — 读取 PODGIST_RESOURCES_PATH 的打包资源路径
+
+    返回目录字符串，或 None（届时 yt-dlp 用系统 PATH）。
     """
-    # 先尝试 shutil.which 找系统 ffmpeg（dev 模式下最可靠）
-    which_ffmpeg = shutil.which('ffmpeg')
-    if which_ffmpeg:
-        return os.path.dirname(which_ffmpeg)
-    # 打包环境下用 resources_path
+    print('[Downloader] _get_ffmpeg_dir() 诊断:')
+    print(f'  PODGIST_FFMPEG_DIR   = {os.environ.get("PODGIST_FFMPEG_DIR", "(未设置)")}')
+    print(f'  FFMPEG_BINARY        = {os.environ.get("FFMPEG_BINARY", "(未设置)")}')
+    print(f'  FFPROBE_BINARY       = {os.environ.get("FFPROBE_BINARY", "(未设置)")}')
+    which = shutil.which('ffmpeg')
+    print(f'  shutil.which(ffmpeg)  = {which or "(未找到)"}')
+
+    # 1. 最高优先级：PODGIST_FFMPEG_DIR
+    podgist_dir = os.environ.get('PODGIST_FFMPEG_DIR')
+    if podgist_dir:
+        print(f'  -> 选用 PODGIST_FFMPEG_DIR: {podgist_dir}')
+        _check_ffmpeg_in_dir(podgist_dir)
+        return podgist_dir
+
+    # 2. FFMPEG_BINARY / FFPROBE_BINARY
+    ffmpeg_bin = os.environ.get('FFMPEG_BINARY')
+    if ffmpeg_bin:
+        ffmpeg_dir = os.path.dirname(ffmpeg_bin)
+        print(f'  -> 选用 FFMPEG_BINARY 目录: {ffmpeg_dir}')
+        _check_ffmpeg_in_dir(ffmpeg_dir)
+        return ffmpeg_dir
+
+    # 3. shutil.which
+    if which:
+        ffmpeg_dir = os.path.dirname(which)
+        print(f'  -> 选用 shutil.which 目录: {ffmpeg_dir}')
+        _check_ffmpeg_in_dir(ffmpeg_dir)
+        return ffmpeg_dir
+
+    # 4. 回退到打包资源路径
     ffmpeg_path = get_ffmpeg_path()
     ffmpeg_dir = os.path.dirname(ffmpeg_path)
-    # os.path.dirname('ffmpeg') 在 POSIX 上返回 ''，此时不设置 ffmpeg_location
-    return ffmpeg_dir if ffmpeg_dir else None
+    if ffmpeg_dir:
+        print(f'  -> 选用 get_ffmpeg_path() 目录: {ffmpeg_dir}')
+        _check_ffmpeg_in_dir(ffmpeg_dir)
+        return ffmpeg_dir
+
+    print('  -> 未能确定 ffmpeg 目录，返回 None（yt-dlp 使用系统 PATH）')
+    return None
+
+
+def _check_ffmpeg_in_dir(ffmpeg_dir):
+    """诊断：检查 ffmpeg_dir 中 ffmpeg 和 ffprobe 是否存在、是否可执行。"""
+    if not ffmpeg_dir or not os.path.isdir(ffmpeg_dir):
+        print(f'  [WARN] ffmpeg_dir 不存在或非目录: {ffmpeg_dir}')
+        return
+    for name in ['ffmpeg', 'ffprobe']:
+        fpath = os.path.join(ffmpeg_dir, name)
+        exists = os.path.exists(fpath)
+        executable = os.access(fpath, os.X_OK) if exists else False
+        print(f'  {name}: exists={exists}, executable={executable}, path={fpath}')
 
 
 def extract_info_with_ytdlp(url, cookies_path=None):
@@ -75,6 +124,13 @@ def extract_info_with_ytdlp(url, cookies_path=None):
 def download_audio_with_ytdlp(url, save_dir, title=None, prefer_m4a=False,
                                cookies_path=None, timeout=300):
     os.makedirs(save_dir, exist_ok=True)
+
+    print('[Downloader] === 下载任务环境诊断 ===')
+    print(f'  PATH = {os.environ.get("PATH", "(未设置)")[:200]}')
+    print(f'  PODGIST_FFMPEG_DIR = {os.environ.get("PODGIST_FFMPEG_DIR", "(未设置)")}')
+    print(f'  FFMPEG_BINARY      = {os.environ.get("FFMPEG_BINARY", "(未设置)")}')
+    print(f'  FFPROBE_BINARY    = {os.environ.get("FFPROBE_BINARY", "(未设置)")}')
+
     ffmpeg_dir = _get_ffmpeg_dir()
 
     # 获取音频信息（先 extract 再 download，用 process_info 获取实际 filepath）
@@ -112,6 +168,8 @@ def download_audio_with_ytdlp(url, save_dir, title=None, prefer_m4a=False,
         ydl_opts['ffmpeg_location'] = ffmpeg_dir
     if cookies_path and os.path.exists(cookies_path):
         ydl_opts['cookiefile'] = cookies_path
+
+    print(f'[Downloader] yt-dlp ffmpeg_location = {ydl_opts.get("ffmpeg_location", "(未设置)")}')
 
     # 记录下载前目录中的文件（用于下载后通过 mtime 找到新文件）
     before_files = {}
