@@ -71,7 +71,7 @@ Write-Host "    CWD: ${absBackendDir}"
 Push-Location $absBackendDir
 try {
     # 运行 pyinstaller，输出到 stdout 用于调试
-    cmd /c "pyinstaller --clean --onedir `"$absApiSpec`" 2>&1" | ForEach-Object {
+    cmd /c "pyinstaller --clean `"$absApiSpec`" 2>&1" | ForEach-Object {
         Write-Host "    pyinstaller: $_"
     }
     if ($LASTEXITCODE -notin @(0, 1)) {
