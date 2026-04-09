@@ -3,8 +3,9 @@
 # Uses PyInstaller to bundle backend into a standalone executable (like api-engine on Windows)
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="${SCRIPT_DIR%/scripts/release}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+ELECTRON_DIR="$PROJECT_ROOT/electron"
 BACKEND_DIR="$PROJECT_ROOT/backend"
 API_SPEC="$BACKEND_DIR/api.spec"
 API_DIST="$BACKEND_DIR/dist"
