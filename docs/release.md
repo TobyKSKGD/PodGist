@@ -115,4 +115,4 @@ git push origin v0.1.1
 
 ## 后续不要再引入第二套后端源码
 
-如果需要在 `backend/` 之外修改后端代码，直接修改根目录 `backend/` 和 `api.py`。所有 CI 和本地构建均读取根目录，不再同步自 `electron/scripts/`。
+### 如果需要在 `backend/` 之外修改后端代码，直接修改根目录 `backend/` 和 `api.py`。所有 CI 和本地构建均读取根目录，不再同步自 `electron/scripts/`。
