@@ -121,11 +121,72 @@ class BackendStarter {
         const entries = fs.readdirSync(resourcesPath, { withFileTypes: true });
         const entryList = entries.map(e => e.isDirectory() ? `${e.name}/` : e.name).join(', ');
         this._appendLog(BACKEND_ERROR_LOG, `resources/ contents: ${entryList}`);
+        // Also log subdirectory contents for key dirs
+        for (const entry of entries) {
+          if (entry.isDirectory()) {
+            const subPath = path.join(resourcesPath, entry.name);
+            try {
+              const subEntries = fs.readdirSync(subPath, { withFileTypes: true });
+              const subList = subEntries.slice(0, 10).map(e => e.isDirectory() ? `${e.name}/` : e.name).join(', ');
+              this._appendLog(BACKEND_ERROR_LOG, `  resources/${entry.name}/: ${subList}${subEntries.length > 10 ? ' ...' : ''}`);
+            } catch (e) {
+              this._appendLog(BACKEND_ERROR_LOG, `  resources/${entry.name}/: (cannot read)`);
+            }
+          }
+        }
       } else {
         this._appendLog(BACKEND_ERROR_LOG, `resourcesPath does not exist: ${resourcesPath}`);
       }
     } catch (e) {
       this._appendLog(BACKEND_ERROR_LOG, `_logResourcesDir error: ${e.message}`);
+    }
+  }
+
+  _logVenvDiagnostics(venvPath) {
+    // 记录 venv 可移植性诊断信息
+    try {
+      const binPython3 = path.join(venvPath, 'bin', 'python3');
+      const binPython = path.join(venvPath, 'bin', 'python');
+      const pyvenvCfg = path.join(venvPath, 'pyvenv.cfg');
+
+      this._appendLog(BACKEND_ERROR_LOG, `--- venv 诊断 ---`);
+
+      if (fs.existsSync(binPython3)) {
+        const stat = fs.lstatSync(binPython3);
+        if (stat.isSymbolicLink()) {
+          const linkTarget = fs.readlinkSync(binPython3);
+          this._appendLog(BACKEND_ERROR_LOG, `[WARN] python3 is SYMLINK -> ${linkTarget}`);
+          if (linkTarget.startsWith('/')) {
+            this._appendLog(BACKEND_ERROR_LOG, `[FAIL] Absolute symlink - will break on other machines!`);
+          }
+        } else {
+          this._appendLog(BACKEND_ERROR_LOG, `[OK] python3 is a regular file`);
+        }
+      } else {
+        this._appendLog(BACKEND_ERROR_LOG, `[FAIL] python3 not found`);
+      }
+
+      if (fs.existsSync(pyvenvCfg)) {
+        const content = fs.readFileSync(pyvenvCfg, 'utf8');
+        this._appendLog(BACKEND_ERROR_LOG, `pyvenv.cfg content: ${content.replace(/\n/g, ' | ')}`);
+        if (content.includes('/Users/runner/') || content.includes('/home/')) {
+          this._appendLog(BACKEND_ERROR_LOG, `[FAIL] CI/Linux path detected in pyvenv.cfg - will break on other machines!`);
+        }
+      } else {
+        this._appendLog(BACKEND_ERROR_LOG, `[WARN] pyvenv.cfg not found`);
+      }
+
+      // List bin directory
+      try {
+        const binDir = path.join(venvPath, 'bin');
+        const binEntries = fs.readdirSync(binDir);
+        this._appendLog(BACKEND_ERROR_LOG, `venv bin/ first 15 entries: ${binEntries.slice(0, 15).join(', ')}`);
+      } catch (e) {
+        this._appendLog(BACKEND_ERROR_LOG, `venv bin/ cannot list: ${e.message}`);
+      }
+      this._appendLog(BACKEND_ERROR_LOG, `--- venv 诊断结束 ---`);
+    } catch (e) {
+      this._appendLog(BACKEND_ERROR_LOG, `_logVenvDiagnostics error: ${e.message}`);
     }
   }
 
@@ -136,6 +197,15 @@ class BackendStarter {
       }
     }
     return null;
+  }
+
+  _isFile(p) {
+    try {
+      const stat = fs.statSync(p);
+      return stat.isFile();
+    } catch {
+      return false;
+    }
   }
 
   async prepareFFmpeg() {
@@ -207,9 +277,10 @@ class BackendStarter {
   async preparePythonVenv() {
     const platform = process.platform;
 
-    // Windows: 使用 PyInstaller 打包的 api-engine.exe，不需要 python_venv
+    // =================
+    // Windows: 使用 PyInstaller 打包的 api-engine.exe
+    // =================
     if (platform === 'win32') {
-      // 候选路径列表（按优先级顺序）
       const apiEngineCandidates = [
         path.join(process.resourcesPath, 'api', 'api-engine.exe'),
         path.join(process.resourcesPath, 'app.asar.unpacked', 'api', 'api-engine.exe'),
@@ -222,7 +293,6 @@ class BackendStarter {
         this._appendLog(BACKEND_LOG, `Windows API engine found: ${apiEngineExe}`);
         console.log('[BackendStarter] Windows 模式: 使用 PyInstaller 打包的后端:', apiEngineExe);
       } else {
-        // 路径全不存在，记录详细日志后抛出
         this._logResourcesDir();
         const tried = apiEngineCandidates.join(', ');
         const msg = `[BackendStarter] Windows api-engine.exe 未找到，已尝试: ${tried}`;
@@ -232,6 +302,33 @@ class BackendStarter {
       }
       return;
     }
+
+    // =================
+    // macOS: 优先使用 PyInstaller 打包的独立后端二进制
+    // 如果不存在再回退到 python_venv
+    // =================
+    const apiEngineCandidates = [
+      path.join(process.resourcesPath, 'api', 'api-engine'),
+      path.join(process.resourcesPath, 'app.asar.unpacked', 'api', 'api-engine'),
+    ];
+
+    const apiEngine = this._findFirstExist(apiEngineCandidates);
+    if (apiEngine && this._isFile(apiEngine)) {
+      const stat = fs.statSync(apiEngine);
+      if (stat.size > 1000) {
+        this._apiEngineExe = apiEngine;
+        this._appendLog(BACKEND_LOG, `macOS API engine found: ${apiEngine} (${stat.size} bytes)`);
+        console.log('[BackendStarter] macOS 模式: 使用 PyInstaller 打包的后端:', apiEngine);
+        return;
+      } else {
+        this._appendLog(BACKEND_ERROR_LOG, `[WARN] api-engine exists but invalid size: ${stat.size} bytes`);
+      }
+    }
+
+    // 后端二进制不存在，记录资源目录并警告
+    this._logResourcesDir();
+    console.warn('[BackendStarter] macOS 独立后端二进制未找到，检查 python_venv 作为回退...');
+    this._appendLog(BACKEND_ERROR_LOG, 'macOS 独立后端二进制未找到，检查 python_venv 作为回退');
 
     const bundledVenv = this.getResourcePath('python_venv');
 
@@ -256,6 +353,9 @@ class BackendStarter {
       this._appendLog(BACKEND_ERROR_LOG, msg);
       throw new Error(msg);
     }
+
+    // 记录 venv 可移植性诊断信息（用于排查 CI 路径 / 符号链接问题）
+    this._logVenvDiagnostics(bundledVenv);
 
     this._appendLog(BACKEND_LOG, `Python 虚拟环境已就绪: ${bundledVenv}`);
     this._appendLog(BACKEND_LOG, `start_electron.py: ${startScript}`);

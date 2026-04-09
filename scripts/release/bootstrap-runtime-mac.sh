@@ -21,31 +21,84 @@ echo "=== PodGist macOS Runtime Bootstrap ==="
 echo "项目目录: $PROJECT_ROOT"
 
 # ===== 创建 python_venv =====
+# IMPORTANT: Use --copies to avoid symlinks that break when packaged on different machines.
+# Without --copies, bin/python3 becomes a symlink to the build machine's Python.framework,
+# which will be broken on end-user machines.
 echo ""
-echo "[1/4] 创建 Python 虚拟环境..."
+echo "[1/4] 创建 Python 虚拟环境 (with --copies)..."
 if [ -d "$VENV_DIR" ]; then
-    echo "  python_venv 已存在，跳过创建"
-else
-    python3 -m venv "$VENV_DIR"
-    echo "  创建成功: $VENV_DIR"
+    echo "  python_venv 已存在，删除重建以确保 --copies..."
+    rm -rf "$VENV_DIR"
 fi
+python3 -m venv --copies "$VENV_DIR"
+echo "  创建成功: $VENV_DIR"
 
 # ===== 安装依赖 =====
 echo ""
-echo "[2/4] 安装 Python 依赖..."
+echo "[2/5] 安装 Python 依赖..."
 # 使用绝对路径 + 不升级 pip（venv 自带 pip）
 "$VENV_DIR/bin/pip" install -r "$PROJECT_ROOT/requirements.txt"
 echo "  依赖安装完成"
 
+# ===== 诊断：venv 可移植性检查 =====
+echo ""
+echo "[3.5/4] 诊断：venv 可移植性检查..."
+VENV_BIN_PYTHON3="$VENV_DIR/bin/python3"
+VENV_BIN_PYTHON="$VENV_DIR/bin/python"
+VENV_PYVENV_CFG="$VENV_DIR/pyvenv.cfg"
+
+# Check python3
+if [ -L "$VENV_BIN_PYTHON3" ]; then
+    TARGET=$(readlink "$VENV_BIN_PYTHON3")
+    echo "  [WARN] python3 is a SYMLINK: $VENV_BIN_PYTHON3 -> $TARGET"
+    if echo "$TARGET" | grep -q "^/"; then
+        echo "  [FAIL] Absolute symlink detected - will break on other machines!"
+    fi
+elif [ -f "$VENV_BIN_PYTHON3" ]; then
+    echo "  [OK] python3 is a regular file (not symlink)"
+else
+    echo "  [FAIL] python3 not found"
+fi
+
+# Check python
+if [ -L "$VENV_BIN_PYTHON" ]; then
+    TARGET=$(readlink "$VENV_BIN_PYTHON")
+    echo "  [WARN] python is a SYMLINK: $VENV_BIN_PYTHON -> $TARGET"
+    if echo "$TARGET" | grep -q "^/"; then
+        echo "  [FAIL] Absolute symlink detected - will break on other machines!"
+    fi
+elif [ -f "$VENV_BIN_PYTHON" ]; then
+    echo "  [OK] python is a regular file (not symlink)"
+fi
+
+# Check pyvenv.cfg
+if [ -f "$VENV_PYVENV_CFG" ]; then
+    echo "  pyvenv.cfg contents:"
+    cat "$VENV_PYVENV_CFG" | sed 's/^/    /'
+    if grep -q "/Users/runner/" "$VENV_PYVENV_CFG" 2>/dev/null; then
+        echo "  [FAIL] CI runner path detected in pyvenv.cfg!"
+    fi
+    if grep -q "/home/" "$VENV_PYVENV_CFG" 2>/dev/null; then
+        echo "  [WARN] Linux home path detected in pyvenv.cfg"
+    fi
+else
+    echo "  [FAIL] pyvenv.cfg not found"
+fi
+
+# List bin directory
+echo ""
+echo "  venv bin/ contents (first 10):"
+ls -la "$VENV_DIR/bin/" 2>/dev/null | head -10 || echo "    (cannot list)"
+
 # ===== 安装 yt-dlp =====
 echo ""
-echo "[3/4] 安装 yt-dlp..."
+echo "[4/5] 安装 yt-dlp..."
 "$VENV_DIR/bin/pip" install yt-dlp
 echo "  yt-dlp 安装完成"
 
 # ===== 准备 FFmpeg =====
 echo ""
-echo "[4/4] 准备 FFmpeg..."
+echo "[5/5] 准备 FFmpeg..."
 
 # 创建 ffmpeg 目录
 mkdir -p "$FFMPEG_DIR"

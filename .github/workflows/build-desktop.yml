@@ -140,9 +140,17 @@ jobs:
         if: matrix.platform == 'mac'
         run: bash scripts/release/bootstrap-runtime-mac.sh
 
+      - name: Install PyInstaller (macOS)
+        if: matrix.platform == 'mac'
+        run: pip install pyinstaller==6.19.0
+
       - name: Syntax check backend (macOS)
         if: matrix.platform == 'mac'
         run: python scripts/check_backend.py
+
+      - name: Build backend (macOS)
+        if: matrix.platform == 'mac'
+        run: bash scripts/release/build-backend-mac.sh
 
       # ===== Electron 安装依赖 =====
       - name: Install electron deps
@@ -259,11 +267,14 @@ jobs:
           set -e
           APP_PATH="${{ steps.locate-mac-unpacked.outputs.path }}"
           ERRORS=0
+          WARNINGS=0
 
           echo "=== 验包: macOS PodGist.app ==="
           echo "App path: $APP_PATH"
 
-          # 检查 start_electron.py
+          # =============================================
+          # 1. 检查 app.asar.unpacked/backend/start_electron.py
+          # =============================================
           START_SCRIPT="$APP_PATH/Contents/Resources/app.asar.unpacked/backend/start_electron.py"
           if [ -f "$START_SCRIPT" ]; then
             echo "[OK] app.asar.unpacked/backend/start_electron.py"
@@ -272,16 +283,98 @@ jobs:
             ERRORS=$((ERRORS+1))
           fi
 
-          # 检查 python_venv
+          # =============================================
+          # 2. 检查 python_venv 目录结构
+          # =============================================
           VENV_PATH="$APP_PATH/Contents/Resources/python_venv"
           if [ -d "$VENV_PATH" ]; then
-            echo "[OK] Contents/Resources/python_venv/"
+            echo "[OK] Contents/Resources/python_venv/ (directory exists)"
           else
             echo "[MISSING] Contents/Resources/python_venv/"
             ERRORS=$((ERRORS+1))
           fi
 
-          # 检查 ffmpeg
+          VENV_BIN_PYTHON3="$VENV_PATH/bin/python3"
+          VENV_BIN_PYTHON="$VENV_PATH/bin/python"
+          VENV_PYVENV_CFG="$VENV_PATH/pyvenv.cfg"
+
+          # =============================================
+          # 3. 检查 python3 是否为符号链接（破坏可移植性）
+          # =============================================
+          echo ""
+          echo "=== venv 可移植性诊断 ==="
+          if [ -L "$VENV_BIN_PYTHON3" ]; then
+            TARGET=$(readlink "$VENV_BIN_PYTHON3")
+            echo "[FAIL] python3 is a SYMLINK: $VENV_BIN_PYTHON3 -> $TARGET"
+            if echo "$TARGET" | grep -q "^/"; then
+              echo "       *** ABSOLUTE symlink detected - will BREAK on end-user machines!"
+              echo "       *** This venv was created WITHOUT --copies flag!"
+              ERRORS=$((ERRORS+1))
+            else
+              echo "       [INFO] Relative symlink (unusual but may work)"
+              WARNINGS=$((WARNINGS+1))
+            fi
+          elif [ -f "$VENV_BIN_PYTHON3" ]; then
+            echo "[OK] python3 is a regular file (not symlink)"
+          else
+            echo "[MISSING] python3 not found at all"
+            ERRORS=$((ERRORS+1))
+          fi
+
+          # =============================================
+          # 4. 检查 python 符号链接
+          # =============================================
+          if [ -L "$VENV_BIN_PYTHON" ]; then
+            TARGET=$(readlink "$VENV_BIN_PYTHON")
+            echo "[FAIL] python is a SYMLINK: $VENV_BIN_PYTHON -> $TARGET"
+            if echo "$TARGET" | grep -q "^/"; then
+              echo "       *** ABSOLUTE symlink - will BREAK on end-user machines!"
+              ERRORS=$((ERRORS+1))
+            fi
+          elif [ -f "$VENV_BIN_PYTHON" ]; then
+            echo "[OK] python is a regular file (not symlink)"
+          fi
+
+          # =============================================
+          # 5. 检查 pyvenv.cfg 是否含 CI 构建机路径
+          # =============================================
+          echo ""
+          echo "=== pyvenv.cfg 内容检查 ==="
+          if [ -f "$VENV_PYVENV_CFG" ]; then
+            echo "pyvenv.cfg contents:"
+            cat "$VENV_PYVENV_CFG" | sed 's/^/  /'
+            if grep -q "/Users/runner/" "$VENV_PYVENV_CFG" 2>/dev/null; then
+              echo "[FAIL] CI runner path detected in pyvenv.cfg!"
+              echo "       Path contains /Users/runner/ - will break on other machines!"
+              ERRORS=$((ERRORS+1))
+            elif grep -q "/home/" "$VENV_PYVENV_CFG" 2>/dev/null; then
+              echo "[FAIL] Linux home path detected in pyvenv.cfg!"
+              ERRORS=$((ERRORS+1))
+            else
+              echo "[OK] No CI/Linux path detected in pyvenv.cfg"
+            fi
+          else
+            echo "[MISSING] pyvenv.cfg not found"
+            ERRORS=$((ERRORS+1))
+          fi
+
+          # =============================================
+          # 6. 检查 api-engine 后端二进制（新的分发方式）
+          # =============================================
+          echo ""
+          echo "=== 后端二进制检查 ==="
+          API_ENGINE="$APP_PATH/Contents/Resources/api/api-engine"
+          if [ -f "$API_ENGINE" ]; then
+            echo "[OK] Contents/Resources/api/api-engine (standalone binary exists)"
+          else
+            echo "[INFO] Contents/Resources/api/api-engine not found (may be using venv fallback)"
+          fi
+
+          # =============================================
+          # 7. 检查 ffmpeg
+          # =============================================
+          echo ""
+          echo "=== FFmpeg 检查 ==="
           FFMPEG="$APP_PATH/Contents/Resources/ffmpeg/ffmpeg"
           if [ -f "$FFMPEG" ]; then
             echo "[OK] Contents/Resources/ffmpeg/ffmpeg"
@@ -290,7 +383,6 @@ jobs:
             ERRORS=$((ERRORS+1))
           fi
 
-          # 检查 ffprobe
           FFPROBE="$APP_PATH/Contents/Resources/ffmpeg/ffprobe"
           if [ -f "$FFPROBE" ]; then
             echo "[OK] Contents/Resources/ffmpeg/ffprobe"
@@ -299,18 +391,64 @@ jobs:
             ERRORS=$((ERRORS+1))
           fi
 
-          # 列出 Resources 目录内容
+          # =============================================
+          # 8. 列出 Resources 目录内容
+          # =============================================
           echo ""
-          echo "=== Contents/Resources/ 目录 ==="
+          echo "=== Contents/Resources/ 目录树 ==="
           ls -la "$APP_PATH/Contents/Resources/" 2>/dev/null || true
-
-          # 验包失败则禁止上传
-          if [ $ERRORS -gt 0 ]; then
-            echo ""
-            echo "ERROR: 验包失败，$ERRORS 个文件/目录缺失"
-            exit 1
+          if [ -d "$APP_PATH/Contents/Resources/python_venv" ]; then
+            echo "python_venv/bin/ contents:"
+            ls -la "$APP_PATH/Contents/Resources/python_venv/bin/" 2>/dev/null | head -15 || true
           fi
 
+          # =============================================
+          # 9. NON-PORTABLE VENV 警告标记
+          # =============================================
+          if [ -L "$VENV_BIN_PYTHON3" ] || grep -q "/Users/runner/" "$VENV_PYVENV_CFG" 2>/dev/null; then
+            echo ""
+            echo "!!! NON-PORTABLE VENV DETECTED !!!" -ForegroundColor Red
+            echo "    This venv will NOT work on end-user machines!"
+            echo "    Recommendation: Use standalone api-engine binary instead."
+          fi
+
+          # =============================================
+          # 10. 代码签名诊断
+          # =============================================
+          echo ""
+          echo "=== 代码签名诊断 ==="
+          echo "codesign -dv output:"
+          codesign -dv "$APP_PATH" 2>&1 || true
+          echo ""
+          echo "codesign --verify --deep --strict output:"
+          codesign --verify --deep --strict "$APP_PATH" 2>&1 || true
+
+          # =============================================
+          # 11. Gatekeeper 评估
+          # =============================================
+          echo ""
+          echo "=== Gatekeeper spctl 评估 ==="
+          echo "spctl --assess --type execute -vvv output:"
+          spctl --assess --type execute -vvv "$APP_PATH" 2>&1 || true
+
+          # =============================================
+          # 12. Extended Attributes 检查
+          # =============================================
+          echo ""
+          echo "=== Extended Attributes (xattr) ==="
+          xattr -lr "$APP_PATH" 2>/dev/null || true
+
+          # =============================================
+          # 验包失败则禁止上传
+          # =============================================
+          echo ""
+          if [ $ERRORS -gt 0 ]; then
+            echo "ERROR: 验包失败，$ERRORS 个错误"
+            exit 1
+          fi
+          if [ $WARNINGS -gt 0 ]; then
+            echo "WARNING: $WARNINGS 个警告（但验包通过）"
+          fi
           echo ""
           echo "=== 验包通过 ===" -ForegroundColor Green
 
