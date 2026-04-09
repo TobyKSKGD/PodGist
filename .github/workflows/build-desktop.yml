@@ -142,7 +142,9 @@ jobs:
 
       - name: Install PyInstaller (macOS)
         if: matrix.platform == 'mac'
-        run: pip install pyinstaller==6.19.0
+        run: |
+          VENV_PYTHON="$GITHUB_WORKSPACE/electron/resources/python_venv/bin/python3"
+          "$VENV_PYTHON" -m pip install pyinstaller==6.19.0
 
       - name: Syntax check backend (macOS)
         if: matrix.platform == 'mac'
