@@ -29,6 +29,9 @@ class BackendStarter {
     this._ffmpegRuntimeDir = null;
     this._ffmpegExe = null;
     this._ffprobeExe = null;
+    // 启动锁：防止重复 spawn
+    this._isStarting = false;
+    this._startResolve = null;
   }
 
   get isPackaged() {
@@ -70,6 +73,20 @@ class BackendStarter {
   }
 
   async start() {
+    // 启动锁：防止重复 spawn
+    if (this._isStarting) {
+      console.log('[BackendStarter] 已在启动中，等待...');
+      if (this._startResolve) {
+        await new Promise(resolve => { this._startResolve = resolve; });
+      }
+      return;
+    }
+    if (this.pythonProcess) {
+      console.log('[BackendStarter] 后端已在运行中，跳过重复启动');
+      return;
+    }
+    this._isStarting = true;
+
     console.log('[BackendStarter] 开始启动后端...');
     console.log('[BackendStarter] 构建类型:', this.buildType);
 
@@ -89,6 +106,9 @@ class BackendStarter {
     this._appendLog(BACKEND_LOG, '=== BackendStarter 启动 ===');
     this._appendLog(BACKEND_ERROR_LOG, '=== BackendStarter 启动 ===');
 
+    // Phase 0: 检查 8000 端口是否已被 PodGist 占用
+    await this._checkPort();
+
     // Phase 1: 准备 FFmpeg
     await this.prepareFFmpeg();
 
@@ -103,7 +123,56 @@ class BackendStarter {
     }
 
     // Phase 3: 启动 Python 后端
-    await this.startPythonBackend();
+    try {
+      await this.startPythonBackend();
+    } finally {
+      this._isStarting = false;
+      if (this._startResolve) {
+        this._startResolve();
+        this._startResolve = null;
+      }
+    }
+  }
+
+  async _checkPort() {
+    // 检查 8000 是否已被占用，以及是否为 PodGist 自己的后端
+    const http = require('http');
+    try {
+      await new Promise((resolve, reject) => {
+        const req = http.get('http://127.0.0.1:8000/', (res) => {
+          if (res.statusCode === 200) {
+            let body = '';
+            res.on('data', chunk => { body += chunk; });
+            res.on('end', () => {
+              if (body.includes('PodGist')) {
+                this._appendLog(BACKEND_LOG, 'PodGist 后端已在运行中（端口 8000），跳过重复启动');
+                console.log('[BackendStarter] PodGist 后端已在运行，跳过启动');
+                this._backendAlreadyRunning = true;
+                resolve('already_running');
+              } else {
+                this._appendLog(BACKEND_ERROR_LOG, `8000 端口被未知服务占用: ${body.substring(0, 100)}`);
+                reject(new Error(`8000 端口被占用（未知服务），请关闭占用端口的程序后重试`));
+              }
+            });
+          } else {
+            reject(new Error(`8000 端口被占用（HTTP ${res.statusCode}），请关闭占用端口的程序后重试`));
+          }
+        });
+        req.on('error', () => {
+          // 端口未被占用，可以继续启动
+          this._appendLog(BACKEND_LOG, '8000 端口空闲，可以启动后端');
+          resolve('free');
+        });
+        req.setTimeout(3000, () => {
+          req.destroy();
+          this._appendLog(BACKEND_LOG, '8000 端口检查超时，假设空闲');
+          resolve('free');
+        });
+      });
+    } catch (err) {
+      this._appendLog(BACKEND_ERROR_LOG, `端口检查: ${err.message}`);
+      throw err;
+    }
   }
 
   _assertFileExists(filePath, description) {
@@ -431,6 +500,13 @@ class BackendStarter {
   }
 
   async startPythonBackend() {
+    // 如果 8000 已被 PodGist 后端占用，跳过启动
+    if (this._backendAlreadyRunning) {
+      this._appendLog(BACKEND_LOG, '后端已在运行，跳过 startPythonBackend');
+      await this.waitForBackend('http://127.0.0.1:8000', 5000);
+      return;
+    }
+
     const platform = process.platform;
     const backendUrl = 'http://127.0.0.1:8000';
 
@@ -642,20 +718,38 @@ class BackendStarter {
   }
 
   stop() {
-    if (this.pythonProcess) {
-      console.log('[BackendStarter] 停止 Python 后端...');
-      this._appendLog(BACKEND_LOG, '收到停止信号，正在终止后端...');
-      if (process.platform === 'win32') {
-        exec(`taskkill /pid ${this.pythonProcess.pid} /t /f`, (err) => {
-          if (err) {
-            this._appendLog(BACKEND_ERROR_LOG, `taskkill 错误: ${err.message}`);
-          }
-        });
-      } else {
-        this.pythonProcess.kill('SIGKILL');
-      }
-      this.pythonProcess = null;
+    if (!this.pythonProcess) {
+      return;
     }
+    console.log('[BackendStarter] 停止 Python 后端...');
+    this._appendLog(BACKEND_LOG, '收到停止信号，正在终止后端...');
+
+    const pid = this.pythonProcess.pid;
+
+    if (process.platform === 'win32') {
+      // Windows: tree-kill 杀死进程树
+      exec(`taskkill /pid ${pid} /t /f`, (err) => {
+        if (err) {
+          this._appendLog(BACKEND_ERROR_LOG, `taskkill 错误: ${err.message}`);
+        }
+      });
+    } else {
+      // macOS/Linux: 杀死整个进程组（防止 uvicorn worker 变孤儿）
+      try {
+        // 负数 pid = 发送到进程组
+        process.kill(-pid, 'SIGKILL');
+      } catch (e) {
+        // 如果进程组已不存在，直接杀进程
+        try {
+          this.pythonProcess.kill('SIGKILL');
+        } catch (e2) {
+          this._appendLog(BACKEND_ERROR_LOG, `kill 错误: ${e2.message}`);
+        }
+      }
+    }
+
+    this.pythonProcess = null;
+    this._appendLog(BACKEND_LOG, '后端已停止');
   }
 
   async copyDirectory(src, dest) {

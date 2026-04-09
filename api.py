@@ -45,7 +45,8 @@ app = FastAPI(title="PodGist API", version="0.1.0")
 @app.on_event("startup")
 async def startup_index():
     """启动时自动索引所有已有归档到向量库（后台运行，避免阻塞启动）"""
-    asyncio.to_thread(index_all_archives)
+    # 必须用 create_task 包装 to_thread，否则 FastAPI 无法正确调度这个后台任务
+    asyncio.create_task(asyncio.to_thread(index_all_archives))
 
 # 获取 api.py 所在目录作为项目根目录（默认）
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
