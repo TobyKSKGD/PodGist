@@ -403,28 +403,71 @@ class BackendStarter {
 
   async startPythonBackend() {
     const platform = process.platform;
+    const backendUrl = 'http://127.0.0.1:8000';
+
+    // =================
+    // 启动前诊断日志
+    // =================
+    this._appendLog(BACKEND_LOG, `=== startPythonBackend 开始 ===`);
+    this._appendLog(BACKEND_LOG, `平台: ${platform}`);
+    this._appendLog(BACKEND_LOG, `process.resourcesPath: ${process.resourcesPath}`);
+    this._appendLog(BACKEND_LOG, `this._apiEngineExe: ${this._apiEngineExe}`);
+    this._appendLog(BACKEND_LOG, `this.pythonVenvPath: ${this.pythonVenvPath}`);
+    this._appendLog(BACKEND_LOG, `this._startScript: ${this._startScript}`);
+    this._appendLog(BACKEND_LOG, `this.userDataPath: ${this.userDataPath}`);
+    this._logResourcesDir();
 
     let pythonPath;
     let pythonArgs;
-    const backendUrl = 'http://127.0.0.1:8000';
+    let backendMode;
 
-    if (platform === 'win32') {
+    if (this._apiEngineExe) {
+      // =================
+      // 模式 A: 独立后端二进制 (api-engine)
+      // =================
+      if (typeof this._apiEngineExe !== 'string') {
+        throw new Error(`[BackendStarter] _apiEngineExe must be string, got: ${typeof this._apiEngineExe}`);
+      }
+      backendMode = 'api-engine';
       pythonPath = this._apiEngineExe;
       pythonArgs = [
         '--data-dir', this.userDataPath,
         '--resources-path', process.resourcesPath
       ];
-      this._appendLog(BACKEND_LOG, `Windows 模式启动: ${this._apiEngineExe}`);
-      console.log('[BackendStarter] Windows 模式: 使用 PyInstaller 打包的后端:', this._apiEngineExe);
-    } else {
+      this._appendLog(BACKEND_LOG, `启动模式: api-engine | 二进制: ${pythonPath}`);
+      console.log(`[BackendStarter] [${platform}] 模式 A (api-engine): ${pythonPath}`);
+
+    } else if (platform === 'darwin' && this.pythonVenvPath && this._startScript) {
+      // =================
+      // 模式 B: macOS python_venv 回退
+      // =================
+      if (typeof this.pythonVenvPath !== 'string' || typeof this._startScript !== 'string') {
+        throw new Error(`[BackendStarter] pythonVenvPath or _startScript is not a string`);
+      }
+      backendMode = 'python-venv';
       pythonPath = path.join(this.pythonVenvPath, 'bin', 'python3');
       pythonArgs = [
         this._startScript,
         '--data-dir', this.userDataPath,
         '--resources-path', process.resourcesPath
       ];
-      this._appendLog(BACKEND_LOG, `启动 Python 后端: ${pythonPath} ${pythonArgs.join(' ')}`);
-      console.log('[BackendStarter] 启动 Python 后端:', pythonPath, pythonArgs.join(' '));
+      this._appendLog(BACKEND_LOG, `启动模式: python-venv | Python: ${pythonPath} | 脚本: ${this._startScript}`);
+      console.log(`[BackendStarter] [${platform}] 模式 B (python-venv): ${pythonPath} ${this._startScript}`);
+
+    } else {
+      // =================
+      // 无法启动：缺少必要路径变量
+      // =================
+      const msg = [
+        `[BackendStarter] 无法启动后端：缺少必要路径变量`,
+        `platform=${platform}`,
+        `_apiEngineExe=${this._apiEngineExe}`,
+        `pythonVenvPath=${this.pythonVenvPath}`,
+        `_startScript=${this._startScript}`,
+      ].join('\n');
+      this._appendLog(BACKEND_ERROR_LOG, msg);
+      console.error(msg);
+      throw new Error(msg);
     }
 
     const env = {
