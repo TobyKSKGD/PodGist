@@ -150,6 +150,8 @@ jobs:
 
       - name: Build backend (macOS)
         if: matrix.platform == 'mac'
+        env:
+          PROJECT_ROOT: ${{ github.workspace }}
         run: bash scripts/release/build-backend-mac.sh
 
       # ===== Electron 安装依赖 =====
