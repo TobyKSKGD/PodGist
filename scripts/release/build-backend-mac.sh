@@ -58,6 +58,19 @@ echo ""
 echo "[3/5] Running PyInstaller..."
 export PYTHONOPTIMIZE="1"
 
+# IMPORTANT: Use the bootstrapped python_venv's Python, not the system/setup-python's Python.
+# The bootstrapped venv has all required packages (fastapi, uvicorn, etc.) installed via pip.
+# Without this, PyInstaller runs with a different Python that lacks these packages.
+PYTHON_VENV="$ELECTRON_DIR/resources/python_venv"
+PYTHON_BIN="$PYTHON_VENV/bin/python3"
+
+echo "  Using Python from venv: $PYTHON_BIN"
+if [ ! -f "$PYTHON_BIN" ]; then
+    echo "ERROR: python_venv Python not found: $PYTHON_BIN"
+    echo "  Run bootstrap-runtime-mac.sh first!"
+    exit 1
+fi
+
 echo "  Cleaning old output..."
 if [ -d "$API_DIST" ]; then
     rm -rf "$API_DIST"
@@ -70,11 +83,12 @@ echo "  Running PyInstaller..."
 echo "    Spec: ${API_SPEC}"
 echo "    distpath: ${API_DIST}"
 echo "    workpath: ${BUILD_DIR}"
+echo "    Python: $PYTHON_BIN"
 
 # Use api.spec - do NOT pass --onedir/--onefile when spec file is given
 # Run from project root so COLLECT output goes to backend/dist/api/
 cd "$PROJECT_ROOT"
-python -m PyInstaller --clean --noconfirm --distpath "$API_DIST" --workpath "$BUILD_DIR" "$API_SPEC"
+"$PYTHON_BIN" -m PyInstaller --clean --noconfirm --distpath "$API_DIST" --workpath "$BUILD_DIR" "$API_SPEC"
 PYINSTALLER_EXIT=$?
 
 # PyInstaller returns exit code 1 for hidden import warnings but build still succeeds
