@@ -273,6 +273,17 @@ jobs:
           ERRORS=0
           WARNINGS=0
 
+          echo ""
+          echo "========================================"
+          echo "  UNSIGNED PREVIEW BUILD (macOS)"
+          echo "  此构建未签名/未公证"
+          echo "  首次运行需要手动放行:"
+          echo "    1. sudo xattr -rd com.apple.quarantine /Applications/PodGist.app"
+          echo "    2. codesign --force --deep --sign - /Applications/PodGist.app"
+          echo "    3. open /Applications/PodGist.app"
+          echo "========================================"
+          echo ""
+
           echo "=== 验包: macOS PodGist.app ==="
           echo "App path: $APP_PATH"
 
@@ -369,15 +380,17 @@ jobs:
           fi
 
           # =============================================
-          # 6. 检查 api-engine 后端二进制（新的分发方式）
+          # 6. 检查 api-engine 后端二进制（macOS 主运行时）
           # =============================================
           echo ""
           echo "=== 后端二进制检查 ==="
           API_ENGINE="$APP_PATH/Contents/Resources/api/api-engine"
           if [ -f "$API_ENGINE" ]; then
-            echo "[OK] Contents/Resources/api/api-engine (standalone binary exists)"
+            SIZE=$(stat -f%z "$API_ENGINE" 2>/dev/null || stat -c%s "$API_ENGINE" 2>/dev/null || echo "unknown")
+            echo "[OK] Contents/Resources/api/api-engine (standalone binary, $SIZE bytes)"
           else
-            echo "[INFO] Contents/Resources/api/api-engine not found (may be using venv fallback)"
+            echo "[MISSING] Contents/Resources/api/api-engine — macOS 必须使用独立后端二进制"
+            ERRORS=$((ERRORS+1))
           fi
 
           # =============================================
