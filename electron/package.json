@@ -1,6 +1,6 @@
 {
   "name": "podgist-desktop",
-  "version": "0.1.1",
+  "version": "0.1.1-beta",
   "description": "PodGist 桌面应用 - 本地算力驱动的 AI 音频提炼工具",
   "author": "PodGist Team",
   "license": "MIT",
