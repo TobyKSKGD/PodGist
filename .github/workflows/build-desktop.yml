@@ -317,6 +317,10 @@ jobs:
           cache: 'pip'
           cache-dependency-path: requirements.txt
 
+      - name: Fetch FFmpeg (Windows)
+        shell: pwsh
+        run: pwsh -File ./scripts/release/fetch-ffmpeg-win.ps1
+
       - name: Install PyInstaller (Windows)
         shell: pwsh
         run: |
