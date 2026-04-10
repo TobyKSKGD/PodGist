@@ -68,9 +68,7 @@ Write-Host "    Spec: ${absApiSpec}"
 Write-Host "    distpath: ${absApiDist}"
 Write-Host "    workpath: ${absBuildDir}"
 
-# --collect-all=uvicorn 强制收集 uvicorn 所有子模块和数据文件
-# 解决 collect_submodules 在 uvicorn 未安装进 python env 时返回空列表的问题
-python -m PyInstaller --clean --noconfirm --distpath $absApiDist --workpath $absBuildDir --collect-all=uvicorn $absApiSpec
+python -m PyInstaller --clean --noconfirm --distpath $absApiDist --workpath $absBuildDir $absApiSpec
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: PyInstaller failed with exit code $LASTEXITCODE" -ForegroundColor Red
     exit 1
