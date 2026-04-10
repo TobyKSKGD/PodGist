@@ -115,36 +115,14 @@ jobs:
         run: npm ci
         working-directory: electron
 
-      # ===== Electron 构建 =====
+      # ===== Electron 构建（包含 afterPack ad-hoc signing） =====
       - name: Build Electron (mac)
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: |
           echo "electron-builder version: $(node -p 'require("./package.json").version')"
           npm run build:mac
         working-directory: electron
-
-      # ===== Ad-hoc 深度签名（确保所有嵌套二进制都被签名） =====
-      - name: Ad-hoc sign .app (macOS)
-        run: |
-          echo "=== 查找 electron-builder 生成的 .app ==="
-          APP_PATH=""
-          for dir in release electron/release electron/out; do
-            app=$(find "$dir" -name "PodGist.app" -type d 2>/dev/null | head -1)
-            if [ -n "$app" ]; then
-              APP_PATH="$app"
-              break
-            fi
-          done
-          if [ -z "$APP_PATH" ]; then
-            echo "ERROR: No PodGist.app found"
-            exit 1
-          fi
-          echo "Found app at: $APP_PATH"
-          echo ""
-          echo "=== 对整个 .app 进行 ad-hoc deep sign ==="
-          codesign --force --deep --sign - "$APP_PATH"
-          echo ""
-          echo "=== 签名结果 ==="
-          codesign -dv "$APP_PATH" 2>&1 || true
 
       # ===== 查找 unpacked 目录（用于验包） =====
       - name: Locate unpacked app (macOS)

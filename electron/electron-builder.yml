@@ -52,17 +52,22 @@ dmg:
 mac:
   category: public.app-category.productivity
   # 签名配置（Preview 构建）：
-  #   当前：sign: false（electron-builder 不签名）
-  #     + CI 构建后单独执行 ad-hoc deep sign（见 build-desktop.yml）
-  #     - ad-hoc 签名后 app 不会显示"未知开发者"
-  #     - 但仍会被 Gatekeeper 拦截（显示"不受信任"而非"已损坏"）
-  #     - 用户可在"系统设置 → 隐私与安全性"中手动点"仍要打开"
+  #   sign: false — 不让 electron-builder 自动签名
+  #   CSC_IDENTITY_AUTO_DISCOVERY=false — 明确禁用自动发现
+  #   afterPack hook — 在 dmg 生成前执行 ad-hoc deep sign
+  #     (electron-builder 生命周期: 组装.app → afterPack → 打包.dmg)
+  #     所以签名发生在 dmg 之前，dmg 内的 app 是已签名的
+  #   ad-hoc 签名后 app 不会显示"未知开发者"
+  #   但仍会被 Gatekeeper 拦截（显示"不受信任"而非"已损坏"）
+  #   用户可在"系统设置 → 隐私与安全性"中点"仍要打开"
+  #
   #   正式发布时：在 GitHub Secrets 中设置：
   #     - APPLE_SIGNING_IDENTITY: "Developer ID Application: Your Name (TEAMID)"
   #     - APPLE_NOTARIZATION: appleIdPassword@keychain服务 或 App-Specific Password
   #   electron-builder 检测到 APPLE_SIGNING_IDENTITY 后自动切换正式签名+公证
   sign: false
   entitlements: assets/entitlements.plist
+  afterPack: ./scripts/afterPack-mac.js
   entitlementsInherit: assets/entitlements.plist
   icon: assets/Icon.icns
   target:
