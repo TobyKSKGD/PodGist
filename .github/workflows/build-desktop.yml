@@ -443,6 +443,30 @@ jobs:
           Write-Host "EXE: $apiEngine"
           Write-Host "DataDir: $tempDataDir"
 
+          # === 诊断：列出 api/ 目录内容 ===
+          Write-Host "`n=== api/ 目录内容 ===" -ForegroundColor Yellow
+          Get-ChildItem $apiEngineDir -ErrorAction SilentlyContinue | ForEach-Object {
+            Write-Host "  $($_.Name) ($(if($_.PSIsContainer){'dir'}else{$_.Length}))"
+          }
+
+          # === 诊断：检查 _internal 目录 ===
+          $internalDir = Join-Path $apiEngineDir "_internal"
+          if (Test-Path $internalDir) {
+            Write-Host "`n=== _internal 目录 (前 20 项) ===" -ForegroundColor Yellow
+            Get-ChildItem $internalDir -ErrorAction SilentlyContinue | Select-Object -First 20 | ForEach-Object {
+              Write-Host "  $($_.Name)"
+            }
+            $pythonDll = Join-Path $internalDir "python*.dll"
+            $pythons = Get-Item $pythonDll -ErrorAction SilentlyContinue
+            if ($pythons) {
+              Write-Host "  [OK] Python DLL: $($pythons.Name)"
+            } else {
+              Write-Host "  [MISSING] Python DLL not found in _internal/" -ForegroundColor Red
+            }
+          } else {
+            Write-Host "`n[MISSING] _internal/ 目录不存在 — PyInstaller 未正确打包" -ForegroundColor Red
+          }
+
           # 复制 ffmpeg 到 smoke test 环境
           $smokeFFmpegDir = Join-Path $tempDataDir "bin"
           New-Item -ItemType Directory -Force -Path $smokeFFmpegDir | Out-Null
@@ -463,9 +487,31 @@ jobs:
           $env:PODGIST_RESOURCES_PATH = $unpacked
 
           # 启动 api-engine.exe（后台运行，windowsHide）
-          Write-Host "Starting api-engine.exe..."
+          Write-Host "`nStarting api-engine.exe..."
           $proc = Start-Process $apiEngine -ArgumentList "--data-dir","$tempDataDir","--resources-path","$unpacked" -PassThru -WindowStyle Hidden
           Write-Host "PID: $($proc.Id)"
+
+          # 等待 5 秒后检查进程状态（检测快速崩溃）
+          Start-Sleep 5
+          if ($proc.HasExited) {
+            Write-Host "[CRASH] api-engine.exe 在 5 秒内退出，exitCode=$($proc.ExitCode)" -ForegroundColor Red
+            # 立即列出 logs 目录（可能已创建）
+            $logsDir = Join-Path $tempDataDir "logs"
+            Write-Host "`n=== tempDataDir/logs/ 内容 ===" -ForegroundColor Yellow
+            if (Test-Path $logsDir) {
+              Get-ChildItem $logsDir -ErrorAction SilentlyContinue | ForEach-Object {
+                Write-Host "  $($_.Name)"
+                if ($_.Name -match "log|err|out") {
+                  Write-Host "    --- $_.Name 内容 ---"
+                  Get-Content $_.FullName -Tail 30 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "    $_" }
+                }
+              }
+            } else {
+              Write-Host "  logs/ 目录不存在"
+            }
+          } else {
+            Write-Host "[OK] 进程 5 秒后仍在运行"
+          }
 
           # 轮询健康检查（最多 30 秒）
           $backendOk = $false
