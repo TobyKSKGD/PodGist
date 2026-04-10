@@ -272,8 +272,13 @@ jobs:
             dmgs=$(find "$dir" -name "*.dmg" -type f 2>/dev/null | head -1)
             if [ -n "$dmgs" ]; then
               echo "Found DMG: $dmgs"
+              SIZE=$(stat -f%z "$dmgs" 2>/dev/null || stat -c%s "$dmgs" 2>/dev/null)
+              SHA256=$(shasum -a 256 "$dmgs" | cut -d' ' -f1)
               echo "path=$dmgs" >> $GITHUB_OUTPUT
               echo "name=$(basename $dmgs)" >> $GITHUB_OUTPUT
+              echo "size=$(echo "scale=2; $SIZE / 1048576" | bc) MB" >> $GITHUB_OUTPUT
+              echo "sha256=$SHA256" >> $GITHUB_OUTPUT
+              echo "SHA256: $SHA256"
               exit 0
             fi
           done
@@ -568,9 +573,12 @@ jobs:
               Write-Host "Found: $($_.FullName) ($([math]::Round($_.Length / 1MB, 2)) MB)"
             }
             $first = $artifacts | Select-Object -First 1
+            $sha256 = (Get-FileHash $first.FullName -Algorithm SHA256).Hash.ToLower()
             Add-Content -Path $env:GITHUB_OUTPUT -Value "path=$($first.FullName)"
             Add-Content -Path $env:GITHUB_OUTPUT -Value "name=$($first.Name)"
             Add-Content -Path $env:GITHUB_OUTPUT -Value "size=$([math]::Round($first.Length / 1MB, 2)) MB"
+            Add-Content -Path $env:GITHUB_OUTPUT -Value "sha256=$sha256"
+            Write-Host "SHA256: $sha256"
           } else {
             Write-Host "ERROR: No .exe installer found"
             exit 1
@@ -614,6 +622,41 @@ jobs:
           echo "mac_path=$MAC_DMG" >> $GITHUB_OUTPUT
           echo "Windows artifact: $WIN_EXE"
           echo "macOS artifact: $MAC_DMG"
+
+      - name: Validate artifact sizes before upload
+        run: |
+          set -euo pipefail
+
+          WIN_EXE="${{ steps.artifacts.outputs.win_path }}"
+          MAC_DMG="${{ steps.artifacts.outputs.mac_path }}"
+
+          echo "=== Artifact 合理性检查 ==="
+
+          # Windows exe: 预期 >= 150MB，低于此值直接失败
+          WIN_SIZE=$(stat -c%s "$WIN_EXE")
+          WIN_SIZE_MB=$((WIN_SIZE / 1048576))
+          echo "Windows exe: $WIN_SIZE_MB MB"
+          if [ "$WIN_SIZE_MB" -lt 150 ]; then
+            echo "ERROR: Windows exe 只有 ${WIN_SIZE_MB}MB，远低于预期的 ~224MB，拒绝上传！" >&2
+            echo "SHA256: $(sha256sum "$WIN_EXE" | cut -d' ' -f1)" >&2
+            exit 1
+          fi
+          echo "Windows exe size OK (${WIN_SIZE_MB} MB)"
+
+          # macOS dmg: 预期 >= 100MB
+          MAC_SIZE=$(stat -c%s "$MAC_DMG")
+          MAC_SIZE_MB=$((MAC_SIZE / 1048576))
+          echo "macOS dmg: $MAC_SIZE_MB MB"
+          if [ "$MAC_SIZE_MB" -lt 100 ]; then
+            echo "ERROR: macOS dmg 只有 ${MAC_SIZE_MB}MB，远低于预期的 ~200MB，拒绝上传！" >&2
+            exit 1
+          fi
+          echo "macOS dmg size OK (${MAC_SIZE_MB} MB)"
+
+          echo ""
+          echo "=== SHA256 指纹 ==="
+          echo "Windows: $(sha256sum "$WIN_EXE" | cut -d' ' -f1)"
+          echo "macOS:   $(sha256sum "$MAC_DMG" | cut -d' ' -f1)"
 
       - name: Upload Windows artifact to Release
         env:

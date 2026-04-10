@@ -37,7 +37,7 @@ echo "  创建成功: $VENV_DIR"
 echo ""
 echo "[2/5] 安装 Python 依赖..."
 # 使用绝对路径 + 不升级 pip（venv 自带 pip）
-"$VENV_DIR/bin/pip" install -r "$PROJECT_ROOT/requirements.txt"
+"$VENV_DIR/bin/pip" install --no-cache -r "$PROJECT_ROOT/requirements.txt"
 echo "  依赖安装完成"
 
 # ===== 诊断：venv 可移植性检查 =====
@@ -93,7 +93,7 @@ ls -la "$VENV_DIR/bin/" 2>/dev/null | head -10 || echo "    (cannot list)"
 # ===== 安装 yt-dlp =====
 echo ""
 echo "[4/5] 安装 yt-dlp..."
-"$VENV_DIR/bin/pip" install yt-dlp
+"$VENV_DIR/bin/pip" install --no-cache yt-dlp
 echo "  yt-dlp 安装完成"
 
 # ===== 准备 FFmpeg =====
