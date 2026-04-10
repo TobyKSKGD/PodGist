@@ -14,6 +14,12 @@ import multiprocessing
 import traceback
 import uvicorn  # 必须在模块顶层，PyInstaller 才能静态分析到
 
+# 确保 stdout/stderr 使用 UTF-8 编码（Windows GUI 模式下 print 中文不被 cp1252 拦截）
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 # 将项目根目录添加到 Python 路径
 script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(script_dir)  # backend/ 的父目录就是项目根目录
