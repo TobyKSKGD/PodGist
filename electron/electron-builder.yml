@@ -21,6 +21,10 @@ icon: assets/icon.ico
 directories:
   output: ../release/${version}
 
+# afterPack hook — 在 dmg 生成前对 .app 做 ad-hoc deep sign
+# 必须在根层级（与 mac/win 平级），不能放在 mac: 块内
+afterPack: ./scripts/afterPack-mac.js
+
 # NSIS Windows 安装包配置
 nsis:
   oneClick: false
@@ -67,7 +71,6 @@ mac:
   #   electron-builder 检测到 APPLE_SIGNING_IDENTITY 后自动切换正式签名+公证
   sign: false
   entitlements: assets/entitlements.plist
-  afterPack: ./scripts/afterPack-mac.js
   entitlementsInherit: assets/entitlements.plist
   icon: assets/Icon.icns
   target:
