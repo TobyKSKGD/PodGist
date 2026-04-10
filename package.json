@@ -1,6 +1,6 @@
 {
   "name": "podgist",
-  "version": "0.1.1-beta",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "scripts": {
