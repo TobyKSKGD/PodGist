@@ -319,7 +319,7 @@ jobs:
 
       - name: Bootstrap runtime (Windows)
         shell: pwsh
-        run: pwsh scripts/release/bootstrap-runtime-win.ps1
+        run: pwsh ./scripts/release/bootstrap-runtime-win.ps1
 
       - name: Install PyInstaller (Windows)
         shell: pwsh
@@ -334,7 +334,7 @@ jobs:
         shell: pwsh
         env:
           PROJECT_ROOT: ${{ github.workspace }}
-        run: pwsh scripts/release/build-backend-win.ps1
+        run: pwsh ./scripts/release/build-backend-win.ps1
 
       # ===== Electron 安装依赖 =====
       - name: Install electron deps
