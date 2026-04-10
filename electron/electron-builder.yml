@@ -52,7 +52,8 @@ dmg:
 mac:
   category: public.app-category.productivity
   # 签名配置（Preview 构建）：
-  #   当前：identity: "-" = ad-hoc 签名
+  #   当前：sign: false（electron-builder 不签名）
+  #     + CI 构建后单独执行 ad-hoc deep sign（见 build-desktop.yml）
   #     - ad-hoc 签名后 app 不会显示"未知开发者"
   #     - 但仍会被 Gatekeeper 拦截（显示"不受信任"而非"已损坏"）
   #     - 用户可在"系统设置 → 隐私与安全性"中手动点"仍要打开"
@@ -60,8 +61,7 @@ mac:
   #     - APPLE_SIGNING_IDENTITY: "Developer ID Application: Your Name (TEAMID)"
   #     - APPLE_NOTARIZATION: appleIdPassword@keychain服务 或 App-Specific Password
   #   electron-builder 检测到 APPLE_SIGNING_IDENTITY 后自动切换正式签名+公证
-  sign: true
-  identity: "-"
+  sign: false
   entitlements: assets/entitlements.plist
   entitlementsInherit: assets/entitlements.plist
   icon: assets/Icon.icns
