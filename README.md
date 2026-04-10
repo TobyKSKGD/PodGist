@@ -75,7 +75,37 @@ PodGist 所有功能都围绕时间轴展开：
 
 #### Windows 版本
 
-> 即将推出。
+#### 系统要求
+
+- Windows 10 或 Windows 11
+- 推荐 8GB 以上内存
+
+#### 安装步骤
+
+**1. 下载安装包**
+
+点击 [PodGist Releases](https://github.com/TobyKSKGD/PodGist/releases) 下载 `.exe` 安装包。
+
+**2. 安装应用**
+
+运行下载的 `.exe` 安装程序，按提示完成安装。
+
+**3. 启动应用**
+
+从开始菜单或桌面快捷方式启动 PodGist。
+
+**4. 配置 API Key**
+
+应用启动后，右侧边栏底部点击**偏好设置**，输入你的阿里云 DashScope API Key 并保存。
+
+> 没有 API Key？访问 [阿里云百炼控制台](https://bailian.console.aliyun.com/cn-beijing?tab=model#/api-key) 注册获取，新用户有免费额度。
+
+**5. 开始使用**
+
+- **本地文件**：拖拽 MP3、WAV、M4A 等音频文件
+- **播客链接**：粘贴小宇宙、喜马拉雅、Apple Podcasts、网易云等平台链接
+- **B站视频**：粘贴 Bilibili 视频链接
+- **智能对话**：向全部历史归档提问，基于 RAG 精准定位相关内容
 
 ---
 
