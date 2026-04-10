@@ -707,9 +707,6 @@ class BackendStarter {
     });
 
     this.pythonProcess.on('exit', (code, signal) => {
-      // 在任何 this.pythonProcess 使用前先保存本地副本，防止 stopBackend() 将其置 null 后触发此 handler
-      const procPid = this.pythonProcess ? this.pythonProcess.pid : '(已停止)';
-
       // 关闭文件流
       if (this._stdoutStream) { this._stdoutStream.end(); this._stdoutStream = null; }
       if (this._stderrStream) { this._stderrStream.end(); this._stderrStream = null; }
@@ -728,7 +725,7 @@ class BackendStarter {
         this._appendLog(BACKEND_ERROR_LOG, `读取 stderr 日志失败: ${e.message}`);
       }
 
-      const msg = `[BackendStarter] 后端退出: code=${code} signal=${signal} restartCount=${this.restartCount} pid=${procPid}`;
+      const msg = `[BackendStarter] 后端退出: code=${code} signal=${signal} restartCount=${this.restartCount} pid=${this.pythonProcess.pid}`;
       this._appendLog(BACKEND_ERROR_LOG, msg);
       console.warn(msg);
 
@@ -787,7 +784,7 @@ class BackendStarter {
             `后端连续退出 code=${code}，已重启 ${this.maxRestarts} 次仍失败`,
             `后端模式: ${backendMode}`,
             `cwd: ${this.userDataPath}`,
-            `pid: ${procPid}`,
+            `pid: ${this.pythonProcess.pid}`,
             ``,
             `=== 后端 stderr ===`,
             displayStderr || '(空)',
