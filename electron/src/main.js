@@ -174,9 +174,9 @@ function categorizeError(errorMessage) {
       title: '后端启动后立即崩溃',
       summary: '后端进程启动后迅速退出，可能是环境配置问题。',
       hints: [
-        '查看详细错误（上方"详细错误"区域）',
-        '打开 <code>~/Library/Logs/PodGist/backend-error.log</code> 查看后端崩溃原因',
-        '可能是 Python 依赖缺失或 AI 模型加载失败'
+        '查看上方"详细错误"区域中的 stderr 内容',
+        '根据 stderr 中的具体错误信息排查',
+        '可能是 FFmpeg 缺失、API Key 未配置、或端口被占用'
       ]
     };
   }
