@@ -7,17 +7,13 @@
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.104-009688?logo=fastapi)
 
-## 软件截图
-
-![PodGist Homepage](assets/screenshot-homepage.png)
-
 ## 简介
 
 **PodGist** 是一个基于云端 AI 的音频内容结构化工具。它通过语音转录（阿里云 DashScope ASR）和大语言模型（通义千问）分析，将各类音频（播客、讲座、会议录音等）转化为带**精确时间轴**的结构化摘要。
 
 > **设计理念**：在所有音频总结工具都在卷"总结得多详细"的时候，我们选择回到音频内容最独特的价值——**时间**。每一期播客、每一段录音，其核心价值不仅在于说了什么，更在于**什么时候说的**。时间轴让你可以直接跳转到感兴趣的部分，而不用在漫长的音频里猜测"这部分大概在几分几秒"。
 
----
+![PodGist Homepage](assets/screenshot-homepage.png)
 
 ## 核心特性：以时间轴为中心
 
