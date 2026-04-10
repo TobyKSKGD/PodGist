@@ -12,6 +12,12 @@ const { execSync } = require('child_process');
 const path = require('path');
 
 exports.default = async function afterPack(context) {
+  // Skip non-macOS builds (this hook is at YAML root level, runs for all platforms)
+  if (process.platform !== 'darwin') {
+    console.log('[afterPack] Skipping — not macOS');
+    return;
+  }
+
   const appOutDir = context.appOutDir;
   const appName = context.packager.appInfo.productFilename;
 
