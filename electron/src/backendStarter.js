@@ -6,6 +6,8 @@ const os = require('os');
 const LOG_DIR = 'logs';
 const BACKEND_LOG = 'backend.log';
 const BACKEND_ERROR_LOG = 'backend-error.log';
+const BACKEND_STDOUT_LOG = 'backend-stdout.log';
+const BACKEND_STDERR_LOG = 'backend-stderr.log';
 const MAX_TAIL_CHARS = 4000;
 
 class BackendStarter {
@@ -21,6 +23,9 @@ class BackendStarter {
     this._lastStdOut = '';
     this._backendLogPath = null;
     this._backendErrorLogPath = null;
+    // 独立日志文件流（直接写文件，不走内存缓冲）
+    this._stdoutStream = null;
+    this._stderrStream = null;
     // 外部设置的致命错误回调（由 main.js 注入）
     this._onBackendFatal = null;
     // 运行时路径（由 preparePythonVenv / prepareFFmpeg 设置）
@@ -96,6 +101,8 @@ class BackendStarter {
     // 初始化日志路径
     this._backendLogPath = path.join(this._logDir(), BACKEND_LOG);
     this._backendErrorLogPath = path.join(this._logDir(), BACKEND_ERROR_LOG);
+    const backendStdoutLogPath = path.join(this._logDir(), BACKEND_STDOUT_LOG);
+    const backendStderrLogPath = path.join(this._logDir(), BACKEND_STDERR_LOG);
 
     // 确保用户数据目录存在
     fs.mkdirSync(this.userDataPath, { recursive: true });
@@ -308,6 +315,24 @@ class BackendStarter {
       } else {
         console.warn('[BackendStarter] 警告: 未找到打包的 FFmpeg，尝试使用系统 FFmpeg');
         this._appendLog(BACKEND_ERROR_LOG, '警告: 未找到打包的 FFmpeg');
+        // Windows 必须有 FFmpeg，缺少则致命
+        const msg = `[BackendStarter] 致命错误: 未找到打包的 FFmpeg: ${bundledFFmpeg}`;
+        this._appendLog(BACKEND_ERROR_LOG, msg);
+        throw new Error(msg);
+      }
+
+      // Windows: 验证 FFmpeg 复制确实成功
+      if (!fs.existsSync(destFFmpeg)) {
+        const msg = `[BackendStarter] 致命错误: FFmpeg 复制失败，目标文件不存在: ${destFFmpeg}`;
+        this._appendLog(BACKEND_ERROR_LOG, msg);
+        throw new Error(msg);
+      }
+      this._appendLog(BACKEND_LOG, `FFmpeg 复制验证 OK: ${destFFmpeg} (${fs.statSync(destFFmpeg).size} bytes)`);
+
+      if (!fs.existsSync(destFFprobe)) {
+        const msg = `[BackendStarter] 致命错误: ffprobe 复制失败，目标文件不存在: ${destFFprobe}`;
+        this._appendLog(BACKEND_ERROR_LOG, msg);
+        throw new Error(msg);
       }
 
       // 记录 Windows FFmpeg 运行时路径
@@ -622,11 +647,42 @@ class BackendStarter {
       spawnOptions.windowsHide = true;
     }
 
+    // 关闭旧的文件流（防止重复打开）
+    if (this._stdoutStream) { try { this._stdoutStream.end(); } catch(e){} this._stdoutStream = null; }
+    if (this._stderrStream) { try { this._stderrStream.end(); } catch(e){} this._stderrStream = null; }
+
+    // 创建新的文件流（直接写文件，不走内存）
+    try {
+      const backendStdoutLogPath = path.join(this._logDir(), BACKEND_STDOUT_LOG);
+      const backendStderrLogPath = path.join(this._logDir(), BACKEND_STDERR_LOG);
+      this._stdoutStream = fs.createWriteStream(backendStdoutLogPath, { flags: 'w', encoding: 'utf8' });
+      this._stderrStream = fs.createWriteStream(backendStderrLogPath, { flags: 'w', encoding: 'utf8' });
+      this._appendLog(BACKEND_LOG, `stdout 日志: ${backendStdoutLogPath}`);
+      this._appendLog(BACKEND_LOG, `stderr 日志: ${backendStderrLogPath}`);
+    } catch (e) {
+      this._appendLog(BACKEND_ERROR_LOG, `创建日志文件流失败: ${e.message}`);
+    }
+
     this.pythonProcess = spawn(pythonPath, pythonArgs, spawnOptions);
+
+    // 记录启动诊断信息
+    this._appendLog(BACKEND_LOG, `=== 后端启动 ===`);
+    this._appendLog(BACKEND_LOG, `backend mode: ${backendMode}`);
+    this._appendLog(BACKEND_LOG, `spawn: ${pythonPath} ${pythonArgs.join(' ')}`);
+    this._appendLog(BACKEND_LOG, `cwd: ${this.userDataPath}`);
+    this._appendLog(BACKEND_LOG, `env.PATH: ${env.PATH}`);
+    this._appendLog(BACKEND_LOG, `env.PODGIST_DATA_DIR: ${env.PODGIST_DATA_DIR}`);
+    this._appendLog(BACKEND_LOG, `env.FFMPEG_BINARY: ${env.FFMPEG_BINARY || '(未设置)'}`);
+    this._appendLog(BACKEND_LOG, `env.FFPROBE_BINARY: ${env.FFPROBE_BINARY || '(未设置)'}`);
+    this._appendLog(BACKEND_LOG, `backend pid: ${this.pythonProcess.pid}`);
 
     this.pythonProcess.stdout.on('data', (data) => {
       const text = data.toString();
       this._lastStdOut = this._updateTail(this._lastStdOut + text, MAX_TAIL_CHARS);
+      // 写独立 stdout 日志文件
+      if (this._stdoutStream) {
+        this._stdoutStream.write(`[${new Date().toISOString()}] ${text}`);
+      }
       this._appendLog(BACKEND_LOG, '[stdout] ' + text.trim());
       console.log('[Python]', text.trim());
     });
@@ -634,14 +690,39 @@ class BackendStarter {
     this.pythonProcess.stderr.on('data', (data) => {
       const text = data.toString();
       this._lastStdErr = this._updateTail(this._lastStdErr + text, MAX_TAIL_CHARS);
+      // 写独立 stderr 日志文件
+      if (this._stderrStream) {
+        this._stderrStream.write(`[${new Date().toISOString()}] ${text}`);
+      }
       this._appendLog(BACKEND_ERROR_LOG, '[stderr] ' + text.trim());
       console.error('[Python Error]', text.trim());
     });
 
     this.pythonProcess.on('exit', (code, signal) => {
-      const msg = `[BackendStarter] 后端退出: code=${code} signal=${signal} restartCount=${this.restartCount}`;
+      // 关闭文件流
+      if (this._stdoutStream) { this._stdoutStream.end(); this._stdoutStream = null; }
+      if (this._stderrStream) { this._stderrStream.end(); this._stderrStream = null; }
+
+      // 读取真实 stderr 日志文件
+      let realStderr = '';
+      try {
+        const stderrFile = path.join(this._logDir(), BACKEND_STDERR_LOG);
+        if (fs.existsSync(stderrFile)) {
+          realStderr = fs.readFileSync(stderrFile, 'utf8');
+          if (realStderr.length > 0) {
+            this._appendLog(BACKEND_ERROR_LOG, `真实 stderr 内容 (${realStderr.length} chars): ${realStderr.slice(0, 500)}`);
+          }
+        }
+      } catch (e) {
+        this._appendLog(BACKEND_ERROR_LOG, `读取 stderr 日志失败: ${e.message}`);
+      }
+
+      const msg = `[BackendStarter] 后端退出: code=${code} signal=${signal} restartCount=${this.restartCount} pid=${this.pythonProcess.pid}`;
       this._appendLog(BACKEND_ERROR_LOG, msg);
       console.warn(msg);
+
+      // 优先用真实 stderr 内容，备用内存缓冲
+      const displayStderr = (realStderr.length > 0 ? realStderr : this._lastStdErr).slice(-3000);
 
       if (code !== 0 && this.restartCount < this.maxRestarts) {
         this.restartCount++;
@@ -651,12 +732,27 @@ class BackendStarter {
         console.warn(waitMsg);
         setTimeout(() => this.startPythonBackend(), 5000 * this.restartCount);
       } else if (code !== 0) {
+        const backendStderrPath = path.join(this._logDir(), BACKEND_STDERR_LOG);
+        const backendStdoutPath = path.join(this._logDir(), BACKEND_STDOUT_LOG);
         const fatalMsg = `[BackendStarter] 后端连续启动失败，已达最大重启次数 (${this.maxRestarts})`;
         this._appendLog(BACKEND_ERROR_LOG, fatalMsg);
         console.error(fatalMsg);
-        // 通知主进程
+        // 通知主进程 — 传入真实 stderr + 诊断路径
         if (this._onBackendFatal) {
-          this._onBackendFatal(new Error(`后端连续退出 code=${code}，已重启 ${this.maxRestarts} 次仍失败\n\n最近 stderr:\n${this._lastStdErr.slice(-2000)}`));
+          const errDetail = [
+            `后端连续退出 code=${code}，已重启 ${this.maxRestarts} 次仍失败`,
+            `后端模式: ${backendMode}`,
+            `cwd: ${this.userDataPath}`,
+            `pid: ${this.pythonProcess.pid}`,
+            ``,
+            `=== 后端 stderr ===`,
+            displayStderr || '(空)',
+            ``,
+            `=== 日志文件 ===`,
+            `stdout: ${backendStdoutPath}`,
+            `stderr: ${backendStderrPath}`,
+          ].join('\n');
+          this._onBackendFatal(new Error(errDetail));
         }
       }
     });
