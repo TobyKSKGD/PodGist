@@ -318,7 +318,7 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - name: Install Python dependencies (Windows)
-        run: python -m pip install -r requirements.txt
+        run: python -m pip install -r requirements.txt --no-cache
 
       - name: Fetch FFmpeg (Windows)
         shell: pwsh
@@ -340,30 +340,45 @@ jobs:
         run: pwsh -File ./scripts/release/build-backend-win.ps1
 
       # ===== 验证 uvicorn 是否被打进 _internal =====
+      # uvicorn 可能打包进 .pyd/.pyz，不在文件系统中可见
+      # 用简单启动测试验证（不查文件列表）
       - name: Verify uvicorn in packaged build
         shell: pwsh
         run: |
-          $apiInternal = Join-Path "${{ github.workspace }}" "electron\dist\api\_internal"
-          Write-Host "=== 验证 uvicorn 模块是否被打包 ===" -ForegroundColor Cyan
-          Write-Host "检查目录: $apiInternal"
+          $apiEngine = Join-Path "${{ github.workspace }}" "electron\dist\api\api-engine.exe"
+          $tempDir = "$env:TEMP\podgist_uvicorn_test"
+          New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
+          New-Item -ItemType Directory -Force -Path "$tempDir\logs" | Out-Null
 
-          $uvicornFiles = @()
-          if (Test-Path $apiInternal) {
-            Get-ChildItem $apiInternal -Recurse -Filter "uvicorn*" -ErrorAction SilentlyContinue | ForEach-Object {
-              $relPath = $_.FullName.Substring($apiInternal.Length + 1)
-              $uvicornFiles += $relPath
-              Write-Host "  [OK] $relPath"
+          Write-Host "=== 测试 api-engine.exe 是否能启动（uvicorn 验证）===" -ForegroundColor Cyan
+          Write-Host "EXE: $apiEngine"
+
+          # 启动并等待 8 秒
+          $proc = Start-Process -FilePath $apiEngine `
+            -ArgumentList "--data-dir","$tempDir","--resources-path","${{ github.workspace }}" `
+            -PassThru -WindowStyle Hidden
+
+          Start-Sleep 8
+
+          $crashed = $proc.HasExited
+          if ($crashed) {
+            Write-Host "[CRASH] api-engine.exe 立即退出，exitCode=$($proc.ExitCode)" -ForegroundColor Red
+            # 读取错误日志
+            $pyLog = "$tempDir\logs\backend-python.log"
+            if ((Test-Path $pyLog) -and (Get-Content $pyLog -Raw) -match "Traceback|ModuleNotFoundError|No module") {
+              Write-Host "--- backend-python.log 错误 ---" -ForegroundColor Red
+              Get-Content $pyLog | Select-Object -Last 10 | ForEach-Object { Write-Host $_ }
             }
-          }
-
-          if ($uvicornFiles.Count -eq 0) {
-            Write-Host "ERROR: 未在 _internal 中找到任何 uvicorn 模块！" -ForegroundColor Red
-            Write-Host "这意味着 collect_submodules('uvicorn') 返回了空列表" -ForegroundColor Red
+            Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+            Write-Host "ERROR: uvicorn 未正确打包，api-engine.exe 启动失败" -ForegroundColor Red
             exit 1
+          } else {
+            Write-Host "[OK] api-engine.exe 在 8 秒后仍运行，uvicorn 打包正确" -ForegroundColor Green
+            Stop-Process $proc.Id -Force -ErrorAction SilentlyContinue
           }
 
-          Write-Host ""
-          Write-Host "验证通过：找到 $($uvicornFiles.Count) 个 uvicorn 相关文件" -ForegroundColor Green
+          Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+          Write-Host "验证通过" -ForegroundColor Green
 
       # ===== Electron 安装依赖 =====
       - name: Install electron deps
