@@ -122,6 +122,30 @@ jobs:
           npm run build:mac
         working-directory: electron
 
+      # ===== Ad-hoc 深度签名（确保所有嵌套二进制都被签名） =====
+      - name: Ad-hoc sign .app (macOS)
+        run: |
+          echo "=== 查找 electron-builder 生成的 .app ==="
+          APP_PATH=""
+          for dir in release electron/release electron/out; do
+            app=$(find "$dir" -name "PodGist.app" -type d 2>/dev/null | head -1)
+            if [ -n "$app" ]; then
+              APP_PATH="$app"
+              break
+            fi
+          done
+          if [ -z "$APP_PATH" ]; then
+            echo "ERROR: No PodGist.app found"
+            exit 1
+          fi
+          echo "Found app at: $APP_PATH"
+          echo ""
+          echo "=== 对整个 .app 进行 ad-hoc deep sign ==="
+          codesign --force --deep --sign - "$APP_PATH"
+          echo ""
+          echo "=== 签名结果 ==="
+          codesign -dv "$APP_PATH" 2>&1 || true
+
       # ===== 查找 unpacked 目录（用于验包） =====
       - name: Locate unpacked app (macOS)
         id: locate-mac-unpacked
@@ -139,8 +163,8 @@ jobs:
           echo "ERROR: No PodGist.app found in release/ or electron/release/"
           exit 1
 
-      # ===== 验包（打包完成后验证关键文件） =====
-      - name: Verify macOS package contents
+      # ===== 两层验包：结构完整性 + Gatekeeper 信任级别 =====
+      - name: Verify macOS package (structural + trust)
         run: |
           set -e
           APP_PATH="${{ steps.locate-mac-unpacked.outputs.path }}"
@@ -149,12 +173,12 @@ jobs:
 
           echo ""
           echo "========================================"
-          echo "  UNSIGNED PREVIEW BUILD (macOS)"
-          echo "  此构建未签名/未公证"
-          echo "  首次运行需要手动放行:"
-          echo "    1. sudo xattr -rd com.apple.quarantine /Applications/PodGist.app"
-          echo "    2. codesign --force --deep --sign - /Applications/PodGist.app"
-          echo "    3. open /Applications/PodGist.app"
+          echo "  macOS Preview Build"
+          echo "  此构建为 ad-hoc 签名预览版"
+          echo "  首次运行："
+          echo "    1. 双击打开 App"
+          echo "    2. 如果系统拦截，点击\"仍要打开\"（或在系统设置中放行）"
+          echo "    3. 不需要终端命令"
           echo "========================================"
           echo ""
 
@@ -162,192 +186,101 @@ jobs:
           echo "App path: $APP_PATH"
 
           # =============================================
-          # 1. 检查 app.asar.unpacked/backend/start_electron.py
+          # 第一层：结构完整性检查（失败则禁止上传）
           # =============================================
+          echo ""
+          echo "=== [第一层] 结构完整性检查 ==="
+
           START_SCRIPT="$APP_PATH/Contents/Resources/app.asar.unpacked/backend/start_electron.py"
           if [ -f "$START_SCRIPT" ]; then
-            echo "[OK] app.asar.unpacked/backend/start_electron.py"
+            echo "[OK] start_electron.py"
           else
-            echo "[MISSING] app.asar.unpacked/backend/start_electron.py"
+            echo "[MISSING] start_electron.py"
             ERRORS=$((ERRORS+1))
           fi
 
-          # =============================================
-          # 2. python_venv 已废弃：使用独立 api-engine 二进制
-          #    保留检查但将缺失改为 WARNING（非 ERROR）
-          # =============================================
-          VENV_PATH="$APP_PATH/Contents/Resources/python_venv"
-          if [ -d "$VENV_PATH" ]; then
-            echo "[DEPRECATED] Contents/Resources/python_venv/ (已废弃，请使用 api-engine)"
-            WARNINGS=$((WARNINGS+1))
-          else
-            echo "[INFO] Contents/Resources/python_venv/ 不存在（使用独立 api-engine 二进制）"
-          fi
-
-          VENV_BIN_PYTHON3="$VENV_PATH/bin/python3"
-          VENV_BIN_PYTHON="$VENV_PATH/bin/python"
-          VENV_PYVENV_CFG="$VENV_PATH/pyvenv.cfg"
-
-          # =============================================
-          # 3. 检查 python3 是否为符号链接（破坏可移植性）
-          #    仅在 python_venv 存在时检查
-          # =============================================
-          echo ""
-          echo "=== venv 可移植性诊断 ==="
-          if [ -d "$VENV_PATH" ]; then
-            if [ -L "$VENV_BIN_PYTHON3" ]; then
-              TARGET=$(readlink "$VENV_BIN_PYTHON3")
-              echo "[FAIL] python3 is a SYMLINK: $VENV_BIN_PYTHON3 -> $TARGET"
-              if echo "$TARGET" | grep -q "^/"; then
-                echo "       *** ABSOLUTE symlink detected - will BREAK on end-user machines!"
-                echo "       *** This venv was created WITHOUT --copies flag!"
-                ERRORS=$((ERRORS+1))
-              else
-                echo "       [INFO] Relative symlink (unusual but may work)"
-                WARNINGS=$((WARNINGS+1))
-              fi
-            elif [ -f "$VENV_BIN_PYTHON3" ]; then
-              echo "[OK] python3 is a regular file (not symlink)"
-            else
-              echo "[MISSING] python3 not found at all"
-              WARNINGS=$((WARNINGS+1))
-            fi
-
-            # =============================================
-            # 4. 检查 python 符号链接
-            # =============================================
-            if [ -L "$VENV_BIN_PYTHON" ]; then
-              TARGET=$(readlink "$VENV_BIN_PYTHON")
-              echo "[FAIL] python is a SYMLINK: $VENV_BIN_PYTHON -> $TARGET"
-              if echo "$TARGET" | grep -q "^/"; then
-                echo "       *** ABSOLUTE symlink - will BREAK on end-user machines!"
-                ERRORS=$((ERRORS+1))
-              fi
-            elif [ -f "$VENV_BIN_PYTHON" ]; then
-              echo "[OK] python is a regular file (not symlink)"
-            fi
-
-            # =============================================
-            # 5. 检查 pyvenv.cfg 是否含 CI 构建机路径
-            # =============================================
-            echo ""
-            echo "=== pyvenv.cfg 内容检查 ==="
-            if [ -f "$VENV_PYVENV_CFG" ]; then
-              echo "pyvenv.cfg contents:"
-              cat "$VENV_PYVENV_CFG" | sed 's/^/  /'
-              if grep -q "/Users/runner/" "$VENV_PYVENV_CFG" 2>/dev/null; then
-                echo "[FAIL] CI runner path detected in pyvenv.cfg!"
-                echo "       Path contains /Users/runner/ - will break on other machines!"
-                ERRORS=$((ERRORS+1))
-              elif grep -q "/home/" "$VENV_PYVENV_CFG" 2>/dev/null; then
-                echo "[FAIL] Linux home path detected in pyvenv.cfg!"
-                ERRORS=$((ERRORS+1))
-              else
-                echo "[OK] No CI/Linux path detected in pyvenv.cfg"
-              fi
-            else
-              echo "[MISSING] pyvenv.cfg not found"
-              WARNINGS=$((WARNINGS+1))
-            fi
-          else
-            echo "[INFO] python_venv 不存在，跳过 venv 可移植性检查"
-          fi
-
-          # =============================================
-          # 6. 检查 api-engine 后端二进制（macOS 主运行时）
-          # =============================================
-          echo ""
-          echo "=== 后端二进制检查 ==="
           API_ENGINE="$APP_PATH/Contents/Resources/api/api-engine"
           if [ -f "$API_ENGINE" ]; then
             SIZE=$(stat -f%z "$API_ENGINE" 2>/dev/null || stat -c%s "$API_ENGINE" 2>/dev/null || echo "unknown")
-            echo "[OK] Contents/Resources/api/api-engine (standalone binary, $SIZE bytes)"
+            echo "[OK] api-engine ($SIZE bytes)"
           else
-            echo "[MISSING] Contents/Resources/api/api-engine — macOS 必须使用独立后端二进制"
+            echo "[MISSING] api-engine — 构建不完整"
             ERRORS=$((ERRORS+1))
           fi
 
-          # =============================================
-          # 7. 检查 ffmpeg
-          # =============================================
-          echo ""
-          echo "=== FFmpeg 检查 ==="
           FFMPEG="$APP_PATH/Contents/Resources/ffmpeg/ffmpeg"
           if [ -f "$FFMPEG" ]; then
-            echo "[OK] Contents/Resources/ffmpeg/ffmpeg"
+            echo "[OK] ffmpeg"
           else
-            echo "[MISSING] Contents/Resources/ffmpeg/ffmpeg"
+            echo "[MISSING] ffmpeg"
             ERRORS=$((ERRORS+1))
           fi
 
           FFPROBE="$APP_PATH/Contents/Resources/ffmpeg/ffprobe"
           if [ -f "$FFPROBE" ]; then
-            echo "[OK] Contents/Resources/ffmpeg/ffprobe"
+            echo "[OK] ffprobe"
           else
-            echo "[MISSING] Contents/Resources/ffmpeg/ffprobe"
+            echo "[MISSING] ffprobe"
+            ERRORS=$((ERRORS+1))
+          fi
+
+          echo ""
+          echo "=== [第一层] codesign --verify --deep --strict ==="
+          if codesign --verify --deep --strict "$APP_PATH" 2>&1; then
+            echo "[PASS] .app 结构完整，ad-hoc 签名有效"
+          else
+            echo "[FAIL] codesign 验证失败：.app 结构损坏或签名不完整"
             ERRORS=$((ERRORS+1))
           fi
 
           # =============================================
-          # 8. 列出 Resources 目录内容
+          # 第二层：Gatekeeper 信任级别（失败只告警，不阻止上传）
           # =============================================
           echo ""
-          echo "=== Contents/Resources/ 目录树 ==="
-          ls -la "$APP_PATH/Contents/Resources/" 2>/dev/null || true
-          if [ -d "$APP_PATH/Contents/Resources/python_venv" ]; then
-            echo "python_venv/bin/ contents:"
-            ls -la "$APP_PATH/Contents/Resources/python_venv/bin/" 2>/dev/null | head -15 || true
-          fi
+          echo "=== [第二层] Gatekeeper 信任评估 ==="
+          SPCTL_OUTPUT=$(spctl --assess --type execute --verbose=2 --explain "$APP_PATH" 2>&1)
+          SPCTL_EXIT=$?
+          echo "$SPCTL_OUTPUT"
 
-          # =============================================
-          # 9. NON-PORTABLE VENV 警告标记（仅在 python_venv 存在时相关）
-          # =============================================
-          if [ -d "$VENV_PATH" ] && ([ -L "$VENV_BIN_PYTHON3" ] || grep -q "/Users/runner/" "$VENV_PYVENV_CFG" 2>/dev/null); then
+          if echo "$SPCTL_OUTPUT" | grep -qi "accepted\|allow"; then
             echo ""
-            echo "!!! NON-PORTABLE VENV DETECTED !!!"
-            echo "    This venv will NOT work on end-user machines!"
-            echo "    Recommendation: Use standalone api-engine binary instead."
+            echo "[PASS] Gatekeeper 评估通过（应用已受信任）"
+          else
+            echo ""
+            echo "========================================"
+            echo "  PREVIEW BUILD: structurally valid,"
+            echo "  not trusted by Gatekeeper."
+            echo ""
+            echo "  这是 Preview 版本的正常状态。"
+            echo "  用户首次打开时："
+            echo "    1. 系统会弹出安全提示"
+            echo "    2. 点击\"仍要打开\"即可运行"
+            echo "    3. 或在系统设置 → 隐私与安全性中放行"
+            echo "========================================"
+            # 记录警告但不退出
           fi
 
           # =============================================
-          # 10. 代码签名诊断
+          # Extended Attributes
           # =============================================
           echo ""
-          echo "=== 代码签名诊断 ==="
-          echo "codesign -dv output:"
-          codesign -dv "$APP_PATH" 2>&1 || true
-          echo ""
-          echo "codesign --verify --deep --strict output:"
-          codesign --verify --deep --strict "$APP_PATH" 2>&1 || true
+          echo "=== Extended Attributes ==="
+          XATTR_OUT=$(xattr -lr "$APP_PATH" 2>&1)
+          if [ -z "$XATTR_OUT" ]; then
+            echo "[INFO] 无扩展属性（正常）"
+          else
+            echo "$XATTR_OUT"
+          fi
 
           # =============================================
-          # 11. Gatekeeper 评估
-          # =============================================
-          echo ""
-          echo "=== Gatekeeper spctl 评估 ==="
-          echo "spctl --assess --type execute -vvv output:"
-          spctl --assess --type execute -vvv "$APP_PATH" 2>&1 || true
-
-          # =============================================
-          # 12. Extended Attributes 检查
-          # =============================================
-          echo ""
-          echo "=== Extended Attributes (xattr) ==="
-          xattr -lr "$APP_PATH" 2>/dev/null || true
-
-          # =============================================
-          # 验包失败则禁止上传
+          # 总结
           # =============================================
           echo ""
           if [ $ERRORS -gt 0 ]; then
-            echo "ERROR: 验包失败，$ERRORS 个错误"
+            echo "ERROR: 验包失败，$ERRORS 个结构错误 — 禁止上传"
             exit 1
           fi
-          if [ $WARNINGS -gt 0 ]; then
-            echo "WARNING: $WARNINGS 个警告（但验包通过）"
-          fi
-          echo ""
-          echo "=== 验包通过 ==="
+          echo "=== 验包通过：结构完整，可作为 Preview 构建发布 ==="
 
       # ===== 查找最终安装包产物 =====
       - name: Find installer (macOS)
