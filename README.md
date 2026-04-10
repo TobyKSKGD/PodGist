@@ -34,15 +34,15 @@ PodGist 所有功能都围绕时间轴展开：
 
 #### 系统要求
 
-- macOS 11.0 (Big Sur) 或更高版本
-- Apple Silicon (M1/M2/M3/M4) 或 Intel 芯片
+- macOS 12.0 (Monterey) 或更高版本
+- Apple Silicon (M1/M2/M3/M4)
 - 推荐 8GB 以上内存
 
 #### 安装步骤
 
 **1. 下载安装包**
 
-点击 [PodGist Releases](https://github.com/TobyKSKGD/PodGist/releases) 下载 `.dmg` 文件。
+点击 [PodGist Releases](https://github.com/TobyKSKGD/PodGist/releases) 下载 `PodGist-X.Y.Z-mac-arm64.dmg` 文件。
 
 **2. 安装应用**
 
@@ -56,8 +56,8 @@ PodGist 所有功能都围绕时间轴展开：
 ```
 双击 PodGist
 首次启动若提示"无法打开"，
-前往 系统偏好设置 → 安全性与隐私 → 通用
-点击"仍要打开"
+前往 系统设置 → 隐私与安全性
+滚动到底部，点击"仍要打开"
 ```
 
 **4. 配置 API Key**
@@ -84,7 +84,7 @@ PodGist 所有功能都围绕时间轴展开：
 
 **1. 下载安装包**
 
-点击 [PodGist Releases](https://github.com/TobyKSKGD/PodGist/releases) 下载 `.exe` 安装包。
+点击 [PodGist Releases](https://github.com/TobyKSKGD/PodGist/releases) 下载 `PodGist-X.Y.Z-win-x64.exe` 安装包。
 
 **2. 安装应用**
 
