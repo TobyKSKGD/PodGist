@@ -629,9 +629,13 @@ class BackendStarter {
       const destDir = path.join(this.userDataPath, 'bin');
       const destFFmpeg = path.join(destDir, 'ffmpeg.exe');
       const destFFprobe = path.join(destDir, 'ffprobe.exe');
-      // 保留原始 PATH，prepend destDir；如果原始 PATH 不存在则使用系统默认
-      const originalPath = process.env.PATH || process.env.Path || '';
+      // 保留原始 PATH（Windows 下为 Path），prepend destDir
+      const originalPath = process.env.PATH || process.env.Path || process.env.path || '';
       env.PATH = `${destDir};${originalPath}`;
+      // 保留关键 Windows 系统变量，防止 subprocess 缺失必要环境
+      env.SystemRoot = process.env.SystemRoot || 'C:\\Windows';
+      env.WINDIR = process.env.WINDIR || env.SystemRoot;
+      env.PATHEXT = process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD';
       env.FFMPEG_BINARY = destFFmpeg;
       env.FFPROBE_BINARY = destFFprobe;
       env.PODGIST_FFMPEG_DIR = destDir;
@@ -725,21 +729,41 @@ class BackendStarter {
       this._appendLog(BACKEND_ERROR_LOG, msg);
       console.warn(msg);
 
-      // 优先用真实 stderr 内容，备用内存缓冲，再备用 backend-python.log
-      let displayStderr = (realStderr.length > 0 ? realStderr : this._lastStdErr).slice(-3000);
-      if (!displayStderr || displayStderr.trim() === '') {
-        // stderr 全空，尝试读 start_electron.py 的顶层异常日志
-        const pyLogPath = path.join(this.userDataPath, 'logs', 'backend-python.log');
-        try {
-          if (fs.existsSync(pyLogPath)) {
-            const pyLog = fs.readFileSync(pyLogPath, 'utf8');
+      // 错误展示优先级：
+      // 1. backend-stderr.log（进程真实 stderr）
+      // 2. backend-python.log（start_electron.py 的顶层异常，写到 PODGIST_DATA_DIR/logs/）
+      // 3. 内存缓冲 _lastStdErr
+      let displayStderr = '';
+      let errorSource = '(无错误来源)';
+
+      // 优先检查 backend-python.log（最可能有 Python 顶层异常）
+      const pyLogPath = path.join(this.userDataPath, 'logs', 'backend-python.log');
+      try {
+        if (fs.existsSync(pyLogPath)) {
+          const pyLog = fs.readFileSync(pyLogPath, 'utf8').trim();
+          if (pyLog.length > 0) {
             displayStderr = `[来自 backend-python.log]\n${pyLog.slice(-3000)}`;
-            this._appendLog(BACKEND_ERROR_LOG, `从 backend-python.log 读取到内容: ${pyLog.length} chars`);
+            errorSource = 'backend-python.log';
+            this._appendLog(BACKEND_ERROR_LOG, `采用 backend-python.log 作为错误来源 (${pyLog.length} chars)`);
           }
-        } catch (e) {
-          this._appendLog(BACKEND_ERROR_LOG, `读取 backend-python.log 失败: ${e.message}`);
         }
+      } catch (e) {
+        this._appendLog(BACKEND_ERROR_LOG, `读取 backend-python.log 失败: ${e.message}`);
       }
+
+      // 如果 backend-python.log 为空或不存在，尝试 stderr 文件
+      if (!displayStderr && realStderr.trim().length > 0) {
+        displayStderr = realStderr.slice(-3000);
+        errorSource = 'backend-stderr.log';
+      }
+
+      // 最后备用内存缓冲
+      if (!displayStderr && this._lastStdErr.trim().length > 0) {
+        displayStderr = this._lastStdErr.slice(-3000);
+        errorSource = '内存缓冲(lastStdErr)';
+      }
+
+      this._appendLog(BACKEND_ERROR_LOG, `最终错误来源: ${errorSource}`);
 
       if (code !== 0 && this.restartCount < this.maxRestarts) {
         this.restartCount++;

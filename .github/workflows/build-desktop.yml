@@ -317,6 +317,9 @@ jobs:
           cache: 'pip'
           cache-dependency-path: requirements.txt
 
+      - name: Install Python dependencies (Windows)
+        run: python -m pip install -r requirements.txt
+
       - name: Fetch FFmpeg (Windows)
         shell: pwsh
         run: pwsh -File ./scripts/release/fetch-ffmpeg-win.ps1
@@ -335,6 +338,31 @@ jobs:
         env:
           PROJECT_ROOT: ${{ github.workspace }}
         run: pwsh -File ./scripts/release/build-backend-win.ps1
+
+      # ===== 验证 uvicorn 是否被打进 _internal =====
+      - name: Verify uvicorn in packaged build
+        shell: pwsh
+        run: |
+          $apiInternal = "${{ github.workspace }}\electron\dist\api\_internal"
+          Write-Host "=== 验证 uvicorn 模块是否被打包 ===" -ForegroundColor Cyan
+          Write-Host "检查目录: $apiInternal"
+
+          $uvicornFiles = @()
+          if (Test-Path $apiInternal) {
+            Get-ChildItem $apiInternal -Recurse -Filter "uvicorn*" -ErrorAction SilentlyContinue | ForEach-Object {
+              $uvicornFiles += $_.FullName.Replace("$apiInternal\", "")
+              Write-Host "  [OK] $($_.FullName.Replace("$apiInternal\", ""))"
+            }
+          }
+
+          if ($uvicornFiles.Count -eq 0) {
+            Write-Host "ERROR: 未在 _internal 中找到任何 uvicorn 模块！" -ForegroundColor Red
+            Write-Host "这意味着 collect_submodules('uvicorn') 返回了空列表" -ForegroundColor Red
+            exit 1
+          }
+
+          Write-Host ""
+          Write-Host "验证通过：找到 $($uvicornFiles.Count) 个 uvicorn 相关文件" -ForegroundColor Green
 
       # ===== Electron 安装依赖 =====
       - name: Install electron deps
@@ -424,6 +452,90 @@ jobs:
 
           Write-Host ""
           Write-Host "=== 验包通过 ===" -ForegroundColor Green
+
+      # ===== Windows 后端强制 smoke test =====
+      - name: Smoke test Windows backend
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          $unpacked = "${{ steps.locate-win-unpacked.outputs.path }}"
+          $apiEngine = Join-Path $unpacked "resources\api\api-engine.exe"
+          $tempDataDir = "$env:TEMP\podgist_smoke_$([guid]::NewGuid().ToString('N').Substring(0,8))"
+          New-Item -ItemType Directory -Force -Path $tempDataDir | Out-Null
+          New-Item -ItemType Directory -Force -Path "$tempDataDir\logs" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$tempDataDir\archives" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$tempDataDir\temp_audio" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$tempDataDir\bin" | Out-Null
+
+          Write-Host "=== Smoke Test: Windows api-engine.exe ===" -ForegroundColor Cyan
+          Write-Host "EXE: $apiEngine"
+          Write-Host "DataDir: $tempDataDir"
+
+          # 复制 ffmpeg 到 smoke 环境
+          $srcFFmpeg = Join-Path $unpacked "resources\ffmpeg\ffmpeg.exe"
+          $srcFFprobe = Join-Path $unpacked "resources\ffmpeg\ffprobe.exe"
+          $smokeBinDir = Join-Path $tempDataDir "bin"
+          if (Test-Path $srcFFmpeg) {
+            Copy-Item $srcFFmpeg (Join-Path $smokeBinDir "ffmpeg.exe") -Force
+            Write-Host "Copied ffmpeg to smoke env"
+          }
+          if (Test-Path $srcFFprobe) {
+            Copy-Item $srcFFprobe (Join-Path $smokeBinDir "ffprobe.exe") -Force
+            Write-Host "Copied ffprobe to smoke env"
+          }
+
+          # 构建环境变量
+          $smokeEnv = @{
+            PATH = "$smokeBinDir;$env:PATH"
+            PODGIST_DATA_DIR = $tempDataDir
+            PODGIST_RESOURCES_PATH = $unpacked
+          }
+
+          Write-Host ""
+          Write-Host "启动 api-engine.exe（后台，10秒观察）..."
+          $proc = Start-Process -FilePath $apiEngine `
+            -ArgumentList "--data-dir","$tempDataDir","--resources-path","$unpacked" `
+            -PassThru -WindowStyle Hidden -ErrorAction SilentlyContinue
+          Write-Host "PID: $($proc.Id)"
+
+          # 观察 10 秒
+          Start-Sleep 10
+
+          $crashed = $false
+          if ($proc.HasExited) {
+            Write-Host "[CRASH] api-engine.exe 在 10 秒内退出，exitCode=$($proc.ExitCode)" -ForegroundColor Red
+            $crashed = $true
+          } else {
+            Write-Host "[OK] 进程 10 秒后仍在运行（uvicorn 启动正常）" -ForegroundColor Green
+          }
+
+          # 读取 backend-python.log 查错
+          $pyLog = Join-Path $tempDataDir "logs\backend-python.log"
+          if ((Test-Path $pyLog) -and (Get-Content $pyLog -Raw) -match "Traceback|Error|Exception") {
+            $logContent = Get-Content $pyLog -Raw
+            Write-Host ""
+            Write-Host "=== backend-python.log 中的错误 ===" -ForegroundColor Red
+            Write-Host $logContent -ForegroundColor Red
+            $crashed = $true
+          }
+
+          # 停止进程
+          if (-not $proc.HasExited) {
+            Write-Host "停止 api-engine.exe (pid=$($proc.Id))..."
+            Stop-Process $proc.Id -Force -ErrorAction SilentlyContinue
+            Start-Sleep 2
+          }
+
+          Remove-Item $tempDataDir -Recurse -Force -ErrorAction SilentlyContinue
+
+          if ($crashed) {
+            Write-Host ""
+            Write-Host "ERROR: Smoke test FAILED — 进程崩溃或日志中有错误" -ForegroundColor Red
+            exit 1
+          }
+
+          Write-Host ""
+          Write-Host "=== Smoke test PASSED ===" -ForegroundColor Green
 
       # ===== 查找最终安装包产物 =====
       - name: Find installer (Windows)
