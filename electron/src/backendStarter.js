@@ -612,7 +612,9 @@ class BackendStarter {
     // 不再使用 process.resourcesPath/ffmpeg（那是打包资源，不一定可执行）
     if (platform === 'darwin') {
       if (this._ffmpegRuntimeDir && this._ffmpegExe && this._ffprobeExe) {
-        env.PATH = `${this._ffmpegRuntimeDir}:${env.PATH}`;
+        // preserve original PATH, prepend ffmpeg dir
+        const originalPath = process.env.PATH || '';
+        env.PATH = `${this._ffmpegRuntimeDir}:${originalPath}`;
         env.FFMPEG_BINARY = this._ffmpegExe;
         env.FFPROBE_BINARY = this._ffprobeExe;
         env.PODGIST_FFMPEG_DIR = this._ffmpegRuntimeDir;
@@ -627,7 +629,9 @@ class BackendStarter {
       const destDir = path.join(this.userDataPath, 'bin');
       const destFFmpeg = path.join(destDir, 'ffmpeg.exe');
       const destFFprobe = path.join(destDir, 'ffprobe.exe');
-      env.PATH = `${destDir};${env.PATH}`;
+      // 保留原始 PATH，prepend destDir；如果原始 PATH 不存在则使用系统默认
+      const originalPath = process.env.PATH || process.env.Path || '';
+      env.PATH = `${destDir};${originalPath}`;
       env.FFMPEG_BINARY = destFFmpeg;
       env.FFPROBE_BINARY = destFFprobe;
       env.PODGIST_FFMPEG_DIR = destDir;
@@ -721,8 +725,21 @@ class BackendStarter {
       this._appendLog(BACKEND_ERROR_LOG, msg);
       console.warn(msg);
 
-      // 优先用真实 stderr 内容，备用内存缓冲
-      const displayStderr = (realStderr.length > 0 ? realStderr : this._lastStdErr).slice(-3000);
+      // 优先用真实 stderr 内容，备用内存缓冲，再备用 backend-python.log
+      let displayStderr = (realStderr.length > 0 ? realStderr : this._lastStdErr).slice(-3000);
+      if (!displayStderr || displayStderr.trim() === '') {
+        // stderr 全空，尝试读 start_electron.py 的顶层异常日志
+        const pyLogPath = path.join(this.userDataPath, 'logs', 'backend-python.log');
+        try {
+          if (fs.existsSync(pyLogPath)) {
+            const pyLog = fs.readFileSync(pyLogPath, 'utf8');
+            displayStderr = `[来自 backend-python.log]\n${pyLog.slice(-3000)}`;
+            this._appendLog(BACKEND_ERROR_LOG, `从 backend-python.log 读取到内容: ${pyLog.length} chars`);
+          }
+        } catch (e) {
+          this._appendLog(BACKEND_ERROR_LOG, `读取 backend-python.log 失败: ${e.message}`);
+        }
+      }
 
       if (code !== 0 && this.restartCount < this.maxRestarts) {
         this.restartCount++;

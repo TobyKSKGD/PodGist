@@ -425,6 +425,111 @@ jobs:
           Write-Host ""
           Write-Host "=== 验包通过 ===" -ForegroundColor Green
 
+      # ===== Windows 后端强制 smoke test =====
+      - name: Smoke test Windows backend
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          $unpacked = "${{ steps.locate-win-unpacked.outputs.path }}"
+          $apiEngine = Join-Path $unpacked "resources\api\api-engine.exe"
+          $apiEngineDir = (Split-Path $apiEngine -Parent)
+          $tempDataDir = "$env:TEMP\podgist_smoke_$([guid]::NewGuid().ToString('N').Substring(0,8))"
+          New-Item -ItemType Directory -Force -Path $tempDataDir | Out-Null
+          New-Item -ItemType Directory -Force -Path "$tempDataDir\logs" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$tempDataDir\archives" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$tempDataDir\temp_audio" | Out-Null
+
+          Write-Host "=== Smoke Test: Windows api-engine.exe ===" -ForegroundColor Cyan
+          Write-Host "EXE: $apiEngine"
+          Write-Host "DataDir: $tempDataDir"
+
+          # 复制 ffmpeg 到 smoke test 环境
+          $smokeFFmpegDir = Join-Path $tempDataDir "bin"
+          New-Item -ItemType Directory -Force -Path $smokeFFmpegDir | Out-Null
+          $srcFFmpeg = Join-Path $unpacked "resources\ffmpeg\ffmpeg.exe"
+          $srcFFprobe = Join-Path $unpacked "resources\ffmpeg\ffprobe.exe"
+          if (Test-Path $srcFFmpeg) {
+            Copy-Item $srcFFmpeg $smokeFFmpegDir -Force
+            Write-Host "Copied ffmpeg to smoke env"
+          }
+          if (Test-Path $srcFFprobe) {
+            Copy-Item $srcFFprobe $smokeFFmpegDir -Force
+            Write-Host "Copied ffprobe to smoke env"
+          }
+
+          # 设置 PATH（把 smoke ffmpeg 放在最前面）
+          $env:PATH = "$smokeFFmpegDir;$env:PATH"
+          $env:PODGIST_DATA_DIR = $tempDataDir
+          $env:PODGIST_RESOURCES_PATH = $unpacked
+
+          # 启动 api-engine.exe（后台运行，windowsHide）
+          Write-Host "Starting api-engine.exe..."
+          $proc = Start-Process $apiEngine -ArgumentList "--data-dir","$tempDataDir","--resources-path","$unpacked" -PassThru -WindowStyle Hidden
+          Write-Host "PID: $($proc.Id)"
+
+          # 轮询健康检查（最多 30 秒）
+          $backendOk = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            Start-Sleep 1
+            if ($proc.HasExited) {
+              Write-Host "[EXIT] api-engine.exe 意外退出，exitCode=$($proc.ExitCode)" -ForegroundColor Red
+              break
+            }
+            try {
+              $resp = Invoke-WebRequest -Uri "http://127.0.0.1:8000/" -TimeoutSec 2 -ErrorAction SilentlyContinue
+              if ($resp.StatusCode -eq 200) {
+                Write-Host "[OK] 后端就绪，耗时 ${i} 秒" -ForegroundColor Green
+                $backendOk = $true
+                break
+              }
+            } catch {}
+            if ($i % 5 -eq 0) {
+              Write-Host "  等待后端启动... (${i}s)"
+            }
+          }
+
+          # 读取后端日志
+          $backendStdout = Join-Path $tempDataDir "logs\backend-stdout.log"
+          $backendStderr = Join-Path $tempDataDir "logs\backend-stderr.log"
+          $backendPyLog = Join-Path $tempDataDir "logs\backend-python.log"
+
+          if (Test-Path $backendStdout) {
+            Write-Host ""
+            Write-Host "=== backend-stdout.log (最后 20 行) ===" -ForegroundColor Yellow
+            Get-Content $backendStdout -Tail 20
+          }
+          if (Test-Path $backendStderr) {
+            Write-Host ""
+            Write-Host "=== backend-stderr.log (最后 20 行) ===" -ForegroundColor Yellow
+            Get-Content $backendStderr -Tail 20
+          }
+          if (Test-Path $backendPyLog) {
+            Write-Host ""
+            Write-Host "=== backend-python.log (最后 20 行) ===" -ForegroundColor Yellow
+            Get-Content $backendPyLog -Tail 20
+          }
+
+          # 终止进程
+          if (-not $proc.HasExited) {
+            Write-Host ""
+            Write-Host "停止 api-engine.exe (pid=$($proc.Id))..."
+            Stop-Process $proc.Id -Force -ErrorAction SilentlyContinue
+          }
+
+          # 清理
+          Remove-Item $tempDataDir -Recurse -Force -ErrorAction SilentlyContinue
+
+          # 判定
+          if (-not $backendOk) {
+            Write-Host ""
+            Write-Host "ERROR: Smoke test FAILED — 后端未能正常启动或退出码非 0" -ForegroundColor Red
+            Write-Host "可能原因：uvicorn 未打包、依赖缺失、路径错误" -ForegroundColor Red
+            exit 1
+          }
+
+          Write-Host ""
+          Write-Host "=== Smoke test PASSED ===" -ForegroundColor Green
+
       # ===== 查找最终安装包产物 =====
       - name: Find installer (Windows)
         shell: pwsh
