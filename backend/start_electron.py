@@ -11,6 +11,8 @@ import os
 import argparse
 import platform
 import multiprocessing
+import traceback
+import uvicorn  # 必须在模块顶层，PyInstaller 才能静态分析到
 
 # 将项目根目录添加到 Python 路径
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -71,8 +73,6 @@ def main():
     setup_pydub_paths()
 
     # 启动 FastAPI 服务
-    import uvicorn
-
     print(f"[start_electron] 启动后端服务 on port 8000...")
 
     uvicorn.run(
@@ -90,7 +90,6 @@ if __name__ == "__main__":
     multiprocessing.freeze_support()
 
     # 顶层异常捕获：写入日志文件
-    import traceback
     data_dir = os.environ.get('PODGIST_DATA_DIR')
     if data_dir:
         log_dir = os.path.join(data_dir, 'logs')

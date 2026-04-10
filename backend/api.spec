@@ -3,6 +3,7 @@
 
 import os
 import sys
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 
 
 # SPECPATH 指向 spec 文件所在目录（backend/）
@@ -56,39 +57,25 @@ a = Analysis(
     datas=[
         (os.path.join(project_root, "backend"), "backend"),
         (os.path.join(project_root, "api.py"), "."),
+        *collect_data_files("dashscope"),
+        *collect_data_files("starlette"),
     ],
     hiddenimports=[
-        # === FastAPI / Uvicorn ===
-        "uvicorn",
-        "uvicorn.logging",
-        "uvicorn.loops",
-        "uvicorn.loops.auto",
-        "uvicorn.protocols",
-        "uvicorn.protocols.http",
-        "uvicorn.protocols.http.auto",
-        "uvicorn.protocols.websockets",
-        "uvicorn.protocols.websockets.auto",
-        "uvicorn.lifespan",
-        "uvicorn.lifespan.on",
-        "uvicorn.config",
-        "fastapi",
-        "fastapi.responses",
-        "fastapi.middleware.cors",
-        "starlette",
-        "starlette.responses",
-        "starlette.middleware",
-        "starlette.middleware.cors",
-
-        # === Pydantic ===
-        "pydantic",
-        "pydantic.v1",
-        "pydantic_core",
-        "pydantic_settings",
-        "annotated_types",
+        # === FastAPI / Uvicorn — 使用 collect_submodules 代替手写列表 ===
+        *collect_submodules("uvicorn"),
+        *collect_submodules("fastapi"),
+        *collect_submodules("starlette"),
+        *collect_submodules("pydantic"),
+        *collect_submodules("pydantic.v1", if_submodule=True),
+        *collect_submodules("sse_starlette"),
 
         # === SSE ===
         "sse_starlette",
         "sse_starlette.sse",
+
+        # === Pydantic ===
+        "pydantic_settings",
+        "annotated_types",
 
         # === 核心依赖 ===
         "dashscope",
@@ -102,23 +89,13 @@ a = Analysis(
         "pydub",
 
         # === RAG / 向量数据库 ===
-        "chromadb",
-        "chromadb.api",
-        "chromadb.config",
-        "chromadb.client",
-        "chromadb.collection",
-        "chromadb.rust_bindings",
+        *collect_submodules("chromadb"),
         "grpc",
         "grpc._cython.cygrpc",
-        "opentelemetry",
-        "opentelemetry.api",
-        "opentelemetry.sdk",
-        "opentelemetry.exporter.otlp.proto.grpc",
+        *collect_submodules("opentelemetry"),
 
         # === 下载器 ===
-        "yt_dlp",
-        "yt_dlp.utils",
-        "yt_dlp.compat",
+        *collect_submodules("yt_dlp"),
 
         # === 其他工具 ===
         "tokenizers",
