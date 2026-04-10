@@ -66,7 +66,7 @@ a = Analysis(
         *collect_submodules("fastapi"),
         *collect_submodules("starlette"),
         *collect_submodules("pydantic"),
-        *collect_submodules("pydantic.v1", if_submodule=True),
+        *collect_submodules("pydantic.v1"),
         *collect_submodules("sse_starlette"),
 
         # === SSE ===
