@@ -486,43 +486,71 @@ jobs:
           $env:PODGIST_DATA_DIR = $tempDataDir
           $env:PODGIST_RESOURCES_PATH = $unpacked
 
-          # 启动 api-engine.exe（后台运行，windowsHide）
-          Write-Host "`nStarting api-engine.exe..."
-          $proc = Start-Process $apiEngine -ArgumentList "--data-dir","$tempDataDir","--resources-path","$unpacked" -PassThru -WindowStyle Hidden
+          # 启动 api-engine.exe 并用 cmd /c 捕获真实 stderr（GUI exe 的输出重定向）
+          Write-Host "`nStarting api-engine.exe (foreground with stderr capture)..."
+          $cmdStderrFile = "$env:TEMP\podgist_api_stderr_$([guid]::NewGuid().ToString('N').Substring(0,8)).txt"
+          $cmdStdoutFile = "$env:TEMP\podgist_api_stdout_$([guid]::NewGuid().ToString('N').Substring(0,8)).txt"
+
+          # 用 Start-Process -NoNewWindow + RedirectStandardOutput/Error 捕获 GUI exe 的真实输出
+          $proc = Start-Process -FilePath $apiEngine `
+            -ArgumentList "--data-dir","$tempDataDir","--resources-path","$unpacked" `
+            -PassThru -NoNewWindow `
+            -RedirectStandardError $cmdStderrFile `
+            -RedirectStandardOutput $cmdStdoutFile
           Write-Host "PID: $($proc.Id)"
 
-          # 等待 5 秒后检查进程状态（检测快速崩溃）
+          # 等待 5 秒，检测快速崩溃
           Start-Sleep 5
           if ($proc.HasExited) {
             Write-Host "[CRASH] api-engine.exe 在 5 秒内退出，exitCode=$($proc.ExitCode)" -ForegroundColor Red
-            # 立即列出 logs 目录（可能已创建）
-            $logsDir = Join-Path $tempDataDir "logs"
-            Write-Host "`n=== tempDataDir/logs/ 内容 ===" -ForegroundColor Yellow
-            if (Test-Path $logsDir) {
-              Get-ChildItem $logsDir -ErrorAction SilentlyContinue | ForEach-Object {
-                Write-Host "  $($_.Name)"
-                if ($_.Name -match "log|err|out") {
-                  Write-Host "    --- $_.Name 内容 ---"
-                  Get-Content $_.FullName -Tail 30 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "    $_" }
-                }
-              }
-            } else {
-              Write-Host "  logs/ 目录不存在"
-            }
           } else {
             Write-Host "[OK] 进程 5 秒后仍在运行"
           }
 
-          # 轮询健康检查（最多 30 秒）
-          $backendOk = $false
-          for ($i = 0; $i -lt 30; $i++) {
-            Start-Sleep 1
-            if ($proc.HasExited) {
-              Write-Host "[EXIT] api-engine.exe 意外退出，exitCode=$($proc.ExitCode)" -ForegroundColor Red
-              break
+          # 读取 cmd 捕获的真实输出
+          if (Test-Path $cmdStderrFile) {
+            $errContent = Get-Content $cmdStderrFile -Raw -ErrorAction SilentlyContinue
+            if ($errContent -and $errContent.Trim()) {
+              Write-Host "`n--- cmd stderr (真实错误) ---" -ForegroundColor Red
+              Write-Host $errContent -ForegroundColor Red
             }
+          }
+          if (Test-Path $cmdStdoutFile) {
+            $outContent = Get-Content $cmdStdoutFile -Raw -ErrorAction SilentlyContinue
+            if ($outContent -and $outContent.Trim()) {
+              Write-Host "`n--- cmd stdout ---"
+              Write-Host $outContent
+            }
+          }
+
+          # 读取 backend log 文件（由 backendStarter.js 的文件流写入）
+          $logsDir = Join-Path $tempDataDir "logs"
+          Write-Host "`n=== tempDataDir/logs/ 目录 ===" -ForegroundColor Yellow
+          if (Test-Path $logsDir) {
+            Get-ChildItem $logsDir -ErrorAction SilentlyContinue | ForEach-Object {
+              Write-Host "  $($_.Name) ($($_.Length) bytes)"
+              if ($_.Name -match "log|err|out" -and $_.Length -gt 0) {
+                Write-Host "    --- $_.Name 内容 (最后 20 行) ---"
+                Get-Content $_.FullName -Tail 20 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "    $_" }
+              }
+            }
+          } else {
+            Write-Host "  logs/ 目录不存在"
+          }
+
+          # 如果进程还活着，终止它（继续会被下一个健康检查 step 重新启动）
+          if (-not $proc.HasExited) {
+            Write-Host "`n停止 api-engine.exe (pid=$($proc.Id))..."
+            Stop-Process $proc.Id -Force -ErrorAction SilentlyContinue
+            Start-Sleep 2
+          }
+
+          # 轮询健康检查（最多 20 秒）
+          Write-Host "`n=== 健康检查轮询 ===" -ForegroundColor Yellow
+          $backendOk = $false
+          for ($i = 0; $i -lt 20; $i++) {
             try {
-              $resp = Invoke-WebRequest -Uri "http://127.0.0.1:8000/" -TimeoutSec 2 -ErrorAction SilentlyContinue
+              $resp = Invoke-WebRequest -Uri "http://127.0.0.1:8000/" -TimeoutSec 3 -ErrorAction SilentlyContinue
               if ($resp.StatusCode -eq 200) {
                 Write-Host "[OK] 后端就绪，耗时 ${i} 秒" -ForegroundColor Green
                 $backendOk = $true
@@ -532,34 +560,7 @@ jobs:
             if ($i % 5 -eq 0) {
               Write-Host "  等待后端启动... (${i}s)"
             }
-          }
-
-          # 读取后端日志
-          $backendStdout = Join-Path $tempDataDir "logs\backend-stdout.log"
-          $backendStderr = Join-Path $tempDataDir "logs\backend-stderr.log"
-          $backendPyLog = Join-Path $tempDataDir "logs\backend-python.log"
-
-          if (Test-Path $backendStdout) {
-            Write-Host ""
-            Write-Host "=== backend-stdout.log (最后 20 行) ===" -ForegroundColor Yellow
-            Get-Content $backendStdout -Tail 20
-          }
-          if (Test-Path $backendStderr) {
-            Write-Host ""
-            Write-Host "=== backend-stderr.log (最后 20 行) ===" -ForegroundColor Yellow
-            Get-Content $backendStderr -Tail 20
-          }
-          if (Test-Path $backendPyLog) {
-            Write-Host ""
-            Write-Host "=== backend-python.log (最后 20 行) ===" -ForegroundColor Yellow
-            Get-Content $backendPyLog -Tail 20
-          }
-
-          # 终止进程
-          if (-not $proc.HasExited) {
-            Write-Host ""
-            Write-Host "停止 api-engine.exe (pid=$($proc.Id))..."
-            Stop-Process $proc.Id -Force -ErrorAction SilentlyContinue
+            Start-Sleep 1
           }
 
           # 清理
