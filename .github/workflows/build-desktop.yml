@@ -343,15 +343,16 @@ jobs:
       - name: Verify uvicorn in packaged build
         shell: pwsh
         run: |
-          $apiInternal = "${{ github.workspace }}\electron\dist\api\_internal"
+          $apiInternal = Join-Path "${{ github.workspace }}" "electron\dist\api\_internal"
           Write-Host "=== 验证 uvicorn 模块是否被打包 ===" -ForegroundColor Cyan
           Write-Host "检查目录: $apiInternal"
 
           $uvicornFiles = @()
           if (Test-Path $apiInternal) {
             Get-ChildItem $apiInternal -Recurse -Filter "uvicorn*" -ErrorAction SilentlyContinue | ForEach-Object {
-              $uvicornFiles += $_.FullName.Replace("$apiInternal\", "")
-              Write-Host "  [OK] $($_.FullName.Replace("$apiInternal\", ""))"
+              $relPath = $_.FullName.Substring($apiInternal.Length + 1)
+              $uvicornFiles += $relPath
+              Write-Host "  [OK] $relPath"
             }
           }
 
