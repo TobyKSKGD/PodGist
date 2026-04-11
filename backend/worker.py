@@ -254,7 +254,7 @@ def process_single_task(task, api_key):
         print(f"[Worker] 转录中: {title}")
         task_queue.update_progress_status(task_id, "正在调用 DashScope ASR 转录...")
 
-        podcast_text, transcript_segments = transcribe_with_dashscope_and_segments(audio_file_path)
+        podcast_text, transcript_segments = transcribe_with_dashscope_and_segments(audio_file_path, api_key)
 
         task_queue.update_progress_status(task_id, "DashScope ASR 转录完成")
 
