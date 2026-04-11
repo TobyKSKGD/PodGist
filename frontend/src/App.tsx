@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Routes, Route, useLocation, useNavigate, useParams } from 'react-router-dom';
 import LibraryPage from './pages/LibraryPage';
 import ImportPage from './pages/ImportPage';
+import EpisodePage from './pages/EpisodePage';
 import axios from 'axios';
 import { IconSettings, IconPlus, IconMessageCircle, IconLayoutList, IconChevronLeft, IconChevronRight, IconTrash, IconBell, IconX, IconCircleCheck, IconBrain } from '@tabler/icons-react';
 import SettingsModal from './components/SettingsModal';
@@ -436,7 +437,18 @@ function AppContent() {
         <Routes>
           <Route path="/" element={<LibraryPage />} />
           <Route path="/import" element={<ImportPage />} />
-          {/* /result/:id — 直接访问 URL 时回填状态 */}
+          <Route path="/episode/:id" element={<EpisodePage />} />
+          {/* /result/:id — 旧版结果页（兼容） */}
+          <Route path="/result/:id" element={
+            <ResultViewWrapper
+              onBack={handleBackToIconUpload}
+              onJumpToChat={(sessionId) => {
+                setSelectedArchiveId(null);
+                setCurrentView('chat');
+                sessionStorage.setItem('jump_to_session', sessionId);
+              }}
+            />
+          } />
           <Route path="/result/:id" element={
             <ResultViewWrapper
               onBack={handleBackToIconUpload}

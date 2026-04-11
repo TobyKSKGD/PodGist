@@ -139,11 +139,11 @@ export default function LibraryPage() {
   };
 
   const handleContinueListen = (id: string) => {
-    navigate(`/result/${id}`);
+    navigate(`/episode/${id}`);
   };
 
   const handleArchiveClick = (id: string) => {
-    navigate(`/result/${id}`);
+    navigate(`/episode/${id}`);
   };
 
   return (
