@@ -413,10 +413,47 @@ def delete_archive(archive_name: str):
 
 
 # 3.2 获取单个归档详情
+def _parse_timeline_from_summary(summary: str) -> dict:
+    """
+    从 summary markdown 中解析时间轴数据。
+
+    格式示例：
+    ### 细致高光时间轴
+    - [00:19] 开场寒暄，介绍播客背景
+    - [05:32] 讨论的话题引入
+    """
+    highlights = []
+    terms = []
+    chapters = []
+
+    # 从 summary 中提取高光时间轴（- [MM:SS] 格式）
+    for line in summary.split('\n'):
+        import re
+        match = re.match(r'^- \[(\d+):(\d{2})(?:\.\d+)?\] (.+)$', line.strip())
+        if match:
+            minutes = int(match.group(1))
+            seconds = int(match.group(2))
+            total_seconds = minutes * 60 + seconds
+            text = match.group(3).strip()
+            highlights.append({
+                "id": f"hl_{len(highlights)}",
+                "time": f"{minutes:02d}:{seconds:02d}",
+                "seconds": total_seconds,
+                "title": text[:80] if len(text) > 80 else text,
+                "description": text
+            })
+
+    return {
+        "chapters": chapters,
+        "highlights": highlights,
+        "terms": terms
+    }
+
+
 @app.get("/api/archives/{archive_id}")
 def get_archive_detail(archive_id: str):
     """
-    获取指定归档的详细内容（摘要和原始转录）。
+    获取指定归档的详细内容（摘要、原始转录、时间轴）。
     """
     try:
         archive_path = os.path.join(ARCHIVE_DIR, archive_id)
@@ -447,14 +484,26 @@ def get_archive_detail(archive_id: str):
             os.path.getctime(archive_path)
         ).strftime("%Y-%m-%d %H:%M")
 
+        # 解析时间轴
+        timeline = _parse_timeline_from_summary(summary)
+
+        # 提取标题（summary 第一行）
+        title = archive_id
+        if summary:
+            first_line = summary.split('\n')[0].strip()
+            if first_line and not first_line.startswith('#') and not first_line.startswith('>'):
+                title = first_line
+
         return {
             "status": "success",
             "data": {
                 "id": archive_id,
-                "name": archive_id,
+                "name": title,
                 "summary": summary,
                 "rawText": raw_text,
-                "createTime": create_time
+                "createTime": create_time,
+                "audioUrl": None,  # 音频文件处理后已删除，保留字段供后续扩展
+                "timeline": timeline
             }
         }
     except HTTPException:
