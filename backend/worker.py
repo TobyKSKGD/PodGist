@@ -20,7 +20,7 @@ sys.path.insert(0, current_dir)
 
 # 导入项目模块
 from backend import task_queue
-from backend.transcriber import transcribe_with_sensevoice
+from backend.transcriber import transcribe_with_sensevoice, transcribe_with_dashscope_and_segments
 from backend.llm_agent import get_podcast_summary_robust
 from backend.downloader import route_and_download
 
@@ -254,7 +254,7 @@ def process_single_task(task, api_key):
         print(f"[Worker] 转录中: {title}")
         task_queue.update_progress_status(task_id, "正在调用 DashScope ASR 转录...")
 
-        podcast_text = transcribe_with_sensevoice(audio_file_path)
+        podcast_text, transcript_segments = transcribe_with_dashscope_and_segments(audio_file_path)
 
         task_queue.update_progress_status(task_id, "DashScope ASR 转录完成")
 
@@ -307,6 +307,13 @@ def process_single_task(task, api_key):
         with open(summary_path, "w", encoding="utf-8") as f:
             f.write(raw_summary)
 
+        # 保存 segments.json（转录分段，带时间戳）
+        import json
+        segments_path = os.path.join(archive_path, "segments.json")
+        with open(segments_path, "w", encoding="utf-8") as f:
+            json.dump(transcript_segments, f, ensure_ascii=False, indent=2)
+        print(f"[Worker] 分段已保存: {segments_path}")
+
         task_queue.update_progress_status(task_id, "归档完成")
 
         print(f"[Worker] 任务完成: {title}")
@@ -322,10 +329,14 @@ def process_single_task(task, api_key):
 
         # 如果是 LLM 失败且已有转录文本，保存到恢复文件
         if 'podcast_text' in dir() and podcast_text:
+            import json
             recovery_path = os.path.join(TEMP_DIR, f".llm_recovery_{task_id}.txt")
+            segments_rec_path = os.path.join(TEMP_DIR, f".llm_recovery_{task_id}_segments.json")
             try:
                 with open(recovery_path, "w", encoding="utf-8") as f:
                     f.write(podcast_text)
+                with open(segments_rec_path, "w", encoding="utf-8") as f:
+                    json.dump(transcript_segments, f, ensure_ascii=False, indent=2)
                 print(f"[Worker] 已保存转录文本到恢复文件: {recovery_path}")
                 # 更新任务 error_msg 标记有恢复文件
                 error_msg = f"[可重试] {error_msg}\n恢复文件: {recovery_path}"

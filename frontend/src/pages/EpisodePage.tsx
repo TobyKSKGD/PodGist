@@ -46,9 +46,10 @@ interface ArchiveDetail {
   createTime: string;
   audioUrl: string | null;
   timeline: Timeline;
+  transcriptSegments: TimelineItem[];
 }
 
-type TimelineTab = 'chapters' | 'highlights' | 'terms';
+type TimelineTab = 'chapters' | 'highlights' | 'terms' | 'segments';
 
 export default function EpisodePage() {
   const { id } = useParams<{ id: string }>();
@@ -77,9 +78,11 @@ export default function EpisodePage() {
       .then(res => {
         if (res.data.status === 'success') {
           setArchive(res.data.data);
-          // 默认选中第一个高光
+          // 默认选中第一个高光或第一个分段
           if (res.data.data.timeline.highlights.length > 0) {
             setSelectedItem(res.data.data.timeline.highlights[0]);
+          } else if (res.data.data.transcriptSegments.length > 0) {
+            setSelectedItem(res.data.data.transcriptSegments[0]);
           }
         }
       })
@@ -126,7 +129,9 @@ export default function EpisodePage() {
   };
 
   // 当前 tab 的列表
-  const currentItems = archive?.timeline[activeTab] ?? [];
+  const currentItems = activeTab === 'segments'
+    ? (archive?.transcriptSegments ?? [])
+    : (archive?.timeline[activeTab] ?? []);
 
   if (loading) {
     return (
@@ -231,8 +236,10 @@ export default function EpisodePage() {
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-sm font-semibold text-slate-700">时间轴</h2>
               <div className="flex gap-1 bg-slate-100 rounded-lg p-1">
-                {(['chapters', 'highlights', 'terms'] as TimelineTab[]).map(tab => {
-                  const count = archive.timeline[tab].length;
+                {(['chapters', 'highlights', 'terms', 'segments'] as TimelineTab[]).map(tab => {
+                  const count = tab === 'segments'
+                    ? archive.transcriptSegments.length
+                    : archive.timeline[tab].length;
                   return (
                     <button
                       key={tab}
@@ -243,7 +250,7 @@ export default function EpisodePage() {
                           : 'text-slate-500 hover:text-slate-700'
                       }`}
                     >
-                      {tab === 'chapters' ? '章节' : tab === 'highlights' ? '高光' : '术语'}
+                      {tab === 'chapters' ? '章节' : tab === 'highlights' ? '高光' : tab === 'terms' ? '术语' : '转录'}
                       {count > 0 && <span className="ml-1 text-[10px] opacity-60">({count})</span>}
                     </button>
                   );
@@ -254,7 +261,8 @@ export default function EpisodePage() {
             {currentItems.length === 0 ? (
               <p className="text-sm text-slate-400 py-4 text-center">
                 {activeTab === 'chapters' ? '暂无章节信息' :
-                 activeTab === 'highlights' ? '暂无高光时间轴' : '暂无术语解释'}
+                 activeTab === 'highlights' ? '暂无高光时间轴' :
+                 activeTab === 'terms' ? '暂无术语解释' : '暂无转录分段'}
               </p>
             ) : (
               <div className="space-y-1">
@@ -274,7 +282,7 @@ export default function EpisodePage() {
                     <span className={`text-sm flex-1 ${
                       selectedItem?.id === item.id ? 'text-[#00ADA6] font-medium' : 'text-slate-700'
                     }`}>
-                      {item.title}
+                      {activeTab === 'segments' ? item.text : item.title}
                     </span>
                     {selectedItem?.id === item.id && (
                       <IconCheck size={14} className="text-[#00ADA6] shrink-0" />
@@ -307,8 +315,10 @@ export default function EpisodePage() {
               <div className="inline-flex items-center px-2.5 py-1 bg-[#D1FAF5] text-[#00ADA6] text-sm font-mono font-medium rounded">
                 {selectedItem.time}
               </div>
-              <h3 className="text-base font-semibold text-slate-800">{selectedItem.title}</h3>
-              {selectedItem.description && (
+              <h3 className="text-base font-semibold text-slate-800">
+                {activeTab === 'segments' ? selectedItem.text : selectedItem.title}
+              </h3>
+              {selectedItem.description && activeTab !== 'segments' && (
                 <p className="text-sm text-slate-600 leading-relaxed">{selectedItem.description}</p>
               )}
               {hasAudio && (
