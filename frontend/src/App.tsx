@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
+import { Routes, Route, useLocation, useNavigate, useParams } from 'react-router-dom';
+import LibraryPage from './pages/LibraryPage';
+import ImportPage from './pages/ImportPage';
 import axios from 'axios';
-import { IconSettings, IconPlus, IconMessageCircle, IconCloudUpload, IconLayoutList, IconChevronLeft, IconChevronRight, IconLayersLinked, IconTrash, IconAlertTriangle, IconBell, IconX, IconCircleCheck, IconUpload, IconRadio, IconVideo, IconBrain, IconLoader2 } from '@tabler/icons-react';
+import { IconSettings, IconPlus, IconMessageCircle, IconLayoutList, IconChevronLeft, IconChevronRight, IconTrash, IconBell, IconX, IconCircleCheck, IconBrain } from '@tabler/icons-react';
 import SettingsModal from './components/SettingsModal';
 import ResultView from './components/ResultView';
-import PodcastDownloadForm from './components/PodcastDownloadForm';
 import TaskQueue from './components/TaskQueue';
-import BatchProcess from './components/BatchProcess';
 import Logo from './components/Logo';
 import { ToastProvider, useToast } from './components/Toast';
 import ConfirmDialog from './components/ConfirmDialog';
@@ -14,14 +15,38 @@ import ChatView from './components/ChatView';
 // 配置 axios 基础路径，指向你的 FastAPI 后端
 const api = axios.create({ baseURL: 'http://localhost:8000' });
 
+// ===== 路由子组件 =====
+// 直接访问 /result/:id 时，从 URL 读取 archiveId，避免依赖 AppContent 状态初始渲染延迟
+function ResultViewWrapper({ onBack, onJumpToChat }: {
+  onBack: () => void;
+  onJumpToChat: (sessionId: string) => void;
+}) {
+  const { id } = useParams<{ id: string }>();
+  const [archiveIdFromUrl, setArchiveIdFromUrl] = useState<string | null>(null);
+
+  // 直接访问 /result/:id 时，用 URL 参数初始化状态
+  useEffect(() => {
+    if (id) {
+      setArchiveIdFromUrl(id);
+    }
+  }, [id]);
+
+  if (!id) return null;
+  return (
+    <ResultView
+      archiveId={archiveIdFromUrl || id}
+      onBack={onBack}
+      onJumpToChat={onJumpToChat}
+    />
+  );
+}
+
 // 内部组件 - 可以使用 useToast
 function AppContent() {
   const { showToast } = useToast();
-  const [activeInputTab, setActiveInputTab] = useState<'local' | 'podcast' | 'bilibili' | 'batch' | 'chat'>('local');
   const [archives, setArchives] = useState<{id: string, name: string}[]>([]);
-  const [isIconUploading, setIsIconUploading] = useState(false);
   const [isIconSettingsOpen, setIsIconSettingsOpen] = useState(false);
-  const [settings, setIconSettings] = useState({
+  const [, setIconSettings] = useState({
     engine: 'SenseVoice',
     whisper_model: 'small',
     device: 'auto'
@@ -30,13 +55,35 @@ function AppContent() {
   const [selectedArchiveId, setSelectedArchiveId] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isBackendReady, setIsBackendReady] = useState(false);
-  const [hasApiKey, setHasApiKey] = useState(false);
+  const [, setHasApiKey] = useState(false);
   const [deleteDialog, setDeleteDialog] = useState<{ open: boolean; archiveId: string; archiveName: string }>({
     open: false,
     archiveId: '',
     archiveName: ''
   });
-  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // ===== 路由钩子 =====
+  const { pathname } = useLocation();
+  const navigate = useNavigate();
+
+  // URL → state：仅在页面刷新时（mount 时）从 URL 恢复视图状态
+  // 后续导航由各 click handler 中的 navigate() 驱动，不再依赖 effect 同步
+  useEffect(() => {
+    if (pathname === '/queue') {
+      setCurrentView('queue');
+    } else if (pathname === '/chat') {
+      setCurrentView('chat');
+    } else if (pathname.startsWith('/result/')) {
+      const id = pathname.split('/result/')[1];
+      if (id) {
+        setSelectedArchiveId(id);
+        setCurrentView('result');
+      }
+    } else {
+      setCurrentView('upload');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // 通知系统 - 从 localStorage 加载已通知的任务 ID
   const [notifications, setNotifications] = useState<{ id: string; taskName: string; archiveId: string; taskId: string }[]>([]);
@@ -107,6 +154,7 @@ function AppContent() {
   const handleViewNotification = (archiveId: string, id: string, taskId: string) => {
     setSelectedArchiveId(archiveId);
     setCurrentView('result');
+    navigate(`/result/${archiveId}`, { replace: true });
     removeNotification(id, taskId);
   };
 
@@ -181,36 +229,11 @@ function AppContent() {
   }, []);
 
   // 2. 处理文件上传与后端交互
-  const handleFileIconUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    setIsIconUploading(true);
-
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('engine', settings.engine);
-    formData.append('whisper_model', settings.whisper_model);
-    formData.append('device', settings.device);
-
-    try {
-      const res = await api.post('/api/transcribe/local', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
-      });
-      showToast('success', `已添加任务：${res.data.filename}`);
-      fetchArchives();
-    } catch (error) {
-      console.error(error);
-      showToast('error', '处理失败，请检查后端终端日志');
-    } finally {
-      setIsIconUploading(false);
-    }
-  };
-
   // 处理点击归档项
   const handleArchiveClick = (archiveId: string) => {
     setSelectedArchiveId(archiveId);
     setCurrentView('result');
+    navigate(`/result/${archiveId}`, { replace: true });
   };
 
   // 处理删除归档 - 打开确认对话框
@@ -242,164 +265,10 @@ function AppContent() {
   const handleBackToIconUpload = () => {
     setCurrentView('upload');
     setSelectedArchiveId(null);
+    navigate('/', { replace: true });
   };
 
   // 渲染主内容区
-  const renderMainContent = () => {
-    if (currentView === 'result' && selectedArchiveId) {
-      return <ResultView archiveId={selectedArchiveId} onBack={handleBackToIconUpload} onJumpToChat={(sessionId) => {
-        setSelectedArchiveId(null);
-        setCurrentView('chat');
-        // ChatView will pick up the session via a URL param or localStorage
-        sessionStorage.setItem('jump_to_session', sessionId);
-      }} />;
-    }
-
-    if (currentView === 'queue') {
-      return <TaskQueue
-        onTaskComplete={addNotification}
-        onViewArchive={(archiveId) => {
-          setSelectedArchiveId(archiveId);
-          setCurrentView('result');
-        }}
-        onRefreshArchives={fetchArchives}
-      />;
-    }
-
-    // 智能对话视图（占满整屏）
-    if (currentView === 'chat') {
-      return (
-        <main className="flex-1 overflow-hidden bg-white">
-          <ChatView onJumpToArchive={(archiveId) => {
-            setSelectedArchiveId(archiveId);
-            setCurrentView('result');
-          }} />
-        </main>
-      );
-    }
-
-    return (
-      <main className="flex-1 overflow-y-auto bg-white">
-        <div className="max-w-4xl w-full mx-auto p-8 pb-16">
-
-          <div className="text-center mb-12 mt-12">
-            <h2 className="text-3xl font-bold mb-3 tracking-tight">上传音频，提取精华</h2>
-            <p className="text-slate-500">支持本地文件、播客直连与 Bilibili 视频剥离</p>
-          </div>
-
-          {isBackendReady && !hasApiKey && (
-            <div className="mb-6 p-4 bg-[#E1F5FE] border border-[#009A94] rounded-xl flex items-start gap-3">
-              <IconAlertTriangle className="text-[#009A94] shrink-0 mt-0.5" size={20} />
-              <div>
-                <p className="text-sm font-medium text-[#E11D48]">尚未配置 DashScope API Key</p>
-                <p className="text-xs text-[#009A94] mt-0.5">请点击左侧底部「偏好设置」配置 DashScope API Key，否则无法使用提炼功能</p>
-              </div>
-            </div>
-          )}
-
-          <div className="flex border-b border-slate-200 mb-8">
-            <button
-              onClick={() => setActiveInputTab('local')}
-              className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${activeInputTab === 'local' ? 'border-[#00ADA6] text-[#00ADA6]' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-              <span className="flex items-center gap-1.5">
-                <IconUpload size={16} />
-                本地提炼
-              </span>
-            </button>
-            <button
-              onClick={() => setActiveInputTab('podcast')}
-              className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${activeInputTab === 'podcast' ? 'border-[#00ADA6] text-[#00ADA6]' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-              <span className="flex items-center gap-1.5">
-                <IconRadio size={16} />
-                播客直连
-              </span>
-            </button>
-            <button
-              onClick={() => setActiveInputTab('bilibili')}
-              className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${activeInputTab === 'bilibili' ? 'border-[#00ADA6] text-[#00ADA6]' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-              <span className="flex items-center gap-1.5">
-                <IconVideo size={16} />
-                视频剥离
-              </span>
-            </button>
-            <button
-              onClick={() => setActiveInputTab('batch')}
-              className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${activeInputTab === 'batch' ? 'border-[#00ADA6] text-[#00ADA6]' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
-              <span className="flex items-center gap-1.5">
-                <IconLayersLinked size={16} />
-                批量处理
-              </span>
-            </button>
-          </div>
-
-          {activeInputTab === 'local' ? (
-            <div className="flex-1">
-              <input
-                type="file"
-                accept=".mp3,.wav,.m4a"
-                className="hidden"
-                ref={fileInputRef}
-                onChange={handleFileIconUpload}
-                disabled={isIconUploading}
-              />
-
-              <div
-                onClick={() => !isIconUploading && fileInputRef.current?.click()}
-                className={`border-2 border-dashed rounded-xl flex flex-col items-center justify-center p-14 transition-all ${
-                  isIconUploading ? 'border-slate-300 bg-slate-50 cursor-not-allowed' : 'border-slate-300 hover:border-[#00ADA6] hover:bg-[#D1FAF5] cursor-pointer bg-slate-50'
-                }`}
-              >
-                {isIconUploading ? (
-                  <div className="flex flex-col items-center gap-3 py-8">
-                    <IconLoader2 className="animate-spin text-[#00ADA6]" size={32} />
-                    <span className="text-sm text-slate-500">音频转录中，请先喝杯水...</span>
-                  </div>
-                ) : (
-                  <>
-                    <IconCloudUpload className="text-slate-400 mb-4" size={48} strokeWidth={1.5} />
-                    <p className="text-lg font-medium text-slate-700 mb-1">
-                      点击或拖拽音频文件到此处
-                    </p>
-                    <p className="text-sm text-slate-400">
-                      支持 MP3, WAV, M4A (最大 200MB)
-                    </p>
-                  </>
-                )}
-              </div>
-            </div>
-          ) : activeInputTab === 'podcast' ? (
-            <div className="flex-1">
-              <PodcastDownloadForm
-                settings={settings}
-                downloadType="podcast"
-                onSuccess={() => {
-                  showToast('success', '已加入任务队列，请稍候查看结果');
-                  fetchArchives();
-                }}
-              />
-            </div>
-          ) : activeInputTab === 'bilibili' ? (
-            <div className="flex-1">
-              <PodcastDownloadForm
-                settings={settings}
-                downloadType="bilibili"
-                onSuccess={() => {
-                  showToast('success', '已加入任务队列，请稍候查看结果');
-                  fetchArchives();
-                }}
-              />
-            </div>
-          ) : (
-            <div className="flex-1">
-              <BatchProcess settings={settings} />
-            </div>
-          )}
-
-        </div>
-      </main>
-    );
-  };
-
   // ========== 关键拦截：后端未就绪时显示加载动画 ==========
   if (!isBackendReady) {
     return (
@@ -420,7 +289,7 @@ function AppContent() {
         <div className="p-3 border-b border-slate-200 flex items-center justify-between">
           {!sidebarCollapsed && (
             <button
-              onClick={() => { setActiveInputTab('local'); setCurrentView('upload'); setSelectedArchiveId(null); }}
+              onClick={() => { setSelectedArchiveId(null); navigate('/', { replace: true }); }}
               className="text-lg font-bold flex items-center gap-2 hover:opacity-80 transition-opacity"
             >
               <Logo size={28} /> PodGist
@@ -438,17 +307,21 @@ function AppContent() {
           <>
             <div className="p-4">
               <button
-                onClick={() => { setActiveInputTab('local'); setCurrentView('upload'); }}
+                onClick={() => { navigate('/import', { replace: true }); }}
                 className="w-full bg-[#00ADA6] hover:bg-[#009A94] text-white py-2.5 px-4 rounded-lg font-medium transition-all shadow-sm flex items-center justify-center gap-2"
               >
-                <IconPlus size={18} /> 新建提炼任务
+                <IconPlus size={18} /> 导入内容
               </button>
             </div>
 
             {/* 智能对话入口 */}
             <div className="px-3 mb-1">
               <button
-                onClick={() => setCurrentView(currentView === 'chat' ? 'upload' : 'chat')}
+                onClick={() => {
+                  const next = currentView === 'chat' ? 'upload' : 'chat';
+                  setCurrentView(next);
+                  navigate(next === 'chat' ? '/chat' : '/', { replace: true });
+                }}
                 className={`w-full flex items-center gap-2 px-3 py-2.5 text-sm rounded-md transition-colors ${
                   currentView === 'chat'
                     ? 'bg-slate-200 text-[#00ADA6]'
@@ -463,7 +336,11 @@ function AppContent() {
             {/* 任务队列入口 */}
             <div className="px-3 mb-2">
               <button
-                onClick={() => setCurrentView(currentView === 'queue' ? 'upload' : 'queue')}
+                onClick={() => {
+                  const next = currentView === 'queue' ? 'upload' : 'queue';
+                  setCurrentView(next);
+                  navigate(next === 'queue' ? '/queue' : '/', { replace: true });
+                }}
                 className={`w-full flex items-center gap-2 px-3 py-2.5 text-sm rounded-md transition-colors ${
                   currentView === 'queue'
                     ? 'bg-slate-200 text-[#00ADA6]'
@@ -523,9 +400,9 @@ function AppContent() {
         {sidebarCollapsed && (
           <div className="flex-1 flex flex-col items-center py-4 gap-2">
             <button
-              onClick={() => { setActiveInputTab('local'); setCurrentView('upload'); }}
+              onClick={() => { navigate('/import', { replace: true }); }}
               className="p-2.5 hover:bg-slate-200 rounded-lg transition-colors text-slate-600"
-              title="新建任务"
+              title="导入内容"
             >
               <IconPlus size={20} />
             </button>
@@ -556,7 +433,33 @@ function AppContent() {
 
       {/* ================= 右侧主工作区 ================= */}
       <div className="flex-1 flex flex-col min-h-0 max-w-full overflow-hidden">
-        {renderMainContent()}
+        <Routes>
+          <Route path="/" element={<LibraryPage />} />
+          <Route path="/import" element={<ImportPage />} />
+          {/* /result/:id — 直接访问 URL 时回填状态 */}
+          <Route path="/result/:id" element={
+            <ResultViewWrapper
+              onBack={handleBackToIconUpload}
+              onJumpToChat={(sessionId) => {
+                setSelectedArchiveId(null);
+                setCurrentView('chat');
+                sessionStorage.setItem('jump_to_session', sessionId);
+              }}
+            />
+          } />
+          <Route path="/queue" element={<TaskQueue
+            onTaskComplete={addNotification}
+            onViewArchive={(archiveId) => {
+              setSelectedArchiveId(archiveId);
+              setCurrentView('result');
+            }}
+            onRefreshArchives={fetchArchives}
+          />} />
+          <Route path="/chat" element={<ChatView onJumpToArchive={(archiveId) => {
+            setSelectedArchiveId(archiveId);
+            setCurrentView('result');
+          }} />} />
+        </Routes>
       </div>
 
       {/* 全局通知铃铛（仅在非任务队列/非智能对话视图显示） */}
