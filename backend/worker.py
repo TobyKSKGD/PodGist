@@ -9,6 +9,7 @@ import sys
 import time
 import gc
 import re
+import shutil
 import threading
 import traceback
 from datetime import datetime
@@ -257,14 +258,30 @@ def process_single_task(task, api_key):
 
         task_queue.update_progress_status(task_id, "DashScope ASR 转录完成")
 
-        # 步骤 3: 清理音频文件
+        # 步骤 3: 预建归档目录并保存音频副本（在清理音频文件之前）
+        date_str = datetime.now().strftime("%Y%m%d_%H%M")
+        safe_title = re.sub(r'[\\/*?:"<>|]', "", title).strip()[:50]
+        archive_name = f"{safe_title}_{date_str}"
+        archive_path = os.path.join(ARCHIVE_DIR, archive_name)
+        os.makedirs(archive_path, exist_ok=True)
+
+        # 保存音频副本（保留原始扩展名）
+        # 对于本地文件：复制原始文件
+        # 对于下载文件：复制前音频文件还存在（在步骤3清理之前）
+        if os.path.exists(audio_file_path):
+            _, ext = os.path.splitext(audio_file_path)
+            audio_dest = os.path.join(archive_path, f"source{ext}")
+            shutil.copy2(audio_file_path, audio_dest)
+            print(f"[Worker] 音频已保存到归档: {audio_dest}")
+
+        # 步骤 4: 清理音频文件（下载的临时文件此时被删除，归档已有副本）
         if os.path.exists(audio_file_path) and task_type != "local":
             try:
                 os.remove(audio_file_path)
             except:
                 pass
 
-        # 步骤 4: 调用大模型生成摘要
+        # 步骤 5: 调用大模型生成摘要
         print(f"[Worker] 生成摘要中: {title}")
         task_queue.update_progress_status(task_id, "正在调用通义千问提炼高光...")
 
@@ -276,17 +293,9 @@ def process_single_task(task, api_key):
 
         task_queue.update_progress_status(task_id, "通义千问提炼完成")
 
-        # 步骤 5: 归档
-        print(f"[Worker] 归档中: {title}")
+        # 步骤 6: 保存文本归档文件（目录已在步骤3创建）
+        print(f"[Worker] 保存归档文件中: {title}")
         task_queue.update_progress_status(task_id, "正在保存归档...")
-
-        date_str = datetime.now().strftime("%Y%m%d_%H%M")
-        safe_title = re.sub(r'[\\/*?:"<>|]', "", title).strip()[:50]
-        archive_name = f"{safe_title}_{date_str}"
-
-        # 创建归档目录
-        archive_path = os.path.join(ARCHIVE_DIR, archive_name)
-        os.makedirs(archive_path, exist_ok=True)
 
         # 保存 raw.txt
         raw_path = os.path.join(archive_path, "raw.txt")
