@@ -503,6 +503,14 @@ def get_archive_detail(archive_id: str):
         # 解析时间轴
         timeline = _parse_timeline_from_summary(summary)
 
+        # 读取转录分段
+        transcript_segments = []
+        segments_path = os.path.join(archive_path, "segments.json")
+        if os.path.exists(segments_path):
+            import json
+            with open(segments_path, "r", encoding="utf-8") as f:
+                transcript_segments = json.load(f)
+
         # 查找归档中的音频文件
         audio_filename = _find_audio_in_archive(archive_path)
         audio_url = f"/api/archives/{archive_id}/audio" if audio_filename else None
@@ -524,7 +532,8 @@ def get_archive_detail(archive_id: str):
                 "createTime": create_time,
                 "audioUrl": audio_url,
                 "audioFilename": audio_filename,
-                "timeline": timeline
+                "timeline": timeline,
+                "transcriptSegments": transcript_segments
             }
         }
     except HTTPException:

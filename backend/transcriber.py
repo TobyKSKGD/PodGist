@@ -417,11 +417,25 @@ def transcribe_with_dashscope(audio_file_path: str, api_key: str) -> str:
     使用 DashScope ASR API 转录音频文件，返回带时间戳的文本。
 
     决策逻辑：
-    1. 短音频（≤5分钟 且 ≤10MB）→ qwen3-asr-flash（MultiModalConversation.call）
+    1. 短音频（≤30分钟 且 ≤60MB）→ qwen3-asr-flash（MultiModalConversation.call）
     2. 长音频 → paraformer（Transcription.async_call）
        - 先上传文件到 DashScope 获取 URL
        - paraformer 失败后降级到 paraformer-8k-v1 → paraformer-mtl-v1
     3. qwen3-asr-flash-filetrans：仅当 external_public_url 参数传入公网 URL 时启用
+    """
+    text, _ = transcribe_with_dashscope_and_segments(audio_file_path, api_key)
+    return text
+
+
+def transcribe_with_dashscope_and_segments(audio_file_path: str, api_key: str) -> tuple[str, list]:
+    """
+    使用 DashScope ASR API 转录音频文件，返回 (带时间戳文本, 分段列表)。
+
+    返回值：
+    - text: 带时间戳的文本字符串
+    - segments: 分段列表，每项包含 id, time, seconds, text
+
+    决策逻辑同上。
     """
     if not api_key:
         raise ValueError("未配置 DashScope API Key，请在设置中添加 DASHSCOPE_API_KEY")
@@ -433,7 +447,7 @@ def transcribe_with_dashscope(audio_file_path: str, api_key: str) -> str:
         result = _call_qwen_flash_short(audio_file_path, api_key)
 
         if "error" not in result:
-            return _build_timestamped_text(result)
+            return _build_timestamped_text(result), _build_segments_from_sentences(result.get("sentences", []))
 
         # qwen3-asr-flash 失败，尝试长音频路径（升级为 paraformer）
         print(f"[DashScope ASR] qwen3-asr-flash 失败，降级到 paraformer 长音频路径: {result.get('error')}")
@@ -451,7 +465,7 @@ def transcribe_with_dashscope(audio_file_path: str, api_key: str) -> str:
     if "error" in result:
         raise RuntimeError(f"ASR 转录失败: {result['error']}")
 
-    return _build_timestamped_text(result)
+    return _build_timestamped_text(result), _build_segments_from_sentences(result.get("sentences", []))
 
 
 def _build_timestamped_text(result: dict) -> str:
@@ -474,6 +488,34 @@ def _build_timestamped_text(result: dict) -> str:
             return ""
 
     return '\n'.join(lines)
+
+
+def _build_segments_from_sentences(sentences: list) -> list:
+    """
+    将 sentences 数组转换为前端 TimelineItem 格式的分段列表。
+
+    参数:
+        sentences: ASR 返回的 sentences 数组，每项含 begin_time(ms), end_time(ms), text
+
+    返回:
+        分段列表，每项格式：{id, time, seconds, text}
+    """
+    segments = []
+    for i, sent in enumerate(sentences):
+        begin_time = int(sent.get('begin_time', 0))
+        text = clean_asr_text(sent.get('text', ''))
+        if not text:
+            continue
+        total_seconds = begin_time // 1000
+        minutes = total_seconds // 60
+        seconds = total_seconds % 60
+        segments.append({
+            "id": f"seg_{i}",
+            "time": f"{minutes:02d}:{seconds:02d}",
+            "seconds": total_seconds,
+            "text": text
+        })
+    return segments
 
 
 # ==================== 兼容层（供 api.py / worker.py 统一调用）====================
