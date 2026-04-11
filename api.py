@@ -1,4 +1,5 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 import os
 import shutil
@@ -413,6 +414,21 @@ def delete_archive(archive_name: str):
 
 
 # 3.2 获取单个归档详情
+def _find_audio_in_archive(archive_path: str) -> str | None:
+    """
+    在归档目录中查找音频文件。
+    支持常见格式：source.mp3, source.m4a, source.wav 等。
+    返回相对于 archive 目录的路径，或 None。
+    """
+    import os
+    if not os.path.exists(archive_path):
+        return None
+    for fname in os.listdir(archive_path):
+        if fname.startswith('source.'):
+            return fname
+    return None
+
+
 def _parse_timeline_from_summary(summary: str) -> dict:
     """
     从 summary markdown 中解析时间轴数据。
@@ -487,6 +503,10 @@ def get_archive_detail(archive_id: str):
         # 解析时间轴
         timeline = _parse_timeline_from_summary(summary)
 
+        # 查找归档中的音频文件
+        audio_filename = _find_audio_in_archive(archive_path)
+        audio_url = f"/api/archives/{archive_id}/audio" if audio_filename else None
+
         # 提取标题（summary 第一行）
         title = archive_id
         if summary:
@@ -502,10 +522,58 @@ def get_archive_detail(archive_id: str):
                 "summary": summary,
                 "rawText": raw_text,
                 "createTime": create_time,
-                "audioUrl": None,  # 音频文件处理后已删除，保留字段供后续扩展
+                "audioUrl": audio_url,
+                "audioFilename": audio_filename,
                 "timeline": timeline
             }
         }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/archives/{archive_id}/audio")
+def stream_archive_audio(archive_id: str):
+    """
+    流式返回归档目录中的音频文件（source.*）。
+    用于前端 <audio> 标签的 src。
+    """
+    try:
+        archive_path = os.path.join(ARCHIVE_DIR, archive_id)
+
+        # 安全检查
+        if not os.path.abspath(archive_path).startswith(os.path.abspath(ARCHIVE_DIR)):
+            raise HTTPException(status_code=400, detail="无效的归档ID")
+
+        if not os.path.exists(archive_path) or not os.path.isdir(archive_path):
+            raise HTTPException(status_code=404, detail="归档不存在")
+
+        # 查找音频文件
+        audio_filename = _find_audio_in_archive(archive_path)
+        if not audio_filename:
+            raise HTTPException(status_code=404, detail="归档中未找到音频文件")
+
+        audio_path = os.path.join(archive_path, audio_filename)
+
+        # 流式返回
+        import mimetypes
+        mime_type, _ = mimetypes.guess_type(audio_path)
+        mime_type = mime_type or "application/octet-stream"
+
+        def iterfile():
+            with open(audio_path, "rb") as f:
+                while chunk := f.read(65536):
+                    yield chunk
+
+        return StreamingResponse(
+            iterfile(),
+            media_type=mime_type,
+            headers={
+                "Content-Disposition": f'inline; filename="{audio_filename}"',
+                "Accept-Ranges": "bytes",
+            }
+        )
     except HTTPException:
         raise
     except Exception as e:
