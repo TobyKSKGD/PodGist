@@ -408,123 +408,145 @@ export default function EpisodePage() {
     const nodes = archive?.timelineData?.nodes ?? [];
     const activeNode = currentNode ?? selectedNode;
 
-    // 节点类型配色映射
-    const nodeTypeColors: Record<string, string> = {
-      company_news: 'bg-orange-100 text-orange-600',
-      product: 'bg-blue-100 text-blue-600',
-      person: 'bg-purple-100 text-purple-600',
-      topic_change: 'bg-slate-100 text-slate-500',
-      quote: 'bg-green-100 text-green-600',
-      background: 'bg-slate-100 text-slate-400',
-      fun_moment: 'bg-yellow-100 text-yellow-600',
-      other: 'bg-slate-100 text-slate-400',
+    // 节点类型 → 配色
+    const nodeTypeConfig: Record<string, { bg: string; text: string; label: string }> = {
+      company_news: { bg: 'bg-orange-50', text: 'text-orange-600', label: '公司动态' },
+      product:      { bg: 'bg-blue-50',   text: 'text-blue-600',   label: '产品' },
+      person:       { bg: 'bg-purple-50', text: 'text-purple-600', label: '人物' },
+      topic_change: { bg: 'bg-slate-50',  text: 'text-slate-500',  label: '话题切换' },
+      quote:        { bg: 'bg-green-50',  text: 'text-green-600',  label: '金句' },
+      background:   { bg: 'bg-slate-50',  text: 'text-slate-400',  label: '背景' },
+      fun_moment:   { bg: 'bg-yellow-50', text: 'text-yellow-600', label: '趣味时刻' },
+      other:        { bg: 'bg-slate-50',  text: 'text-slate-400',  label: '其他' },
     };
-    const nodeTypeBg = activeNode?.node_type ? (nodeTypeColors[activeNode.node_type] ?? nodeTypeColors['other']) : '';
+    const tc = activeNode?.node_type
+      ? (nodeTypeConfig[activeNode.node_type] ?? nodeTypeConfig['other'])
+      : null;
+
+    // 实体类型 → 配色
+    const entityTypeColors: Record<string, string> = {
+      company:  'bg-blue-50 text-blue-600 border-blue-100',
+      product:  'bg-indigo-50 text-indigo-600 border-indigo-100',
+      person:   'bg-purple-50 text-purple-600 border-purple-100',
+      location: 'bg-green-50 text-green-600 border-green-100',
+      concept:  'bg-orange-50 text-orange-600 border-orange-100',
+      media:    'bg-red-50 text-red-600 border-red-100',
+      other:    'bg-slate-50 text-slate-500 border-slate-100',
+    };
 
     return (
       <>
-        {/* ===== 主内容区 ===== */}
+        {/* ===== 主内容：中间大卡片 + 右侧目录 ===== */}
         <div className="flex-1 flex overflow-hidden">
 
-          {/* 中间：当前节点大卡片（主角） */}
-          <div className="flex-1 overflow-y-auto px-8 py-6 bg-white">
+          {/* ===== 中间：当前节点阅读面板（主角） ===== */}
+          <div className="flex-1 overflow-y-auto" style={{ background: '#FAFAF8' }}>
             {activeNode ? (
-              <div className="max-w-2xl mx-auto space-y-5">
+              <div className="max-w-2xl mx-auto px-10 py-8">
 
-                {/* 时间范围 + 类型标签 */}
-                <div className="flex items-center gap-2 flex-wrap">
-                  <div className="inline-flex items-center px-3 py-1 bg-[#D1FAF5] text-[#00ADA6] text-sm font-mono font-medium rounded-lg">
-                    {activeNode.time} — {formatTime(activeNode.end)}
+                {/* ——— 头部：时间 + 类型 ——— */}
+                <div className="flex items-center gap-2 mb-5">
+                  <div className="inline-flex items-center px-3 py-1 bg-white border border-[#00ADA6]/20 text-[#00ADA6] text-sm font-mono font-semibold rounded-lg shadow-sm">
+                    {activeNode.time} → {formatTime(activeNode.end)}
                   </div>
-                  {activeNode.node_type && (
-                    <div className={`inline-flex items-center px-2.5 py-1 text-xs font-medium rounded ${nodeTypeBg}`}>
-                      {activeNode.node_type}
+                  {tc && (
+                    <div className={`inline-flex items-center px-2.5 py-1 text-xs font-medium rounded border ${tc.bg} ${tc.text} border-current/10`}>
+                      {tc.label}
                     </div>
                   )}
                 </div>
 
-                {/* 标题 */}
-                <h2 className="text-xl font-bold text-slate-800 leading-snug">
+                {/* ——— 标题（最突出） ——— */}
+                <h2 className="text-2xl font-bold text-slate-800 leading-tight mb-6">
                   {activeNode.title}
                 </h2>
 
-                {/* 摘要 */}
+                {/* ——— 摘要（正文段落感） ——— */}
                 {activeNode.summary && (
-                  <p className="text-base text-slate-600 leading-relaxed">{activeNode.summary}</p>
+                  <p className="text-base text-slate-600 leading-7 mb-6 whitespace-pre-wrap">
+                    {activeNode.summary}
+                  </p>
                 )}
 
-                {/* 为什么重要 */}
+                {/* ——— 为什么重要（重点提示块） ——— */}
                 {activeNode.why_it_matters && (
-                  <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
+                  <div className="relative pl-4 mb-6 before:content-[''] before:absolute before:left-0 before:top-0 before:bottom-0 before:w-0.5 before:bg-amber-400 before:rounded-full">
                     <p className="text-sm text-amber-700 leading-relaxed">
-                      <span className="font-semibold">重要原因：</span>
+                      <span className="font-semibold text-amber-800">重要原因 · </span>
                       {activeNode.why_it_matters}
                     </p>
                   </div>
                 )}
 
-                {/* 实体列表 */}
+                {/* ——— 相关实体（信息卡片） ——— */}
                 {activeNode.entities && activeNode.entities.length > 0 && (
-                  <div className="space-y-2">
-                    <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">相关实体</p>
-                    <div className="grid grid-cols-1 gap-2">
-                      {activeNode.entities.map((entity, i) => (
-                        <div key={i} className="flex items-start gap-3 p-3 bg-slate-50 rounded-lg border border-slate-100">
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2 mb-0.5">
-                              <span className="text-xs font-semibold text-slate-700">{entity.name}</span>
-                              <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${
-                                entity.type === 'company' ? 'bg-blue-50 text-blue-500' :
-                                entity.type === 'product' ? 'bg-indigo-50 text-indigo-500' :
-                                entity.type === 'person' ? 'bg-purple-50 text-purple-500' :
-                                entity.type === 'location' ? 'bg-green-50 text-green-500' :
-                                entity.type === 'media' ? 'bg-red-50 text-red-500' :
-                                'bg-slate-100 text-slate-500'
-                              }`}>{entity.type}</span>
+                  <div className="mb-6">
+                    <p className="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-3">相关实体</p>
+                    <div className="space-y-2">
+                      {activeNode.entities.map((entity, i) => {
+                        const ec = entityTypeColors[entity.type] ?? entityTypeColors['other'];
+                        return (
+                          <div key={i} className={`flex items-start gap-3 p-3 rounded-xl border ${ec} bg-white/60`}>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2 mb-1">
+                                <span className="text-sm font-semibold text-slate-800">{entity.name}</span>
+                                <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${ec}`}>
+                                  {entity.type}
+                                </span>
+                              </div>
+                              {entity.description && (
+                                <p className="text-xs text-slate-500 leading-relaxed">{entity.description}</p>
+                              )}
                             </div>
-                            {entity.description && (
-                              <p className="text-xs text-slate-500 leading-relaxed">{entity.description}</p>
-                            )}
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 )}
 
-                {/* 关键事实 */}
+                {/* ——— 关键事实（结构化事实卡） ——— */}
                 {activeNode.facts && activeNode.facts.length > 0 && (
-                  <div className="space-y-2">
-                    <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">关键事实</p>
-                    <div className="space-y-1.5">
+                  <div className="mb-6">
+                    <p className="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-3">关键事实</p>
+                    <div className="bg-white border border-slate-100 rounded-xl divide-y divide-slate-100">
                       {activeNode.facts.map((fact, i) => (
-                        <div key={i} className="flex items-start gap-2">
-                          <span className="text-xs bg-slate-100 text-slate-500 px-2 py-0.5 rounded font-medium shrink-0 mt-0.5">{fact.label}</span>
-                          <p className="text-sm text-slate-600 leading-relaxed">{fact.value}</p>
+                        <div key={i} className="flex items-start gap-3 px-4 py-2.5">
+                          <span className="text-xs font-medium text-slate-400 w-20 shrink-0 pt-0.5">{fact.label}</span>
+                          <span className="text-sm text-slate-700 leading-relaxed">{fact.value}</span>
                         </div>
                       ))}
                     </div>
                   </div>
                 )}
 
-                {/* 解读 / 梗解释 */}
+                {/* ——— 解读 / 梗解释（补充说明块） ——— */}
                 {activeNode.quote_or_joke_explainer && (
-                  <div className="bg-purple-50 border border-purple-200 rounded-xl px-4 py-3">
-                    <p className="text-sm text-purple-700 leading-relaxed italic">
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl px-5 py-4 mb-6">
+                    <p className="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-2">解读</p>
+                    <p className="text-sm text-slate-600 leading-relaxed italic">
                       {activeNode.quote_or_joke_explainer}
                     </p>
                   </div>
                 )}
 
-                {/* 空状态占位 */}
-                {!activeNode.summary && !activeNode.why_it_matters && !activeNode.entities?.length && !activeNode.facts?.length && !activeNode.quote_or_joke_explainer && (
-                  <p className="text-sm text-slate-400 text-center py-8">暂无节点详情</p>
-                )}
+                {/* ——— 空状态 ——— */}
+                {!activeNode.summary && !activeNode.why_it_matters
+                  && !activeNode.entities?.length && !activeNode.facts?.length
+                  && !activeNode.quote_or_joke_explainer && (
+                    <div className="py-16 text-center">
+                      <p className="text-sm text-slate-400">暂无详细解读内容</p>
+                    </div>
+                  )}
+
+                {/* 底部留白（让滚动有呼吸感） */}
+                <div className="h-8" />
               </div>
             ) : (
-              <div className="h-full flex flex-col items-center justify-center text-center">
-                <div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center mb-4">
-                  <IconPlayerPlay size={24} className="text-slate-300" />
+              /* 无当前节点时 */
+              <div className="h-full flex flex-col items-center justify-center text-center px-8">
+                <div className="w-20 h-20 rounded-full bg-slate-100 flex items-center justify-center mb-6">
+                  <IconPlayerPlay size={28} className="text-slate-300 ml-0.5" />
                 </div>
                 <p className="text-sm text-slate-400 leading-relaxed">
                   播放音频<br />系统将自动高亮当前节点
@@ -533,42 +555,82 @@ export default function EpisodePage() {
             )}
           </div>
 
-          {/* 右侧：节点目录（独立滚动） */}
-          <div className="w-72 border-l border-slate-100 flex flex-col overflow-hidden bg-slate-50/50">
-            <div className="px-4 py-3 border-b border-slate-100 shrink-0">
+          {/* ===== 右侧：节目目录 ===== */}
+          <div className="w-72 shrink-0 flex flex-col overflow-hidden border-l border-slate-200" style={{ background: '#F7F7F5' }}>
+            {/* 目录头部 */}
+            <div className="px-5 py-4 border-b border-slate-200 shrink-0">
               <div className="flex items-center justify-between">
-                <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">目录</h2>
-                <span className="text-xs text-slate-400">{nodes.length} 个节点</span>
+                <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-widest">目录</h2>
+                <span className="text-xs text-slate-400 tabular-nums">{nodes.length} 节</span>
               </div>
             </div>
 
-            <div ref={nodeListRef} className="flex-1 overflow-y-auto px-3 py-2">
+            {/* 目录列表 */}
+            <div
+              ref={nodeListRef}
+              className="flex-1 overflow-y-auto"
+              style={{ scrollBehavior: 'smooth' }}
+            >
               {nodes.length === 0 ? (
-                <p className="text-xs text-slate-400 py-8 text-center">暂无节点</p>
+                <div className="py-12 text-center">
+                  <p className="text-xs text-slate-400">暂无节点</p>
+                </div>
               ) : (
-                <div className="space-y-0.5">
-                  {nodes.map(node => {
+                <div className="px-3 py-2 space-y-0.5">
+                  {nodes.map((node, idx) => {
                     const isActive = activeNode?.id === node.id;
+                    const tc = nodeTypeConfig[node.node_type] ?? nodeTypeConfig['other'];
                     return (
                       <button
                         key={node.id}
                         onClick={() => handleNodeClick(node)}
-                        className={`w-full text-left px-3 py-2 rounded-lg transition-all flex items-start gap-2.5 ${
+                        className={`w-full text-left rounded-lg px-3 py-2.5 transition-all duration-150 group ${
                           isActive
-                            ? 'bg-white border border-[#00ADA6]/30 shadow-sm'
-                            : 'hover:bg-white/60'
+                            ? 'bg-white shadow-sm border border-[#00ADA6]/20'
+                            : 'hover:bg-white/70'
                         }`}
                       >
-                        <span className={`text-xs font-mono font-medium w-10 shrink-0 mt-0.5 ${
-                          isActive ? 'text-[#00ADA6]' : 'text-slate-400'
-                        }`}>
-                          {node.time}
-                        </span>
-                        <span className={`text-xs flex-1 leading-relaxed ${
-                          isActive ? 'text-[#00ADA6] font-semibold' : 'text-slate-500'
-                        }`}>
-                          {node.title}
-                        </span>
+                        <div className="flex items-start gap-2.5">
+                          {/* 节号 */}
+                          <span className={`text-xs font-mono font-medium w-6 shrink-0 mt-0.5 ${
+                            isActive ? 'text-[#00ADA6]' : 'text-slate-300 group-hover:text-slate-400'
+                          }`}>
+                            {String(idx + 1).padStart(2, '0')}
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            {/* 时间 + 类型 */}
+                            <div className="flex items-center gap-1.5 mb-0.5">
+                              <span className={`text-xs font-mono ${
+                                isActive ? 'text-[#00ADA6]' : 'text-slate-400'
+                              }`}>
+                                {node.time}
+                              </span>
+                              {node.node_type && (
+                                <span className={`text-[10px] px-1 py-0.5 rounded ${tc.bg} ${tc.text} font-medium`}>
+                                  {tc.label}
+                                </span>
+                              )}
+                            </div>
+                            {/* 标题 */}
+                            <p className={`text-xs leading-snug ${
+                              isActive
+                                ? 'text-[#00ADA6] font-semibold'
+                                : 'text-slate-500 group-hover:text-slate-700'
+                            }`}>
+                              {node.title}
+                            </p>
+                            {/* 摘要预览（active 时显示） */}
+                            {isActive && node.summary && (
+                              <p className="text-[11px] text-slate-400 leading-relaxed mt-1 line-clamp-2">
+                                {node.summary}
+                              </p>
+                            )}
+                          </div>
+                          {/* 当前节点指示条 */}
+                          {isActive && (
+                            <div className="w-0.5 h-full absolute left-0 top-0 bottom-0 bg-[#00ADA6] rounded-full" />
+                          )}
+                        </div>
                       </button>
                     );
                   })}
@@ -578,9 +640,14 @@ export default function EpisodePage() {
           </div>
         </div>
 
-        {/* ===== 底部播放器 ===== */}
-        <div className="border-t border-slate-100 px-6 py-3 bg-white shrink-0">
-          <div className="flex items-center gap-3">
+        {/* ===== 底部播放器控制条 ===== */}
+        <div
+          className="border-t border-slate-200 px-6 py-3.5 shrink-0"
+          style={{ background: 'linear-gradient(to top, #F9F9F8, #FFFFFF)' }}
+        >
+          <div className="flex items-center gap-4">
+
+            {/* 音频源 */}
             {hasAudio && (
               <audio
                 ref={audioRef}
@@ -592,41 +659,55 @@ export default function EpisodePage() {
                 onEnded={() => setIsPlaying(false)}
               />
             )}
+
+            {/* 播放/暂停按钮（更大更醒目） */}
             <button
               onClick={togglePlay}
               disabled={!hasAudio}
-              className={`w-10 h-10 rounded-full flex items-center justify-center transition-colors shrink-0 ${
+              className={`w-11 h-11 rounded-full flex items-center justify-center transition-all shrink-0 ${
                 hasAudio
-                  ? 'bg-[#00ADA6] hover:bg-[#009A94] text-white'
+                  ? 'bg-[#00ADA6] hover:bg-[#009A94] active:scale-95 shadow-md shadow-[#00ADA6]/20'
                   : 'bg-slate-100 text-slate-300 cursor-not-allowed'
               }`}
             >
               {isPlaying
-                ? <IconPlayerSkipForward size={17} className="ml-0.5" />
-                : <IconPlayerPlay size={17} className="ml-0.5" />
+                ? <IconPlayerSkipForward size={18} className="text-white ml-0.5" />
+                : <IconPlayerPlay size={18} className="text-white ml-0.5" />
               }
             </button>
-            <div className="flex-1 min-w-0 flex items-center gap-2.5">
-              <span className="text-xs text-slate-400 font-mono w-10 shrink-0 text-right">{formatTime(currentTime)}</span>
+
+            {/* 当前时间 */}
+            <span className="text-xs text-slate-400 font-mono tabular-nums w-11 text-right shrink-0">
+              {formatTime(currentTime)}
+            </span>
+
+            {/* 进度条（更宽更粗） */}
+            <div className="flex-1 mx-2">
               <div
-                className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden cursor-pointer"
+                className="h-1.5 bg-slate-100 rounded-full overflow-hidden cursor-pointer group"
                 onClick={(e) => {
                   if (!hasAudio || !audioRef.current) return;
                   const rect = e.currentTarget.getBoundingClientRect();
-                  const ratio = (e.clientX - rect.left) / rect.width;
+                  const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
                   audioRef.current.currentTime = ratio * duration;
                 }}
               >
                 <div
-                  className="h-full bg-[#00ADA6] rounded-full transition-all duration-200"
+                  className="h-full bg-[#00ADA6] rounded-full transition-all duration-150 group-hover:bg-[#009A94]"
                   style={{ width: duration > 0 ? `${(currentTime / duration) * 100}%` : '0%' }}
                 />
               </div>
-              <span className="text-xs text-slate-400 font-mono w-10 shrink-0">{formatTime(duration)}</span>
             </div>
+
+            {/* 总时长 */}
+            <span className="text-xs text-slate-400 font-mono tabular-nums w-11 shrink-0">
+              {formatTime(duration)}
+            </span>
+
             {/* 当前节点标签（播放器右侧提示） */}
             {activeNode && (
-              <div className="hidden md:flex items-center gap-1.5 ml-2 px-2 py-1 bg-slate-50 rounded-lg border border-slate-100 max-w-[200px] shrink-0">
+              <div className="hidden lg:flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-50 border border-slate-100 max-w-[220px] shrink-0">
+                <div className="w-1.5 h-1.5 rounded-full bg-[#00ADA6] animate-pulse shrink-0" />
                 <span className="text-xs font-mono text-[#00ADA6] shrink-0">{activeNode.time}</span>
                 <span className="text-xs text-slate-500 truncate">{activeNode.title}</span>
               </div>
