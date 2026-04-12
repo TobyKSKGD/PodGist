@@ -429,9 +429,95 @@ def _find_audio_in_archive(archive_path: str) -> str | None:
     return None
 
 
+def _generate_chapters_from_highlights(highlights: list, target_count: int = 6) -> list:
+    """
+    基于 highlights 的时间均匀分段生成章节。
+
+    策略：按 target_count 将音频总时长切分为 chunk_size，
+    每段取首条 highlight 的核心关键词作为章节标题。
+    无需 LLM，纯规则驱动，稳定可解释。
+    """
+    if not highlights or len(highlights) < 3:
+        return []
+
+    total_seconds = highlights[-1]["seconds"]
+    if total_seconds <= 0:
+        return []
+
+    # 理想每章时长（秒）
+    chunk_size = total_seconds / target_count
+
+    chapters = []
+    current_chapter = {
+        "items": [highlights[0]],
+        "start_seconds": highlights[0]["seconds"]
+    }
+
+    for i, hl in enumerate(highlights[1:], start=1):
+        elapsed = hl["seconds"] - current_chapter["start_seconds"]
+        is_last = (i == len(highlights) - 1)
+
+        # 当距章节起点超过 chunk_size 时断章，或到最后一个 highlight 时强制结束
+        if elapsed >= chunk_size or is_last:
+            # 封存当前章
+            current_chapter["items"].append(hl)
+            first = current_chapter["items"][0]
+            last = current_chapter["items"][-1]
+
+            # 从首条 highlight 提取章节标题
+            raw_title = first.get("title", first.get("description", ""))
+            chapter_title = _extract_chapter_title(raw_title)
+
+            chapters.append({
+                "id": f"ch_{len(chapters)}",
+                "time": first["time"],
+                "seconds": first["seconds"],
+                "title": chapter_title,
+                "description": f"{first['time']} - {last['time']}"
+            })
+
+            # 开启新章
+            current_chapter = {"items": [hl], "start_seconds": hl["seconds"]}
+        else:
+            current_chapter["items"].append(hl)
+
+    # 限制最多 8 章
+    return chapters[:8]
+
+
+def _extract_chapter_title(text: str) -> str:
+    """
+    从 highlight 原始文本提取短章节标题。
+    规则：移除中文编号前缀，取冒号后半部分，取第一个停顿符前的内容，不超过 26 字符。
+    """
+    import re
+    # 移除开头的话题标记（一、二、三、1.2.3.等）
+    text = re.sub(r'^[一二三四五六七八九\d]+[、.、\s—\-:：]+', '', text)
+
+    # 如果有冒号/：取其后半部分（章节标题通常在冒号后）
+    if '：' in text:
+        parts = text.split('：', 1)
+        if len(parts[1].strip()) >= 4:
+            text = parts[1].strip()
+    elif ':' in text:
+        parts = text.split(':', 1)
+        if len(parts[1].strip()) >= 4:
+            text = parts[1].strip()
+
+    # 取第一个常见停顿符前的部分
+    for sep in ['，', '、', '。', '？', '?']:
+        if sep in text:
+            text = text.split(sep)[0]
+            break
+    text = text.strip()
+    if len(text) > 26:
+        text = text[:26]
+    return text or "章节"
+
+
 def _parse_timeline_from_summary(summary: str) -> dict:
     """
-    从 summary markdown 中解析时间轴数据。
+    从 summary markdown 中解析时间轴数据（highlights + chapters）。
 
     格式示例：
     ### 细致高光时间轴
@@ -440,11 +526,9 @@ def _parse_timeline_from_summary(summary: str) -> dict:
     """
     highlights = []
     terms = []
-    chapters = []
 
     # 从 summary 中提取高光时间轴（- [MM:SS] 格式）
     for line in summary.split('\n'):
-        import re
         match = re.match(r'^- \[(\d+):(\d{2})(?:\.\d+)?\] (.+)$', line.strip())
         if match:
             minutes = int(match.group(1))
@@ -458,6 +542,9 @@ def _parse_timeline_from_summary(summary: str) -> dict:
                 "title": text[:80] if len(text) > 80 else text,
                 "description": text
             })
+
+    # 从 highlights 聚类生成章节
+    chapters = _generate_chapters_from_highlights(highlights, target_count=6)
 
     return {
         "chapters": chapters,
