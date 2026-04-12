@@ -359,9 +359,28 @@ def get_archives():
 
             # 转换为前端需要的格式
             for mtime, item in items:
+                item_path = os.path.join(ARCHIVE_DIR, item)
+                # 提取标题：优先读 summary.md 第一行非标题行，否则用目录名
+                display_name = item
+                summary_path = os.path.join(item_path, "summary.md")
+                if os.path.exists(summary_path):
+                    try:
+                        with open(summary_path, "r", encoding="utf-8") as f:
+                            first_line = f.readline().strip()
+                            if first_line and not first_line.startswith('#') and not first_line.startswith('>'):
+                                display_name = first_line
+                    except Exception:
+                        pass
+                # 检查音频
+                has_audio = any(f.startswith('source.') for f in os.listdir(item_path)) if os.path.exists(item_path) else False
+                # 检查 segments
+                has_segments = os.path.exists(os.path.join(item_path, "segments.json"))
                 archives.append({
-                    "id": item,  # 使用目录名作为 ID
-                    "name": item  # 使用目录名作为显示名称
+                    "id": item,
+                    "name": display_name,
+                    "createTime": datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M"),
+                    "hasAudio": has_audio,
+                    "hasSegments": has_segments,
                 })
 
         return {

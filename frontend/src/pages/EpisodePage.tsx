@@ -138,6 +138,25 @@ export default function EpisodePage() {
       .finally(() => setLoading(false));
   }, [id]);
 
+  // ===== 播放进度本地存储 =====
+
+  const PROGRESS_KEY = 'podgist_play_progress';
+
+  // 保存进度（节流：每 10s 写一次 localStorage）
+  const lastSaveRef = useRef(0);
+  const saveProgress = (seconds: number, dur: number) => {
+    if (!id || !dur || dur <= 0) return;
+    const now = Date.now();
+    if (now - lastSaveRef.current < 10000) return;
+    lastSaveRef.current = now;
+    try {
+      const raw = localStorage.getItem(PROGRESS_KEY);
+      const all: Record<string, { archiveId: string; lastPositionSeconds: number; duration: number; updatedAt: number }> = raw ? JSON.parse(raw) : {};
+      all[id] = { archiveId: id, lastPositionSeconds: seconds, duration: dur, updatedAt: now };
+      localStorage.setItem(PROGRESS_KEY, JSON.stringify(all));
+    } catch { /* ignore */ }
+  };
+
   // ===== 音频事件 =====
 
   // 节流：只在使用 requestAnimationFrame 时更新 currentTime，避免过于频繁触发
@@ -152,10 +171,26 @@ export default function EpisodePage() {
     lastUpdateRef.current = now;
     const t = audioRef.current.currentTime;
     setCurrentTime(t);
+    saveProgress(t, audioRef.current.duration || 0);
   }, []);
 
   const handleLoadedMetadata = () => {
-    if (audioRef.current) setDuration(audioRef.current.duration);
+    if (!audioRef.current) return;
+    const dur = audioRef.current.duration;
+    setDuration(dur);
+    // 恢复保存的播放位置（如果有）
+    if (id && dur > 0) {
+      try {
+        const raw = localStorage.getItem('podgist_play_progress');
+        if (raw) {
+          const all = JSON.parse(raw);
+          const saved = all[id];
+          if (saved && saved.lastPositionSeconds > 0 && saved.lastPositionSeconds < dur - 5) {
+            audioRef.current.currentTime = saved.lastPositionSeconds;
+          }
+        }
+      } catch { /* ignore */ }
+    }
   };
 
   const togglePlay = () => {
