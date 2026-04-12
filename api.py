@@ -458,12 +458,32 @@ def get_archives():
                 has_audio = any(f.startswith('source.') for f in os.listdir(item_path)) if os.path.exists(item_path) else False
                 # 检查 segments
                 has_segments = os.path.exists(os.path.join(item_path, "segments.json"))
+                # 读取 metadata.json 获取模式
+                metadata_path = os.path.join(item_path, "metadata.json")
+                mode = "summary"
+                can_migrate = False
+                if os.path.exists(metadata_path):
+                    try:
+                        with open(metadata_path, "r", encoding="utf-8") as f:
+                            meta = json.load(f)
+                            mode = meta.get("mode", "summary")
+                            can_migrate = (
+                                meta.get("can_redownload", False) or
+                                (meta.get("audio_saved", False) and meta.get("audio_filename"))
+                            )
+                    except Exception:
+                        pass
+                # 检查是否有 timeline.json
+                has_timeline = os.path.exists(os.path.join(item_path, "timeline.json"))
                 archives.append({
                     "id": item,
                     "name": display_name,
                     "createTime": datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M"),
                     "hasAudio": has_audio,
                     "hasSegments": has_segments,
+                    "mode": mode,
+                    "hasTimeline": has_timeline,
+                    "canMigrate": can_migrate,
                 })
 
         return {
@@ -474,7 +494,109 @@ def get_archives():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# 3.1 删除归档
+# 3.2 迁移归档为 timeline 模式
+@app.post("/api/archives/{archive_id}/migrate")
+def migrate_archive_to_timeline(archive_id: str):
+    """
+    将 summary 模式归档迁移为 timeline 模式。
+    在已有 segments.json + raw.txt 的基础上重新生成 timeline.json。
+    新建一条 timeline 归档，保留原 summary 归档。
+    """
+    try:
+        archive_path = os.path.join(ARCHIVE_DIR, archive_id)
+
+        if not os.path.abspath(archive_path).startswith(os.path.abspath(ARCHIVE_DIR)):
+            raise HTTPException(status_code=400, detail="无效的归档名")
+        if not os.path.exists(archive_path) or not os.path.isdir(archive_path):
+            raise HTTPException(status_code=404, detail="归档不存在")
+
+        # 读取转录文本和分段
+        raw_path = os.path.join(archive_path, "raw.txt")
+        segments_path = os.path.join(archive_path, "segments.json")
+        if not os.path.exists(raw_path):
+            raise HTTPException(status_code=400, detail="归档缺少 raw.txt，无法迁移")
+        with open(raw_path, "r", encoding="utf-8") as f:
+            podcast_text = f.read()
+        transcript_segments = []
+        if os.path.exists(segments_path):
+            with open(segments_path, "r", encoding="utf-8") as f:
+                transcript_segments = json.load(f)
+
+        # 获取 API Key
+        api_key = load_api_key()
+        if not api_key:
+            raise HTTPException(status_code=400, detail="请先配置 DashScope API Key")
+
+        # 生成 timeline
+        timeline_data = generate_timeline_json(api_key, podcast_text, transcript_segments, title=archive_id)
+
+        # 读取原 metadata
+        metadata_path = os.path.join(archive_path, "metadata.json")
+        original_meta = {}
+        if os.path.exists(metadata_path):
+            with open(metadata_path, "r", encoding="utf-8") as f:
+                original_meta = json.load(f)
+
+        # 新建 timeline 归档（在原名后加 _tl 后缀）
+        tl_archive_name = f"{archive_id}_tl"
+        tl_archive_path = os.path.join(ARCHIVE_DIR, tl_archive_name)
+        os.makedirs(tl_archive_path, exist_ok=True)
+
+        # 复制原音频（如果存在）
+        audio_filename = original_meta.get("audio_filename")
+        if audio_filename:
+            src_audio = os.path.join(archive_path, audio_filename)
+            if os.path.exists(src_audio):
+                shutil.copy2(src_audio, os.path.join(tl_archive_path, audio_filename))
+
+        # 复制 raw.txt 和 segments.json
+        if os.path.exists(raw_path):
+            shutil.copy2(raw_path, os.path.join(tl_archive_path, "raw.txt"))
+        if os.path.exists(segments_path):
+            shutil.copy2(segments_path, os.path.join(tl_archive_path, "segments.json"))
+
+        # 写 timeline.json
+        with open(os.path.join(tl_archive_path, "timeline.json"), "w", encoding="utf-8") as f:
+            json.dump(timeline_data, f, ensure_ascii=False, indent=2)
+
+        # 写 summary.md（轻量）
+        node_count = len(timeline_data.get("nodes", []))
+        with open(os.path.join(tl_archive_path, "summary.md"), "w", encoding="utf-8") as f:
+            f.write(f"# {timeline_data.get('title', archive_id)}\n\n[时间轴模式] 共 {node_count} 个节点\n")
+
+        # 写 metadata.json
+        tl_meta = {
+            "id": tl_archive_name,
+            "title": timeline_data.get("title", archive_id),
+            "mode": "timeline",
+            "source_type": original_meta.get("source_type", "other"),
+            "source_url": original_meta.get("source_url", ""),
+            "audio_saved": original_meta.get("audio_saved", False),
+            "audio_filename": original_meta.get("audio_filename"),
+            "can_redownload": original_meta.get("can_redownload", False),
+            "created_at": datetime.now().isoformat(),
+        }
+        with open(os.path.join(tl_archive_path, "metadata.json"), "w", encoding="utf-8") as f:
+            json.dump(tl_meta, f, ensure_ascii=False, indent=2)
+
+        # 向量索引
+        try:
+            index_archive(tl_archive_name, tl_archive_name, podcast_text)
+        except Exception:
+            pass
+
+        return {
+            "status": "success",
+            "message": f"已生成时间轴模式归档",
+            "timeline_archive_id": tl_archive_name
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# 3.3 删除归档
 def _robust_rmtree(path):
     """
     跨平台 robust 删除目录，处理 Windows 锁定文件和只读属性。
