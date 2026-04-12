@@ -472,7 +472,8 @@ def _generate_chapters_from_highlights(highlights: list, target_count: int = 6) 
                 "time": first["time"],
                 "seconds": first["seconds"],
                 "title": chapter_title,
-                "description": f"{first['time']} - {last['time']}"
+                "description": f"{first['time']} - {last['time']}",
+                "items": current_chapter["items"]
             })
 
             current_chapter = {"items": [hl], "start_seconds": hl["seconds"]}
@@ -547,6 +548,127 @@ def _extract_chapter_title(text: str) -> str:
     return text or "章节"
 
 
+def _generate_terms_from_summary_and_segments(summary: str, transcript_segments: list) -> list:
+    """
+    从 summary.md 的核心关键词区块提取术语，并在 transcriptSegments 中
+    匹配首次出现时间，生成带解释的 terms 数组。
+
+    策略：
+    1. 解析 summary 中的 '> 核心关键词：' 行，逗号分隔提取 term 候选
+    2. 在 transcriptSegments 中模糊匹配每个 term 的首次出现
+    3. 取该 segment 的 seconds 作为 time，并截取前后各一整句作为 explanation
+    无需 LLM，纯规则驱动。
+    """
+    import re
+
+    # 1. 提取核心关键词行
+    kw_match = re.search(r'核心关键词[：:]\s*(.+)', summary)
+    if not kw_match:
+        return []
+
+    keywords_raw = kw_match.group(1).strip()
+    # 过滤掉 > 注释符和空条目
+    keyword_terms = [
+        t.strip().rstrip('。.,;:，、')
+        for t in keywords_raw.split('，')
+        if t.strip() and not t.strip().startswith('>')
+    ]
+
+    if not keyword_terms:
+        return []
+
+    # 2. 构建 segment 文本用于匹配（按时间顺序）
+    segments_text = [(seg.get("seconds", 0), seg.get("time", ""), seg.get("text", "")) for seg in transcript_segments]
+
+    terms = []
+    seen_terms = set()  # 避免重复
+
+    for term in keyword_terms:
+        if len(term) < 2 or term in seen_terms:
+            continue
+
+        # 3. 在 segments 中找包含该 term 的最佳 segment（模糊匹配）
+        # 策略：优先 exact match，其次最长的 contentful 子串匹配
+        skip_prefixes = {'本', '期', '今', '昨', '各', '该', '这', '那', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '百', '千', '万', '第', '的', '了', '在', '是', '和', '与', '或', '但', '而', '以', '及', '等', '将', '已', '正在', 'The ', 'A ', 'An '}
+        best_seg = None
+        best_score = 0
+        for sec, time_str, text in segments_text:
+            score = 0
+            if term in text:
+                score = 100  # exact match
+            else:
+                # 找所有 3+ char contentful 子串在 text 中的出现次数
+                for i in range(len(term)):
+                    sub = term[i:i+4]
+                    if len(sub) >= 3 and sub not in skip_prefixes:
+                        cnt = text.count(sub)
+                        if cnt > 0:
+                            score = max(score, len(sub) * cnt)  # 越长 + 越多 = 越好
+                    elif len(sub) == 2:
+                        cnt = text.count(sub)
+                        if cnt > 0:
+                            score = max(score, 2 * cnt)
+                # 带 × 拆分的 part 匹配
+                if '×' in term or '·' in term:
+                    for part in term.split('×') if '×' in term else term.split('·'):
+                        part = part.strip()
+                        if len(part) >= 2 and part in text:
+                            score = max(score, len(part) * 2)
+            if score > best_score:
+                best_score = score
+                best_seg = (sec, time_str, text)
+                if score >= 100:
+                    break
+
+        if best_seg is None:
+            # fallback：在 highlights 行中查找
+            for line in summary.split('\n'):
+                m = re.match(r'^- \[(\d+):(\d{2})(?:\.\d+)?\] (.+)$', line.strip())
+                if m and term in m.group(3):
+                    sec = int(m.group(1)) * 60 + int(m.group(2))
+                    best_seg = (sec, f"{int(m.group(1)):02d}:{int(m.group(2)):02d}", m.group(3))
+                    break
+
+        if best_seg:
+            sec, time_str, seg_text = best_seg
+            # 4. 生成 explanation：从 segment 文本中提取包含 term 的那一小句
+            explanation = _make_term_explanation(term, seg_text)
+            terms.append({
+                "id": f"term_{len(terms)}",
+                "term": term,
+                "time": time_str,
+                "seconds": sec,
+                "explanation": explanation
+            })
+            seen_terms.add(term)
+
+        if len(terms) >= 12:  # 最多 12 个 term
+            break
+
+    return terms
+
+
+def _make_term_explanation(term: str, segment_text: str) -> str:
+    """从包含 term 的 segment 中提取一句简洁解释。"""
+    import re
+    # 找到 term 在文本中的位置，取其前后各 10 个字符的范围
+    idx = segment_text.find(term)
+    if idx == -1:
+        # fuzzy fallback：截取 segment 前 40 字符
+        return segment_text[:40].strip(' ，、。')
+
+    # 以常见句子分隔符切分，取包含 term 的那句
+    for sep in ['。', '？', '！', '；']:
+        sentences = segment_text.split(sep)
+        for sent in sentences:
+            if term in sent:
+                return (sent + sep).strip()
+    # fallback
+    start = max(0, idx - 10)
+    end = min(len(segment_text), idx + len(term) + 20)
+    return segment_text[start:end].strip(' ，、')
+
+
 def _parse_timeline_from_summary(summary: str) -> dict:
     """
     从 summary markdown 中解析时间轴数据（highlights + chapters）。
@@ -578,6 +700,7 @@ def _parse_timeline_from_summary(summary: str) -> dict:
     # 从 highlights 聚类生成章节
     chapters = _generate_chapters_from_highlights(highlights, target_count=6)
 
+    # terms 由 get_archive_detail 调用 _generate_terms_from_summary_and_segments 单独生成
     return {
         "chapters": chapters,
         "highlights": highlights,
@@ -629,6 +752,20 @@ def get_archive_detail(archive_id: str):
             import json
             with open(segments_path, "r", encoding="utf-8") as f:
                 transcript_segments = json.load(f)
+
+        # 生成 terms（基于 summary 关键词 + transcriptSegments 首次出现时间）
+        # 映射为 TimelineItem 结构：term→title, explanation→description
+        raw_terms = _generate_terms_from_summary_and_segments(summary, transcript_segments)
+        timeline["terms"] = [
+            {
+                "id": t["id"],
+                "title": t["term"],
+                "time": t["time"],
+                "seconds": t["seconds"],
+                "description": t["explanation"]
+            }
+            for t in raw_terms
+        ]
 
         # 查找归档中的音频文件
         audio_filename = _find_audio_in_archive(archive_path)

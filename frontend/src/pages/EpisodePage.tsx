@@ -7,7 +7,7 @@
  * 时间轴：
  *  - highlights：从 summary.md 解析真实时间戳条目
  *  - transcriptSegments：从 segments.json 获取完整转录分段
- *  - chapters / terms：后端当前返回空数组，待后续扩展
+ *  - chapters / terms：从 summary.md + segments.json 自动生成
  *
  * 三向联动：
  *  - <audio> 当前播放时间 ↔ highlights 高亮 ↔ transcript segments 高亮
