@@ -226,11 +226,18 @@ export default function EpisodePage() {
         if (raw) {
           const all = JSON.parse(raw);
           const saved = all[id];
+          // 有保存进度 → 恢复位置，不要自动播放（让用户自己决定何时开始）
           if (saved && saved.lastPositionSeconds > 0 && saved.lastPositionSeconds < dur - 5) {
             audioRef.current.currentTime = saved.lastPositionSeconds;
+            audioRef.current.pause();
+            setIsPlaying(false);
+            setCurrentTime(saved.lastPositionSeconds);
+            return;
           }
         }
       } catch { /* ignore */ }
+      // 没有保存进度 → 正常自动播放
+      audioRef.current.play().catch(() => {});
     }
   };
 
@@ -246,10 +253,14 @@ export default function EpisodePage() {
 
   const seekTo = (seconds: number) => {
     if (audioRef.current) {
-      audioRef.current.currentTime = seconds;
-      setCurrentTime(seconds);
+      const clamped = Math.max(0, Math.min(seconds, duration));
+      audioRef.current.currentTime = clamped;
+      setCurrentTime(clamped);
     }
   };
+
+  const skipForward30 = () => seekTo(currentTime + 30);
+  const skipBackward15 = () => seekTo(currentTime - 15);
 
   // ===== 时间轴自动高亮（summary 模式）=====
 
@@ -286,6 +297,32 @@ export default function EpisodePage() {
       setCurrentNode(node);
     }
   }, [currentTime, archive]);
+
+  // ===== 键盘快捷键 =====
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // 忽略在 input/textarea/contenteditable 中的按键
+      const target = e.target as HTMLElement;
+      if (
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.isContentEditable
+      ) {
+        return;
+      }
+
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        skipBackward15();
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        skipForward30();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [currentTime, duration]);
 
   // ===== 双向联动逻辑（summary 模式）=====
 
@@ -347,7 +384,8 @@ export default function EpisodePage() {
 
   // ===== timeline 模式：节点点击 → seek =====
 
-  const handleNodeClick = (node: TimelineNode) => {
+  const handleNodeClick = (node: TimelineNode, e: React.MouseEvent) => {
+    e.stopPropagation();
     setSelectedNode(node);
     seekTo(node.start);
   };
@@ -583,7 +621,7 @@ export default function EpisodePage() {
                     return (
                       <button
                         key={node.id}
-                        onClick={() => handleNodeClick(node)}
+                        onClick={(e) => handleNodeClick(node, e)}
                         className={`w-full text-left rounded-lg px-3 py-2.5 transition-all duration-150 group ${
                           isActive
                             ? 'bg-white shadow-sm border border-[#00ADA6]/20'
@@ -660,6 +698,19 @@ export default function EpisodePage() {
               />
             )}
 
+            {/* 快退 15 秒 */}
+            <button
+              onClick={skipBackward15}
+              disabled={!hasAudio}
+              className="text-slate-400 hover:text-[#00ADA6] transition-colors disabled:opacity-30 shrink-0"
+              title="快退 15 秒"
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path d="M8 3a5 5 0 1 0 4.783 3.9l-1.3-.75A3.5 3.5 0 1 1 8 5.5v1.4l2.6-1.5-2.6-1.5v1.4A5 5 0 0 0 8 3z" fill="currentColor"/>
+                <text x="8" y="14" textAnchor="middle" fontSize="5" fill="currentColor" fontWeight="bold">15</text>
+              </svg>
+            </button>
+
             {/* 播放/暂停按钮（更大更醒目） */}
             <button
               onClick={togglePlay}
@@ -676,20 +727,34 @@ export default function EpisodePage() {
               }
             </button>
 
+            {/* 快进 30 秒 */}
+            <button
+              onClick={skipForward30}
+              disabled={!hasAudio}
+              className="text-slate-400 hover:text-[#00ADA6] transition-colors disabled:opacity-30 shrink-0"
+              title="快进 30 秒"
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path d="M8 3a5 5 0 1 1-4.783 3.9l1.3-.75A3.5 3.5 0 1 0 8 5.5v1.4l-2.6-1.5 2.6-1.5v1.4A5 5 0 0 1 8 3z" fill="currentColor"/>
+                <text x="8" y="14" textAnchor="middle" fontSize="5" fill="currentColor" fontWeight="bold">30</text>
+              </svg>
+            </button>
+
             {/* 当前时间 */}
             <span className="text-xs text-slate-400 font-mono tabular-nums w-11 text-right shrink-0">
               {formatTime(currentTime)}
             </span>
 
-            {/* 进度条（更宽更粗） */}
+            {/* 进度条（更宽更粗，支持点击 seek） */}
             <div className="flex-1 mx-2">
               <div
                 className="h-1.5 bg-slate-100 rounded-full overflow-hidden cursor-pointer group"
                 onClick={(e) => {
                   if (!hasAudio || !audioRef.current) return;
+                  e.stopPropagation();
                   const rect = e.currentTarget.getBoundingClientRect();
                   const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-                  audioRef.current.currentTime = ratio * duration;
+                  seekTo(ratio * duration);
                 }}
               >
                 <div
@@ -741,6 +806,18 @@ export default function EpisodePage() {
                   onEnded={() => setIsPlaying(false)}
                 />
               )}
+              {/* 快退 15 秒 */}
+              <button
+                onClick={skipBackward15}
+                disabled={!hasAudio}
+                className="text-slate-400 hover:text-[#00ADA6] transition-colors disabled:opacity-30 shrink-0"
+                title="快退 15 秒"
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <path d="M8 3a5 5 0 1 0 4.783 3.9l-1.3-.75A3.5 3.5 0 1 1 8 5.5v1.4l2.6-1.5-2.6-1.5v1.4A5 5 0 0 0 8 3z" fill="currentColor"/>
+                  <text x="8" y="14" textAnchor="middle" fontSize="5" fill="currentColor" fontWeight="bold">15</text>
+                </svg>
+              </button>
               <button
                 onClick={togglePlay}
                 disabled={!hasAudio}
@@ -755,9 +832,30 @@ export default function EpisodePage() {
                   : <IconPlayerPlay size={17} className="ml-0.5" />
                 }
               </button>
+              {/* 快进 30 秒 */}
+              <button
+                onClick={skipForward30}
+                disabled={!hasAudio}
+                className="text-slate-400 hover:text-[#00ADA6] transition-colors disabled:opacity-30 shrink-0"
+                title="快进 30 秒"
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <path d="M8 3a5 5 0 1 1-4.783 3.9l1.3-.75A3.5 3.5 0 1 0 8 5.5v1.4l-2.6-1.5 2.6-1.5v1.4A5 5 0 0 1 8 3z" fill="currentColor"/>
+                  <text x="8" y="14" textAnchor="middle" fontSize="5" fill="currentColor" fontWeight="bold">30</text>
+                </svg>
+              </button>
               <div className="flex-1 min-w-0 flex items-center gap-2.5">
                 <span className="text-xs text-slate-400 font-mono w-9 shrink-0 text-right">{formatTime(currentTime)}</span>
-                <div className="flex-1 h-1 bg-slate-100 rounded-full overflow-hidden">
+                <div
+                  className="flex-1 h-1 bg-slate-100 rounded-full overflow-hidden cursor-pointer"
+                  onClick={(e) => {
+                    if (!hasAudio || !audioRef.current) return;
+                    e.stopPropagation();
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+                    seekTo(ratio * duration);
+                  }}
+                >
                   <div
                     className="h-full bg-[#00ADA6] rounded-full transition-all duration-200"
                     style={{ width: duration > 0 ? `${(currentTime / duration) * 100}%` : '0%' }}
