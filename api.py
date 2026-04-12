@@ -880,6 +880,22 @@ def get_archive_detail(archive_id: str):
             if first_line and not first_line.startswith('#') and not first_line.startswith('>'):
                 title = first_line
 
+        # 读取 metadata.json（timeline 模式才有）
+        metadata = None
+        metadata_path = os.path.join(archive_path, "metadata.json")
+        if os.path.exists(metadata_path):
+            import json
+            with open(metadata_path, "r", encoding="utf-8") as f:
+                metadata = json.load(f)
+
+        # 读取 timeline.json（timeline 模式才有）
+        timeline_data = None
+        tl_path = os.path.join(archive_path, "timeline.json")
+        if os.path.exists(tl_path):
+            import json
+            with open(tl_path, "r", encoding="utf-8") as f:
+                timeline_data = json.load(f)
+
         return {
             "status": "success",
             "data": {
@@ -891,7 +907,10 @@ def get_archive_detail(archive_id: str):
                 "audioUrl": audio_url,
                 "audioFilename": audio_filename,
                 "timeline": timeline,
-                "transcriptSegments": transcript_segments
+                "transcriptSegments": transcript_segments,
+                "mode": metadata.get("mode", "summary") if metadata else "summary",
+                "metadata": metadata,
+                "timelineData": timeline_data,
             }
         }
     except HTTPException:
