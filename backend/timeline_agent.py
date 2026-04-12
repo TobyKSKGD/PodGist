@@ -53,17 +53,31 @@ def _extract_json(content: str) -> dict:
     """
     从 LLM 输出中提取 JSON。
     支持：
-    - 纯粹的 { ... }
-    - Markdown ```json ... ``` 包裹
+    - Markdown ```json ... ``` 包裹的 { ... } 对象
+    - Markdown ```json ... ``` 包裹的 [ ... ] 数组（转为 {"nodes": [...]})
+    - 纯粹的 { ... } 对象
+    - 纯粹的 [ ... ] 数组（转为 {"nodes": [...]})
     """
     content = content.strip()
-    # 去掉 markdown 代码块
-    json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', content, re.DOTALL)
+
+    # 1. Markdown ```json ... ``` 包裹的对象（用贪婪匹配处理多行嵌套）
+    json_match = re.search(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```', content)
     if json_match:
         return json.loads(json_match.group(1))
-    # 纯 JSON
+
+    # 2. Markdown ```json ... ``` 包裹的数组（LLM 有时返回数组）
+    array_match = re.search(r'```(?:json)?\s*(\[[\s\S]*?\])\s*```', content)
+    if array_match:
+        return {"nodes": json.loads(array_match.group(1))}
+
+    # 3. 纯 JSON 对象
     if content.startswith('{'):
         return json.loads(content)
+
+    # 4. 纯 JSON 数组
+    if content.startswith('['):
+        return {"nodes": json.loads(content)}
+
     raise ValueError(f"无法从输出中提取 JSON: {content[:200]}")
 
 
