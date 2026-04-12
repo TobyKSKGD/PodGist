@@ -1,4 +1,5 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Response
+from fastapi.responses import StreamingResponse
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 import os
@@ -1042,9 +1043,9 @@ def get_archive_detail(archive_id: str):
 
 
 @app.get("/api/archives/{archive_id}/audio")
-def stream_archive_audio(archive_id: str):
+def stream_archive_audio(archive_id: str, request: Request):
     """
-    流式返回归档目录中的音频文件（source.*）。
+    流式返回归档目录中的音频文件（source.*），支持 HTTP Range 请求。
     用于前端 <audio> 标签的 src。
     """
     try:
@@ -1064,11 +1065,68 @@ def stream_archive_audio(archive_id: str):
 
         audio_path = os.path.join(archive_path, audio_filename)
 
-        # 流式返回
         import mimetypes
         mime_type, _ = mimetypes.guess_type(audio_path)
+        # 规范化 MIME 类型
+        if mime_type == "audio/mp4a-latm":
+            mime_type = "audio/mp4"
         mime_type = mime_type or "application/octet-stream"
 
+        file_size = os.path.getsize(audio_path)
+
+        # 处理 Range 请求
+        range_header = request.headers.get("range")
+        if range_header:
+            # 解析 Range 头，格式: "bytes=start-end"
+            try:
+                range_match = range_header.strip().replace('bytes=', '')
+                if '-' in range_match:
+                    parts = range_match.split('-')
+                    start = int(parts[0]) if parts[0] else 0
+                    end = int(parts[1]) if parts[1] else file_size - 1
+                else:
+                    start = int(range_match)
+                    end = file_size - 1
+                start = max(0, start)
+                end = min(end, file_size - 1)
+                if start > end or start >= file_size:
+                    return Response(
+                        content=b"",
+                        status_code=416,
+                        headers={
+                            "Content-Range": f"bytes */{file_size}",
+                            "Accept-Ranges": "bytes",
+                        }
+                    )
+                content_length = end - start + 1
+
+                def iter_range():
+                    with open(audio_path, "rb") as f:
+                        f.seek(start)
+                        remaining = content_length
+                        while remaining > 0:
+                            chunk_size = min(65536, remaining)
+                            chunk = f.read(chunk_size)
+                            if not chunk:
+                                break
+                            remaining -= len(chunk)
+                            yield chunk
+
+                return StreamingResponse(
+                    iter_range(),
+                    status_code=206,
+                    media_type=mime_type,
+                    headers={
+                        "Content-Length": str(content_length),
+                        "Content-Range": f"bytes {start}-{end}/{file_size}",
+                        "Accept-Ranges": "bytes",
+                        "Content-Disposition": f'inline; filename="{audio_filename}"',
+                    }
+                )
+            except Exception as e:
+                print(f"[Audio] Range 解析失败: {e}")
+
+        # 无 Range 或解析失败：返回完整文件
         def iterfile():
             with open(audio_path, "rb") as f:
                 while chunk := f.read(65536):
@@ -1078,8 +1136,9 @@ def stream_archive_audio(archive_id: str):
             iterfile(),
             media_type=mime_type,
             headers={
-                "Content-Disposition": f'inline; filename="{audio_filename}"',
+                "Content-Length": str(file_size),
                 "Accept-Ranges": "bytes",
+                "Content-Disposition": f'inline; filename="{audio_filename}"',
             }
         )
     except HTTPException:
