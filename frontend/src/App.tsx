@@ -451,7 +451,7 @@ function AppContent() {
 
       {/* 全局通知铃铛（仅在非任务队列/非智能对话视图显示） */}
       {currentView !== 'queue' && currentView !== 'chat' && (
-        <div className="fixed bottom-8 right-8 z-50">
+        <div className="fixed top-4 right-4 z-50">
           <button
             ref={bellButtonRef}
             onClick={() => setShowIconBellMenu(!showIconBellMenu)}
@@ -465,9 +465,9 @@ function AppContent() {
             )}
           </button>
 
-          {/* 通知下拉菜单 */}
+          {/* 通知下拉菜单（向上展开） */}
           {showIconBellMenu && (
-            <div ref={bellMenuRef} className="absolute bottom-full right-0 mb-2 w-80 bg-white border border-slate-200 rounded-lg shadow-lg overflow-hidden">
+            <div ref={bellMenuRef} className="absolute top-full right-0 mt-2 w-80 bg-white border border-slate-200 rounded-lg shadow-lg overflow-hidden">
               <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
                 <span className="text-sm font-medium text-slate-700">任务通知</span>
                 <button
