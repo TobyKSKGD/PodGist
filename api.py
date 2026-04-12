@@ -433,8 +433,11 @@ def _generate_chapters_from_highlights(highlights: list, target_count: int = 6) 
     """
     基于 highlights 的时间均匀分段生成章节。
 
-    策略：按 target_count 将音频总时长切分为 chunk_size，
-    每段取首条 highlight 的核心关键词作为章节标题。
+    策略：
+    1. 将音频总时长按 target_count 切分为 chunk_size，按时间均匀分段
+    2. 每段取首条 highlight 提取章节标题
+    3. 章节不足 3 条 highlight 则向前合并，避免过薄章节
+    4. 标题提取：移除中文编号前缀，优先取冒号后内容，再取第一停顿符前内容
     无需 LLM，纯规则驱动，稳定可解释。
     """
     if not highlights or len(highlights) < 3:
@@ -444,7 +447,6 @@ def _generate_chapters_from_highlights(highlights: list, target_count: int = 6) 
     if total_seconds <= 0:
         return []
 
-    # 理想每章时长（秒）
     chunk_size = total_seconds / target_count
 
     chapters = []
@@ -457,14 +459,11 @@ def _generate_chapters_from_highlights(highlights: list, target_count: int = 6) 
         elapsed = hl["seconds"] - current_chapter["start_seconds"]
         is_last = (i == len(highlights) - 1)
 
-        # 当距章节起点超过 chunk_size 时断章，或到最后一个 highlight 时强制结束
         if elapsed >= chunk_size or is_last:
-            # 封存当前章
             current_chapter["items"].append(hl)
             first = current_chapter["items"][0]
             last = current_chapter["items"][-1]
 
-            # 从首条 highlight 提取章节标题
             raw_title = first.get("title", first.get("description", ""))
             chapter_title = _extract_chapter_title(raw_title)
 
@@ -476,13 +475,46 @@ def _generate_chapters_from_highlights(highlights: list, target_count: int = 6) 
                 "description": f"{first['time']} - {last['time']}"
             })
 
-            # 开启新章
             current_chapter = {"items": [hl], "start_seconds": hl["seconds"]}
         else:
             current_chapter["items"].append(hl)
 
-    # 限制最多 8 章
-    return chapters[:8]
+    # 后处理：章节不足 3 条 highlight 则向前合并
+    merged = []
+    for ch in chapters:
+        if len(ch["items"]) < 3 and merged:
+            prev = merged[-1]
+            # 合并到前一章：更新 items 和 description
+            prev["items"].extend(ch["items"])
+            last_item = ch["items"][-1]
+            prev["description"] = f"{prev['time']} - {last_item['time']}"
+            # 如果前章标题是开场白引子，替换为当前章标题
+            if _is_opening_title(prev["title"]):
+                prev["title"] = ch["title"]
+                prev["time"] = ch["time"]
+                prev["seconds"] = ch["seconds"]
+        else:
+            merged.append(ch)
+
+    return merged[:8]
+
+
+def _is_opening_title(title: str) -> bool:
+    """判断章节标题是否属于'开场/引子'类低信息量标题，触发替换。"""
+    import re
+    opening_patterns = [
+        r'^.{0,10}[开场开场白序幕引子导入]$',  # 以"开场"等结尾的短标题
+        r'^[男女].{0,8}[说问道称提提道云云云]',  # 以"他说"/"我问道"等开头的对话引入
+        r'^.{0,8}[啊呢嘛呀哈哦嘿嗯]$',  # 以语气词结尾
+        r'^[上下左右前后前后]半段',  # 明显不完整的切分标题
+    ]
+    for p in opening_patterns:
+        if re.search(p, title):
+            return True
+    # 超过5个字符且不含专有名词/公司名的中文标题，也可能是引子
+    if len(title) <= 6 and not re.search(r'[公司集团机构]', title):
+        return True
+    return False
 
 
 def _extract_chapter_title(text: str) -> str:
