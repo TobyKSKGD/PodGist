@@ -15,7 +15,8 @@ import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import {
   IconChevronLeft, IconPlayerPlay, IconClock,
-  IconMessageCircle, IconPlayerSkipForward, IconCheck,
+  IconMessageCircle, IconPlayerSkipForward, IconRewindBackward15,
+  IconRewindForward30, IconCheck,
   IconChevronDown, IconChevronRight
 } from '@tabler/icons-react';
 
@@ -709,13 +710,14 @@ export default function EpisodePage() {
             <button
               onClick={skipBackward15}
               disabled={!hasAudio}
-              className="text-slate-400 hover:text-[#00ADA6] transition-colors disabled:opacity-30 shrink-0"
+              className={`w-9 h-9 rounded-full flex items-center justify-center transition-all shrink-0 ${
+                hasAudio
+                  ? 'bg-[#00ADA6]/10 hover:bg-[#00ADA6]/20 text-[#00ADA6]'
+                  : 'bg-slate-100 text-slate-300 cursor-not-allowed'
+              }`}
               title="快退 15 秒"
             >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <path d="M8 3a5 5 0 1 0 4.783 3.9l-1.3-.75A3.5 3.5 0 1 1 8 5.5v1.4l2.6-1.5-2.6-1.5v1.4A5 5 0 0 0 8 3z" fill="currentColor"/>
-                <text x="8" y="14" textAnchor="middle" fontSize="5" fill="currentColor" fontWeight="bold">15</text>
-              </svg>
+              <IconRewindBackward15 size={17} />
             </button>
 
             {/* 播放/暂停按钮（更大更醒目） */}
@@ -738,13 +740,14 @@ export default function EpisodePage() {
             <button
               onClick={skipForward30}
               disabled={!hasAudio}
-              className="text-slate-400 hover:text-[#00ADA6] transition-colors disabled:opacity-30 shrink-0"
+              className={`w-9 h-9 rounded-full flex items-center justify-center transition-all shrink-0 ${
+                hasAudio
+                  ? 'bg-[#00ADA6]/10 hover:bg-[#00ADA6]/20 text-[#00ADA6]'
+                  : 'bg-slate-100 text-slate-300 cursor-not-allowed'
+              }`}
               title="快进 30 秒"
             >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <path d="M8 3a5 5 0 1 1-4.783 3.9l1.3-.75A3.5 3.5 0 1 0 8 5.5v1.4l-2.6-1.5 2.6-1.5v1.4A5 5 0 0 1 8 3z" fill="currentColor"/>
-                <text x="8" y="14" textAnchor="middle" fontSize="5" fill="currentColor" fontWeight="bold">30</text>
-              </svg>
+              <IconRewindForward30 size={17} />
             </button>
 
             {/* 当前时间 */}
@@ -817,13 +820,14 @@ export default function EpisodePage() {
               <button
                 onClick={skipBackward15}
                 disabled={!hasAudio}
-                className="text-slate-400 hover:text-[#00ADA6] transition-colors disabled:opacity-30 shrink-0"
+                className={`w-9 h-9 rounded-full flex items-center justify-center transition-all shrink-0 ${
+                  hasAudio
+                    ? 'bg-[#00ADA6]/10 hover:bg-[#00ADA6]/20 text-[#00ADA6]'
+                    : 'bg-slate-100 text-slate-300 cursor-not-allowed'
+                }`}
                 title="快退 15 秒"
               >
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                  <path d="M8 3a5 5 0 1 0 4.783 3.9l-1.3-.75A3.5 3.5 0 1 1 8 5.5v1.4l2.6-1.5-2.6-1.5v1.4A5 5 0 0 0 8 3z" fill="currentColor"/>
-                  <text x="8" y="14" textAnchor="middle" fontSize="5" fill="currentColor" fontWeight="bold">15</text>
-                </svg>
+                <IconRewindBackward15 size={17} />
               </button>
               <button
                 onClick={togglePlay}
@@ -843,13 +847,14 @@ export default function EpisodePage() {
               <button
                 onClick={skipForward30}
                 disabled={!hasAudio}
-                className="text-slate-400 hover:text-[#00ADA6] transition-colors disabled:opacity-30 shrink-0"
+                className={`w-9 h-9 rounded-full flex items-center justify-center transition-all shrink-0 ${
+                  hasAudio
+                    ? 'bg-[#00ADA6]/10 hover:bg-[#00ADA6]/20 text-[#00ADA6]'
+                    : 'bg-slate-100 text-slate-300 cursor-not-allowed'
+                }`}
                 title="快进 30 秒"
               >
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                  <path d="M8 3a5 5 0 1 1-4.783 3.9l1.3-.75A3.5 3.5 0 1 0 8 5.5v1.4l-2.6-1.5 2.6-1.5v1.4A5 5 0 0 1 8 3z" fill="currentColor"/>
-                  <text x="8" y="14" textAnchor="middle" fontSize="5" fill="currentColor" fontWeight="bold">30</text>
-                </svg>
+                <IconRewindForward30 size={17} />
               </button>
               <div className="flex-1 min-w-0 flex items-center gap-2.5">
                 <span className="text-xs text-slate-400 font-mono w-9 shrink-0 text-right">{formatTime(currentTime)}</span>
