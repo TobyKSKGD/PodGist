@@ -161,14 +161,18 @@ export default function LibraryPage() {
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-4xl w-full mx-auto px-6 py-8 pb-16">
 
-        {/* ===== 顶部欢迎区（弱化） ===== */}
-        <div className="mb-7">
-          <h1 className="text-lg font-semibold text-slate-700 mb-1">
+        {/* ===== 顶部概览区 ===== */}
+        <div className="mb-6">
+          <h1 className="text-base font-semibold text-slate-700 mb-3">
             我的资料库
           </h1>
-          <p className="text-xs text-slate-400">
-            {archives.length} 条归档 {continueListening.length > 0 && `· ${continueListening.length} 条继续收听`}
-          </p>
+          <div className="flex items-center gap-4 text-xs text-slate-400">
+            <span>{archives.length} 条归档</span>
+            <span className="w-px h-3 bg-slate-200" />
+            <span>{archives.filter(a => a.hasAudio).length} 条有音频</span>
+            <span className="w-px h-3 bg-slate-200" />
+            <span>{archives.filter(a => a.hasSegments).length} 条有时间轴</span>
+          </div>
         </div>
 
         {/* ===== 继续收听 ===== */}
@@ -273,8 +277,9 @@ export default function LibraryPage() {
           )}
         </section>
 
-        {/* ===== 归档列表 ===== */}
-        <section className="mb-8">
+        {/* ===== 全部归档 ===== */}
+        <section>
+          <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">全部归档</h2>
           <div className="bg-white border border-slate-200 rounded-xl divide-y divide-slate-100 overflow-hidden">
             {displayedArchives.length === 0 ? (
               <div className="py-12 text-center">
