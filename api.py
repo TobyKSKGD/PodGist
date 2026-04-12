@@ -128,6 +128,36 @@ ARCHIVE_DIR = os.path.join(BASE_DIR, "archives")
 os.makedirs(TEMP_DIR, exist_ok=True)
 os.makedirs(ARCHIVE_DIR, exist_ok=True)
 
+
+def save_archive_metadata(archive_path: str, title: str, mode: str, source_type: str, source_url: str, audio_saved: bool, audio_filename: str | None):
+    """
+    将归档元数据写入 archive_path/metadata.json。
+
+    参数:
+        archive_path: 归档目录的绝对路径
+        title: 归档标题
+        mode: 'summary' 或 'timeline'
+        source_type: 'local_file' / 'podcast_url' / 'bilibili' / 'other'
+        source_url: 原始来源 URL（本地文件为本地路径）
+        audio_saved: 是否保存了音频副本
+        audio_filename: 归档中音频文件名（如 source.mp3），无则为 None
+    """
+    import json
+    metadata = {
+        "id": os.path.basename(archive_path),
+        "title": title,
+        "mode": mode,
+        "source_type": source_type,
+        "source_url": source_url,
+        "audio_saved": audio_saved,
+        "audio_filename": audio_filename,
+        "can_redownload": source_url.startswith("http") or source_url.startswith("www"),
+        "created_at": datetime.now().isoformat(),
+    }
+    metadata_path = os.path.join(archive_path, "metadata.json")
+    with open(metadata_path, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, ensure_ascii=False, indent=2)
+
 # 1. 健康检查接口
 @app.get("/")
 def read_root():
@@ -141,7 +171,8 @@ async def transcribe_local(
     engine: str = Form("SenseVoice"),
     whisper_model: str = Form("small"),
     device: str = Form("auto"),
-    max_timeline_items: int = Form(15)
+    max_timeline_items: int = Form(15),
+    mode: str = Form("summary")
 ):
     if not file.filename.endswith((".mp3", ".wav", ".m4a")):
         raise HTTPException(status_code=400, detail="不支持的音频格式，请上传 mp3/wav/m4a")
@@ -173,6 +204,28 @@ async def transcribe_local(
         archive_name = f"{os.path.splitext(file.filename)[0]}_{date_str}"
         archive_path = os.path.join(ARCHIVE_DIR, archive_name)
         os.makedirs(archive_path, exist_ok=True)
+
+        # 6.5 保存音频副本
+        audio_filename = None
+        audio_saved = False
+        if os.path.exists(file_path):
+            import uuid
+            _, ext = os.path.splitext(file.filename)
+            audio_filename = f"source{ext}"
+            audio_dest = os.path.join(archive_path, audio_filename)
+            shutil.copy2(file_path, audio_dest)
+            audio_saved = True
+
+        # 6.6 保存 metadata.json
+        save_archive_metadata(
+            archive_path=archive_path,
+            title=ai_title,
+            mode=mode,
+            source_type="local_file",
+            source_url=file_path,
+            audio_saved=audio_saved,
+            audio_filename=audio_filename,
+        )
 
         # 7. 保存原始转录文本
         raw_path = os.path.join(archive_path, "raw.txt")
@@ -230,7 +283,8 @@ async def transcribe_url(
     engine: str = Form("SenseVoice"),
     whisper_model: str = Form("small"),
     device: str = Form("auto"),
-    max_timeline_items: int = Form(15)
+    max_timeline_items: int = Form(15),
+    mode: str = Form("summary")
 ):
     """
     从在线 URL（播客/Bilibili）下载音频并进行转录摘要。
@@ -288,6 +342,30 @@ async def transcribe_url(
         archive_name = f"{safe_title}_{date_str}"
         archive_path = os.path.join(ARCHIVE_DIR, archive_name)
         os.makedirs(archive_path, exist_ok=True)
+
+        # 6.5 确定 source_type
+        source_type = "bilibili" if type == "bilibili" else "podcast_url"
+
+        # 6.6 保存音频副本
+        audio_filename = None
+        audio_saved = False
+        if os.path.exists(file_path):
+            _, ext = os.path.splitext(file.filename)
+            audio_filename = f"source{ext}"
+            audio_dest = os.path.join(archive_path, audio_filename)
+            shutil.copy2(file_path, audio_dest)
+            audio_saved = True
+
+        # 6.7 保存 metadata.json
+        save_archive_metadata(
+            archive_path=archive_path,
+            title=safe_title,
+            mode=mode,
+            source_type=source_type,
+            source_url=url,
+            audio_saved=audio_saved,
+            audio_filename=audio_filename,
+        )
 
         # 7. 保存原始转录文本
         raw_path = os.path.join(archive_path, "raw.txt")
@@ -1026,7 +1104,8 @@ async def create_task(
     source: str = Form(...),
     task_type: str = Form(...),
     max_timeline_items: int = Form(15),
-    name: str = Form("")
+    name: str = Form(""),
+    mode: str = Form("summary")
 ):
     """添加新任务到处理队列"""
     try:
@@ -1038,7 +1117,8 @@ async def create_task(
             source=source,
             task_type=task_type,
             max_timeline_items=max_timeline_items,
-            name=name if name else None
+            name=name if name else None,
+            mode=mode
         )
         return {
             "status": "success",

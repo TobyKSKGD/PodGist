@@ -9,6 +9,7 @@ interface PodcastDownloadFormProps {
     device: string;
   };
   downloadType: 'podcast' | 'bilibili';
+  mode?: 'summary' | 'timeline';
   onSuccess: (archiveId: string) => void;
 }
 
@@ -26,7 +27,7 @@ function detectPlatform(url: string): { platform: string; name: string; icon: Re
   return { platform: 'unknown', name: '未知平台', icon: <IconGlobe size={18} /> };
 }
 
-export default function PodcastDownloadForm({ settings, downloadType, onSuccess }: PodcastDownloadFormProps) {
+export default function PodcastDownloadForm({ settings, downloadType, mode = 'summary', onSuccess }: PodcastDownloadFormProps) {
   const [url, setUrl] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [status, setStatus] = useState('');
@@ -71,6 +72,7 @@ export default function PodcastDownloadForm({ settings, downloadType, onSuccess 
       formData.append('task_type', taskType);
       formData.append('engine', settings.engine);
       formData.append('name', taskName);
+      formData.append('mode', mode);
 
       const taskRes = await api.post('/api/tasks', formData);
 

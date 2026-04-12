@@ -209,6 +209,18 @@ def process_single_task(task, api_key):
     source = task["source"]
     engine = task.get("engine", "sensevoice")
     max_timeline_items = task.get("max_timeline_items", 15)
+    mode = task.get("mode", "summary")
+
+    # 确定 source_type
+    source_type_map = {
+        "local": "local_file",
+        "bilibili": "bilibili",
+        "xiaoyuzhou": "podcast_url",
+        "netease": "podcast_url",
+        "ximalaya": "podcast_url",
+        "applepodcasts": "podcast_url",
+    }
+    source_type = source_type_map.get(task.get("type", ""), "other")
 
     print(f"[Worker] 开始处理任务: {source}")
 
@@ -266,13 +278,32 @@ def process_single_task(task, api_key):
         os.makedirs(archive_path, exist_ok=True)
 
         # 保存音频副本（保留原始扩展名）
-        # 对于本地文件：复制原始文件
-        # 对于下载文件：复制前音频文件还存在（在步骤3清理之前）
+        audio_filename = None
+        audio_saved = False
         if os.path.exists(audio_file_path):
             _, ext = os.path.splitext(audio_file_path)
-            audio_dest = os.path.join(archive_path, f"source{ext}")
+            audio_filename = f"source{ext}"
+            audio_dest = os.path.join(archive_path, audio_filename)
             shutil.copy2(audio_file_path, audio_dest)
+            audio_saved = True
             print(f"[Worker] 音频已保存到归档: {audio_dest}")
+
+        # 保存 metadata.json
+        import json
+        from datetime import datetime as dt
+        metadata = {
+            "id": archive_name,
+            "title": safe_title,
+            "mode": mode,
+            "source_type": source_type,
+            "source_url": source,
+            "audio_saved": audio_saved,
+            "audio_filename": audio_filename,
+            "can_redownload": source.startswith("http") or source.startswith("www"),
+            "created_at": dt.now().isoformat(),
+        }
+        with open(os.path.join(archive_path, "metadata.json"), "w", encoding="utf-8") as f:
+            json.dump(metadata, f, ensure_ascii=False, indent=2)
 
         # 步骤 4: 清理音频文件（下载的临时文件此时被删除，归档已有副本）
         if os.path.exists(audio_file_path) and task_type != "local":

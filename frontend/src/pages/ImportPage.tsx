@@ -6,18 +6,21 @@
  */
 import { useSearchParams } from 'react-router-dom';
 import { useState, useRef } from 'react';
-import { IconCloudUpload, IconLoader2, IconUpload, IconRadio, IconVideo, IconLayersLinked } from '@tabler/icons-react';
+import { IconCloudUpload, IconLoader2, IconUpload, IconRadio, IconVideo, IconLayersLinked, IconAlignLeft, IconTimelineEvent } from '@tabler/icons-react';
 import PodcastDownloadForm from '../components/PodcastDownloadForm';
 import BatchProcess from '../components/BatchProcess';
 import axios from 'axios';
 
 const api = axios.create({ baseURL: 'http://localhost:8000' });
 
+type ImportMode = 'summary' | 'timeline';
+
 export default function ImportPage() {
   const [searchParams] = useSearchParams();
   const initialTab = (searchParams.get('tab') || 'local') as 'local' | 'podcast' | 'bilibili' | 'batch';
   const [activeInputTab, setActiveInputTab] = useState<'local' | 'podcast' | 'bilibili' | 'batch'>(initialTab);
   const [isUploading, setIsUploading] = useState(false);
+  const [mode, setMode] = useState<ImportMode>('summary');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -30,6 +33,7 @@ export default function ImportPage() {
     formData.append('engine', 'SenseVoice');
     formData.append('whisper_model', 'small');
     formData.append('device', 'auto');
+    formData.append('mode', mode);
 
     try {
       await api.post('/api/transcribe/local', formData, {
@@ -46,9 +50,35 @@ export default function ImportPage() {
     <div className="flex-1 overflow-y-auto bg-white">
       <div className="max-w-4xl w-full mx-auto p-8 pb-16">
 
-        <div className="mb-8">
+        <div className="mb-6">
           <h1 className="text-xl font-bold text-slate-800 mb-1">导入内容</h1>
           <p className="text-sm text-slate-500">选择音频来源，添加到资料库</p>
+        </div>
+
+        {/* 模式选择开关 */}
+        <div className="flex items-center gap-3 mb-6 p-1 bg-slate-100 rounded-xl w-fit">
+          <button
+            onClick={() => setMode('summary')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+              mode === 'summary'
+                ? 'bg-white text-[#00ADA6] shadow-sm'
+                : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            <IconAlignLeft size={15} />
+            总结模式
+          </button>
+          <button
+            onClick={() => setMode('timeline')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+              mode === 'timeline'
+                ? 'bg-white text-[#00ADA6] shadow-sm'
+                : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            <IconTimelineEvent size={15} />
+            时间轴模式
+          </button>
         </div>
 
         <div className="flex border-b border-slate-200 mb-8">
@@ -115,16 +145,18 @@ export default function ImportPage() {
           <PodcastDownloadForm
             settings={{ engine: 'SenseVoice', whisper_model: 'small', device: 'auto' }}
             downloadType="podcast"
+            mode={mode}
             onSuccess={() => {}}
           />
         ) : activeInputTab === 'bilibili' ? (
           <PodcastDownloadForm
             settings={{ engine: 'SenseVoice', whisper_model: 'small', device: 'auto' }}
             downloadType="bilibili"
+            mode={mode}
             onSuccess={() => {}}
           />
         ) : (
-          <BatchProcess settings={{ engine: 'SenseVoice', whisper_model: 'small', device: 'auto' }} />
+          <BatchProcess settings={{ engine: 'SenseVoice', whisper_model: 'small', device: 'auto' }} mode={mode} />
         )}
 
       </div>

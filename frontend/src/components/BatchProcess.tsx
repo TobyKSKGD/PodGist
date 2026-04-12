@@ -9,11 +9,12 @@ interface BatchProcessProps {
     whisper_model: string;
     device: string;
   };
+  mode?: 'summary' | 'timeline';
 }
 
 const api = axios.create({ baseURL: 'http://localhost:8000' });
 
-export default function BatchProcess({ settings }: BatchProcessProps) {
+export default function BatchProcess({ settings, mode = 'summary' }: BatchProcessProps) {
   const { showToast } = useToast();
   const [input, setInput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -82,6 +83,7 @@ export default function BatchProcess({ settings }: BatchProcessProps) {
           formData.append('task_type', task.task_type);
           formData.append('engine', settings.engine);
           formData.append('name', task.name);
+          formData.append('mode', mode);
           await api.post('/api/tasks', formData);
           addedCount++;
         } catch (err) {
