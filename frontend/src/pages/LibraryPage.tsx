@@ -2,10 +2,9 @@ import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import {
-  IconPlus, IconClock, IconMessageCircle,
-  IconUpload, IconRadio, IconLayersLinked,
-  IconPlayerPlay, IconBrandBilibili,
-  IconSearch, IconFilter, IconX
+  IconClock, IconMessageCircle,
+  IconPlayerPlay,
+  IconSearch, IconX
 } from '@tabler/icons-react';
 
 const api = axios.create({ baseURL: 'http://localhost:8000' });
@@ -61,52 +60,6 @@ function getTopProgress(archives: ArchiveItem[], limit = 3): (PlayProgress & { a
     .slice(0, limit);
   return entries;
 }
-
-// ===== 导入入口配置 =====
-
-type ImportType = 'local' | 'podcast' | 'bilibili' | 'batch';
-
-const IMPORT_ENTRIES: {
-  type: ImportType;
-  label: string;
-  description: string;
-  icon: React.ReactNode;
-  color: string;
-  bgColor: string;
-}[] = [
-  {
-    type: 'local',
-    label: '本地音频',
-    description: 'MP3、WAV、M4A',
-    icon: <IconUpload size={20} />,
-    color: 'text-[#00ADA6]',
-    bgColor: 'bg-[#D1FAF5]',
-  },
-  {
-    type: 'podcast',
-    label: '播客链接',
-    description: '小宇宙 · 喜马拉雅 · Apple',
-    icon: <IconRadio size={20} />,
-    color: 'text-[#8B5CF6]',
-    bgColor: 'bg-[#EDE9FE]',
-  },
-  {
-    type: 'bilibili',
-    label: '视频音频',
-    description: 'Bilibili 视频剥离',
-    icon: <IconBrandBilibili size={20} />,
-    color: 'text-[#EF4444]',
-    bgColor: 'bg-[#FEE2E2]',
-  },
-  {
-    type: 'batch',
-    label: '批量处理',
-    description: '多个文件一次处理',
-    icon: <IconLayersLinked size={20} />,
-    color: 'text-[#F59E0B]',
-    bgColor: 'bg-[#FEF3C7]',
-  },
-];
 
 // ===== 格式化 =====
 
@@ -195,10 +148,6 @@ export default function LibraryPage() {
   }, [archives, search, filterAudio, filterHasContent, sortRecent]);
 
   const hasActiveFilters = filterAudio || filterHasContent;
-
-  const handleImportClick = (type: ImportType) => {
-    navigate(`/import?tab=${type}`);
-  };
 
   if (loading) {
     return (
@@ -367,32 +316,6 @@ export default function LibraryPage() {
           </div>
         </section>
 
-        {/* ===== 导入入口（弱化） ===== */}
-        <section>
-          <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3 flex items-center gap-1.5">
-            <IconPlus size={12} className="text-[#00ADA6]" />
-            导入新内容
-          </h2>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-            {IMPORT_ENTRIES.map((entry) => (
-              <button
-                key={entry.type}
-                onClick={() => handleImportClick(entry.type)}
-                className="flex flex-col items-center gap-1.5 p-4 bg-white border border-slate-200 rounded-xl hover:border-[#00ADA6] hover:shadow-sm transition-all text-center group"
-              >
-                <div className={`w-9 h-9 rounded-lg ${entry.bgColor} flex items-center justify-center ${entry.color}`}>
-                  {entry.icon}
-                </div>
-                <div>
-                  <p className="text-xs font-medium text-slate-700 group-hover:text-[#00ADA6] transition-colors">
-                    {entry.label}
-                  </p>
-                  <p className="text-[11px] text-slate-400 mt-0.5 leading-tight">{entry.description}</p>
-                </div>
-              </button>
-            ))}
-          </div>
-        </section>
 
       </div>
     </div>
