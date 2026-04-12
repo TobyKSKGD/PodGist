@@ -70,11 +70,17 @@ def init_db():
     except:
         cursor.execute("ALTER TABLE tasks ADD COLUMN progress_status TEXT")
 
+    # 检查 mode 字段是否存在
+    try:
+        cursor.execute("SELECT mode FROM tasks LIMIT 1")
+    except:
+        cursor.execute("ALTER TABLE tasks ADD COLUMN mode TEXT DEFAULT 'summary'")
+
     conn.commit()
     conn.close()
 
 
-def add_task(source, task_type, engine="sensevoice", max_timeline_items=15, name=None):
+def add_task(source, task_type, engine="sensevoice", max_timeline_items=15, name=None, mode="summary"):
     """
     添加新任务到队列。
 
@@ -84,6 +90,7 @@ def add_task(source, task_type, engine="sensevoice", max_timeline_items=15, name
         engine (str): 转录引擎 (whisper / sensevoice)
         max_timeline_items (int): 时间轴上限
         name (str, optional): 任务显示名称
+        mode (str, optional): 导入模式 ('summary' 或 'timeline')
 
     返回:
         str: 任务 ID
@@ -125,9 +132,9 @@ def add_task(source, task_type, engine="sensevoice", max_timeline_items=15, name
     cursor = conn.cursor()
 
     cursor.execute("""
-        INSERT INTO tasks (id, source, name, type, status, engine, max_timeline_items, create_time)
-        VALUES (?, ?, ?, ?, 'PENDING', ?, ?, ?)
-    """, (task_id, source, name, task_type, engine, max_timeline_items, create_time))
+        INSERT INTO tasks (id, source, name, type, status, engine, max_timeline_items, create_time, mode)
+        VALUES (?, ?, ?, ?, 'PENDING', ?, ?, ?, ?)
+    """, (task_id, source, name, task_type, engine, max_timeline_items, create_time, mode))
 
     conn.commit()
     conn.close()
