@@ -245,12 +245,11 @@ export default function EpisodePage() {
 
   const togglePlay = () => {
     if (!audioRef.current || !archive?.audioUrl) return;
-    if (isPlaying) {
-      audioRef.current.pause();
-    } else {
+    if (audioRef.current.paused) {
       audioRef.current.play();
+    } else {
+      audioRef.current.pause();
     }
-    setIsPlaying(!isPlaying);
   };
 
   const seekTo = (seconds: number) => {
