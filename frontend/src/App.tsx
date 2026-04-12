@@ -4,7 +4,7 @@ import LibraryPage from './pages/LibraryPage';
 import ImportPage from './pages/ImportPage';
 import EpisodePage from './pages/EpisodePage';
 import axios from 'axios';
-import { IconSettings, IconPlus, IconMessageCircle, IconLayoutList, IconChevronLeft, IconChevronRight, IconTrash, IconBell, IconX, IconCircleCheck, IconBrain } from '@tabler/icons-react';
+import { IconSettings, IconPlus, IconLayoutList, IconListCheck, IconChevronLeft, IconChevronRight, IconBell, IconX, IconCircleCheck, IconBrain } from '@tabler/icons-react';
 import SettingsModal from './components/SettingsModal';
 import ResultView from './components/ResultView';
 import TaskQueue from './components/TaskQueue';
@@ -45,7 +45,6 @@ function ResultViewWrapper({ onBack, onJumpToChat }: {
 // 内部组件 - 可以使用 useToast
 function AppContent() {
   const { showToast } = useToast();
-  const [archives, setArchives] = useState<{id: string, name: string}[]>([]);
   const [isIconSettingsOpen, setIsIconSettingsOpen] = useState(false);
   const [, setIconSettings] = useState({
     engine: 'SenseVoice',
@@ -67,24 +66,19 @@ function AppContent() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
 
-  // URL → state：仅在页面刷新时（mount 时）从 URL 恢复视图状态
-  // 后续导航由各 click handler 中的 navigate() 驱动，不再依赖 effect 同步
+  // URL → state：每次 pathname 变化时同步 currentView
   useEffect(() => {
     if (pathname === '/queue') {
       setCurrentView('queue');
     } else if (pathname === '/chat') {
       setCurrentView('chat');
-    } else if (pathname.startsWith('/result/')) {
-      const id = pathname.split('/result/')[1];
-      if (id) {
-        setSelectedArchiveId(id);
-        setCurrentView('result');
-      }
+    } else if (pathname.startsWith('/result/') || pathname.startsWith('/episode/')) {
+      setCurrentView('result');
     } else {
       setCurrentView('upload');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [pathname]);
 
   // 通知系统 - 从 localStorage 加载已通知的任务 ID
   const [notifications, setNotifications] = useState<{ id: string; taskName: string; archiveId: string; taskId: string }[]>([]);
@@ -119,16 +113,6 @@ function AppContent() {
     setNotifications(prev => [{ id, taskName, archiveId, taskId }, ...prev]);
     // 显示顶部 toast 提示，并刷新侧边栏归档列表
     showToast('success', `任务已完成：${taskName}`);
-    fetchArchives();
-  };
-
-  const fetchArchives = async () => {
-    try {
-      const res = await api.get('/api/archives');
-      setArchives(res.data.archives);
-    } catch (error) {
-      console.error("获取归档失败:", error);
-    }
   };
 
   // 暴露给子组件的全局刷新函数
@@ -171,7 +155,6 @@ function AppContent() {
         clearInterval(checkInterval);
         // 后端就绪后，一次性获取全局数据
         await refreshGlobalSettings();
-        fetchArchives();
       } catch (error) {
         // 后端还在启动中，保持沉默
       }
@@ -229,20 +212,6 @@ function AppContent() {
     return () => clearInterval(interval);
   }, []);
 
-  // 2. 处理文件上传与后端交互
-  // 处理点击归档项
-  const handleArchiveClick = (archiveId: string) => {
-    setSelectedArchiveId(archiveId);
-    setCurrentView('result');
-    navigate(`/result/${archiveId}`, { replace: true });
-  };
-
-  // 处理删除归档 - 打开确认对话框
-  const handleDeleteArchive = (archiveId: string, archiveName: string, event: React.MouseEvent) => {
-    event.stopPropagation();
-    setDeleteDialog({ open: true, archiveId, archiveName });
-  };
-
   // 确认删除归档
   const confirmDeleteArchive = async () => {
     const { archiveId } = deleteDialog;
@@ -255,7 +224,6 @@ function AppContent() {
         setCurrentView('upload');
         setSelectedArchiveId(null);
       }
-      fetchArchives();
     } catch (error) {
       console.error("删除归档失败:", error);
       showToast('error', '删除失败，请重试');
@@ -285,55 +253,71 @@ function AppContent() {
   return (
     <div className="flex h-screen w-full bg-white text-slate-800 font-sans">
       {/* ================= 左侧导航栏 ================= */}
-      <aside className={`border-r border-slate-200 bg-[#F9F9F9] flex flex-col transition-all duration-300 ${sidebarCollapsed ? 'w-16' : 'w-80'}`}>
+      <aside className={`border-r border-slate-200 bg-[#F9F9F9] flex flex-col transition-all duration-300 ${sidebarCollapsed ? 'w-16' : 'w-56'}`}>
         {/* Header */}
-        <div className="h-12 px-3 border-b border-slate-100 flex items-center justify-between">
-          {!sidebarCollapsed && (
+        <div className="h-14 px-3 border-b border-slate-100 flex items-center relative">
+          {sidebarCollapsed ? (
+            /* 收起状态：整行是展开入口，hover 时 logo 变为展开图标 */
             <button
-              onClick={() => { navigate('/', { replace: true }); }}
-              className="flex items-center gap-2 hover:opacity-80 transition-opacity"
+              onClick={() => setSidebarCollapsed(false)}
+              className="w-full h-full flex items-center justify-center group"
+              title="展开侧边栏"
             >
-              <Logo size={24} />
-              <span className="text-sm font-semibold text-slate-700">PodGist</span>
+              {/* 默认：logo；hover：展开箭头 */}
+              <span className="transition-opacity duration-200 group-hover:opacity-0">
+                <Logo size={28} />
+              </span>
+              <span className="absolute inset-0 flex items-center justify-center transition-opacity duration-200 opacity-0 group-hover:opacity-100">
+                <IconChevronRight size={18} className="text-slate-400" />
+              </span>
             </button>
+          ) : (
+            /* 展开状态：logo 回首页 + 右上角收起按钮 */
+            <>
+              <button
+                onClick={() => { setCurrentView('upload'); navigate('/', { replace: true }); }}
+                className="flex items-center gap-2 hover:opacity-80 transition-opacity"
+              >
+                <Logo size={28} />
+                <span className="text-base font-bold text-slate-700 tracking-tight">PodGist</span>
+              </button>
+              <button
+                onClick={() => setSidebarCollapsed(true)}
+                className="ml-auto p-1.5 hover:bg-slate-200 rounded-md transition-colors text-slate-400 hover:text-slate-600"
+                title="收起侧边栏"
+              >
+                <IconChevronLeft size={16} />
+              </button>
+            </>
           )}
-          <button
-            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-            className="p-1.5 hover:bg-slate-200 rounded-md transition-colors text-slate-500 hover:text-slate-700"
-          >
-            {sidebarCollapsed ? <IconChevronRight size={18} /> : <IconChevronLeft size={18} />}
-          </button>
         </div>
 
         {!sidebarCollapsed && (
           <>
             {/* 主操作按钮 */}
-            <div className="p-3">
+            <div className="px-3 pt-4 pb-2">
               <button
-                onClick={() => { navigate('/import', { replace: true }); }}
-                className="w-full bg-[#00ADA6] hover:bg-[#009A94] text-white py-2 px-4 rounded-lg font-medium transition-all shadow-sm flex items-center justify-center gap-2"
+                onClick={() => navigate('/import', { replace: true })}
+                className="w-full bg-[#00ADA6] hover:bg-[#009A94] text-white py-2.5 px-4 rounded-lg font-medium transition-all shadow-sm flex items-center justify-center gap-2 text-sm"
               >
                 <IconPlus size={16} /> 导入内容
               </button>
             </div>
 
             {/* 导航列表 */}
-            <nav className="px-3 flex-1">
+            <nav className="px-3 flex-1 pt-1">
               <div className="space-y-0.5">
-                {/* 资料库 */}
+                {/* 首页 */}
                 <button
-                  onClick={() => {
-                    setCurrentView('upload');
-                    navigate('/', { replace: true });
-                  }}
-                  className={`w-full flex items-center gap-2 px-3 py-2 text-sm rounded-md transition-colors ${
-                    pathname === '/' || currentView === 'upload'
-                      ? 'bg-slate-200 text-[#00ADA6]'
-                      : 'text-slate-600 hover:bg-slate-100 hover:text-[#00ADA6]'
+                  onClick={() => navigate('/', { replace: true }) }
+                  className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-md transition-colors ${
+                    pathname === '/'
+                      ? 'bg-[#00ADA6]/10 text-[#00ADA6]'
+                      : 'text-slate-500 hover:bg-slate-100 hover:text-[#00ADA6]'
                   }`}
                 >
-                  <IconLayoutList size={16} className="shrink-0" />
-                  <span>资料库</span>
+                  <IconLayoutList size={18} className="shrink-0" />
+                  <span className="font-medium">首页</span>
                 </button>
 
                 {/* 任务队列 */}
@@ -342,14 +326,14 @@ function AppContent() {
                     setCurrentView('queue');
                     navigate('/queue', { replace: true });
                   }}
-                  className={`w-full flex items-center gap-2 px-3 py-2 text-sm rounded-md transition-colors ${
+                  className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-md transition-colors ${
                     currentView === 'queue'
-                      ? 'bg-slate-200 text-[#00ADA6]'
-                      : 'text-slate-600 hover:bg-slate-100 hover:text-[#00ADA6]'
+                      ? 'bg-[#00ADA6]/10 text-[#00ADA6]'
+                      : 'text-slate-500 hover:bg-slate-100 hover:text-[#00ADA6]'
                   }`}
                 >
-                  <IconLayoutList size={16} className="shrink-0" />
-                  <span>任务队列</span>
+                  <IconListCheck size={18} className="shrink-0" />
+                  <span className="font-medium">任务队列</span>
                 </button>
 
                 {/* 智能对话 */}
@@ -358,64 +342,64 @@ function AppContent() {
                     setCurrentView('chat');
                     navigate('/chat', { replace: true });
                   }}
-                  className={`w-full flex items-center gap-2 px-3 py-2 text-sm rounded-md transition-colors ${
+                  className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-md transition-colors ${
                     currentView === 'chat'
-                      ? 'bg-slate-200 text-[#00ADA6]'
-                      : 'text-slate-600 hover:bg-slate-100 hover:text-[#00ADA6]'
+                      ? 'bg-[#00ADA6]/10 text-[#00ADA6]'
+                      : 'text-slate-500 hover:bg-slate-100 hover:text-[#00ADA6]'
                   }`}
                 >
-                  <IconBrain size={16} className="shrink-0" />
-                  <span>智能对话</span>
+                  <IconBrain size={18} className="shrink-0" />
+                  <span className="font-medium">智能对话</span>
                 </button>
               </div>
             </nav>
 
             {/* 底部设置 */}
-            <div className="p-3 border-t border-slate-100">
+            <div className="px-3 pb-4 pt-2 border-t border-slate-100">
               <button
                 onClick={() => setIsIconSettingsOpen(true)}
-                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-500 hover:bg-slate-100 hover:text-[#00ADA6] rounded-md transition-colors"
+                className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-slate-400 hover:bg-slate-100 hover:text-[#00ADA6] rounded-md transition-colors"
               >
-                <IconSettings size={16} /> 偏好设置
+                <IconSettings size={18} /> <span className="font-medium">偏好设置</span>
               </button>
             </div>
           </>
         )}
 
-        {/* 收缩状态下的图标按钮 */}
+        {/* 收缩状态下的图标按钮 — 展开入口已移至顶部 header */}
         {sidebarCollapsed && (
-          <div className="flex-1 flex flex-col items-center py-4 gap-1">
+          <div className="flex flex-col items-center py-3 gap-1">
             <button
               onClick={() => { navigate('/import', { replace: true }); }}
-              className="p-2.5 hover:bg-slate-200 rounded-lg transition-colors text-slate-600"
+              className="p-2.5 hover:bg-slate-200 rounded-lg transition-colors text-slate-500"
               title="导入内容"
             >
               <IconPlus size={18} />
             </button>
             <button
               onClick={() => { navigate('/', { replace: true }); }}
-              className={`p-2.5 rounded-lg transition-colors ${pathname === '/' || currentView === 'upload' ? 'bg-slate-200 text-[#00ADA6]' : 'text-slate-600 hover:bg-slate-200'}`}
-              title="资料库"
+              className={`p-2.5 rounded-lg transition-colors ${pathname === '/' ? 'bg-[#00ADA6]/10 text-[#00ADA6]' : 'text-slate-400 hover:bg-slate-200 hover:text-[#00ADA6]'}`}
+              title="首页"
             >
               <IconLayoutList size={18} />
             </button>
             <button
               onClick={() => { navigate('/queue', { replace: true }); setCurrentView('queue'); }}
-              className={`p-2.5 rounded-lg transition-colors ${currentView === 'queue' ? 'bg-slate-200 text-[#00ADA6]' : 'text-slate-600 hover:bg-slate-200'}`}
+              className={`p-2.5 rounded-lg transition-colors ${currentView === 'queue' ? 'bg-[#00ADA6]/10 text-[#00ADA6]' : 'text-slate-400 hover:bg-slate-200 hover:text-[#00ADA6]'}`}
               title="任务队列"
             >
-              <IconLayoutList size={18} />
+              <IconListCheck size={18} />
             </button>
             <button
               onClick={() => { navigate('/chat', { replace: true }); setCurrentView('chat'); }}
-              className={`p-2.5 rounded-lg transition-colors ${currentView === 'chat' ? 'bg-slate-200 text-[#00ADA6]' : 'text-slate-600 hover:bg-slate-200'}`}
+              className={`p-2.5 rounded-lg transition-colors ${currentView === 'chat' ? 'bg-[#00ADA6]/10 text-[#00ADA6]' : 'text-slate-400 hover:bg-slate-200 hover:text-[#00ADA6]'}`}
               title="智能对话"
             >
               <IconBrain size={18} />
             </button>
             <button
               onClick={() => setIsIconSettingsOpen(true)}
-              className="p-2.5 hover:bg-slate-200 rounded-lg transition-colors text-slate-600 mt-auto"
+              className="p-2.5 hover:bg-slate-200 rounded-lg transition-colors text-slate-400 mt-auto"
               title="偏好设置"
             >
               <IconSettings size={18} />
@@ -457,7 +441,6 @@ function AppContent() {
               setSelectedArchiveId(archiveId);
               setCurrentView('result');
             }}
-            onRefreshArchives={fetchArchives}
           />} />
           <Route path="/chat" element={<ChatView onJumpToArchive={(archiveId) => {
             setSelectedArchiveId(archiveId);
@@ -468,7 +451,7 @@ function AppContent() {
 
       {/* 全局通知铃铛（仅在非任务队列/非智能对话视图显示） */}
       {currentView !== 'queue' && currentView !== 'chat' && (
-        <div className="fixed bottom-6 right-6 z-50">
+        <div className="fixed bottom-8 right-8 z-50">
           <button
             ref={bellButtonRef}
             onClick={() => setShowIconBellMenu(!showIconBellMenu)}
