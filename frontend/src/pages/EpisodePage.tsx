@@ -205,8 +205,8 @@ export default function EpisodePage() {
     if (activeTab === 'highlights' && archive) {
       const seg = findActiveItem(archive.transcriptSegments, item.seconds);
       if (seg) {
-        // 如果当前在 segments tab，滚动到该 segment
-        // 如果不在 segments tab，先联动 highlight，然后切换 tab 并滚动
+        // 同步更新 autoHighlightItem，避免等待 onTimeUpdate 的竞态
+        setAutoHighlightItem(seg);
         setActiveTab('segments');
         // 切换 tab 后等 DOM 更新再滚动
         setTimeout(() => scrollToItem(seg), 50);
@@ -227,40 +227,47 @@ export default function EpisodePage() {
       audioRef.current.currentTime = seg.seconds;
     }
 
-    // 3. 联动 highlight：找到包含该时间的 highlight
+    // 3. 联动 highlight：找到包含该时间的 highlight，同步更新 autoHighlightItem
     if (archive) {
       const hl = findActiveItem(archive.timeline.highlights, seg.seconds);
       if (hl) {
         setSelectedItem(hl);
+        setAutoHighlightItem(hl);
       }
       // 始终在 segments tab 中滚动
       scrollToItem(seg);
     }
   };
 
-  // ===== 自动高亮逻辑（由 currentTime 驱动） =====
+  // ===== 自动高亮逻辑（由 currentTime 驱动，tab 切换时保持已选中的项） =====
 
+  // 驱动 autoHighlightItem 的主 effect：仅在 currentTime 变化时更新
   useEffect(() => {
     if (!archive) return;
 
     if (activeTab === 'segments') {
-      // 在 segments tab：根据播放时间自动高亮对应 segment
       const seg = findActiveItem(archive.transcriptSegments, currentTime);
       if (seg && seg.id !== autoHighlightItem?.id) {
         setAutoHighlightItem(seg);
-        // 同时更新右侧说明（若用户没有主动选中的话）
-        if (!selectedItem || selectedItem.seconds !== seg.seconds) {
-          // 不覆盖用户主动选中
-        }
       }
-    } else {
-      // 在其他 tab：根据播放时间自动高亮 highlight
+    } else if (activeTab === 'highlights') {
       const hl = findActiveItem(archive.timeline.highlights, currentTime);
       if (hl && hl.id !== autoHighlightItem?.id) {
         setAutoHighlightItem(hl);
       }
     }
-  }, [currentTime, activeTab, archive]);
+  }, [currentTime, archive]);
+
+  // tab 切换 effect：若切换到的 tab 没有当前播放时间对应的高亮项，
+  // 则复用用户选中的 selectedItem（避免切换 tab 时清空已选内容）
+  useEffect(() => {
+    if (!archive) return;
+    // 只有 chapters / terms tab 需要用 selectedItem 补充
+    if (activeTab !== 'chapters' && activeTab !== 'terms') return;
+    if (selectedItem) {
+      setAutoHighlightItem(selectedItem);
+    }
+  }, [activeTab, archive]);
 
   // ===== 渲染辅助 =====
 
