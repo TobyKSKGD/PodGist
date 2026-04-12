@@ -22,6 +22,7 @@ sys.path.insert(0, current_dir)
 from backend import task_queue
 from backend.transcriber import transcribe_with_sensevoice, transcribe_with_dashscope_and_segments
 from backend.llm_agent import get_podcast_summary_robust
+from backend.timeline_agent import generate_timeline_json
 from backend.downloader import route_and_download
 
 
@@ -312,19 +313,21 @@ def process_single_task(task, api_key):
             except:
                 pass
 
-        # 步骤 5: 调用大模型生成摘要
-        print(f"[Worker] 生成摘要中: {title}")
-        task_queue.update_progress_status(task_id, "正在调用通义千问提炼高光...")
+        # 步骤 5: 根据 mode 调用大模型
+        print(f"[Worker] 生成内容中 (mode={mode}): {title}")
+        if mode == "timeline":
+            task_queue.update_progress_status(task_id, "正在生成时间轴...")
+            timeline_data = generate_timeline_json(api_key, podcast_text, transcript_segments, title=safe_title)
+            ai_title = timeline_data.get("title", safe_title)
+        else:
+            task_queue.update_progress_status(task_id, "正在调用通义千问提炼高光...")
+            raw_summary = get_podcast_summary_robust(api_key, podcast_text)
+            lines = raw_summary.strip().split('\n')
+            ai_title = lines[0] if lines else title
 
-        raw_summary = get_podcast_summary_robust(api_key, podcast_text, max_timeline_items)
+        task_queue.update_progress_status(task_id, "内容生成完成")
 
-        # 提取第一行作为标题
-        lines = raw_summary.strip().split('\n')
-        ai_title = lines[0] if lines else title
-
-        task_queue.update_progress_status(task_id, "通义千问提炼完成")
-
-        # 步骤 6: 保存文本归档文件（目录已在步骤3创建）
+        # 步骤 6: 保存归档文件
         print(f"[Worker] 保存归档文件中: {title}")
         task_queue.update_progress_status(task_id, "正在保存归档...")
 
@@ -333,17 +336,27 @@ def process_single_task(task, api_key):
         with open(raw_path, "w", encoding="utf-8") as f:
             f.write(podcast_text)
 
-        # 保存 summary.md（直接写入 LLM 输出，不重新解析格式）
-        summary_path = os.path.join(archive_path, "summary.md")
-        with open(summary_path, "w", encoding="utf-8") as f:
-            f.write(raw_summary)
-
-        # 保存 segments.json（转录分段，带时间戳）
-        import json
+        # 保存 segments.json（转录分段）
+        import json as _json
         segments_path = os.path.join(archive_path, "segments.json")
         with open(segments_path, "w", encoding="utf-8") as f:
-            json.dump(transcript_segments, f, ensure_ascii=False, indent=2)
-        print(f"[Worker] 分段已保存: {segments_path}")
+            _json.dump(transcript_segments, f, ensure_ascii=False, indent=2)
+
+        if mode == "timeline":
+            # 保存 timeline.json
+            timeline_path = os.path.join(archive_path, "timeline.json")
+            with open(timeline_path, "w", encoding="utf-8") as f:
+                _json.dump(timeline_data, f, ensure_ascii=False, indent=2)
+            # 同时生成轻量 summary.md（供列表页展示标题用）
+            summary_path = os.path.join(archive_path, "summary.md")
+            node_count = len(timeline_data.get("nodes", []))
+            with open(summary_path, "w", encoding="utf-8") as f:
+                f.write(f"# {ai_title}\n\n[时间轴模式] 共 {node_count} 个节点\n")
+        else:
+            # 保存 summary.md
+            summary_path = os.path.join(archive_path, "summary.md")
+            with open(summary_path, "w", encoding="utf-8") as f:
+                f.write(raw_summary)
 
         task_queue.update_progress_status(task_id, "归档完成")
 

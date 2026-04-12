@@ -10,8 +10,9 @@ import stat
 import platform
 from datetime import datetime
 from backend.diagnostics import run_all_diagnostics
-from backend.transcriber import transcribe_with_sensevoice, get_available_devices
+from backend.transcriber import transcribe_with_sensevoice, transcribe_with_dashscope_and_segments, get_available_devices
 from backend.llm_agent import get_podcast_summary_robust, search_in_podcast
+from backend.timeline_agent import generate_timeline_json
 from backend.downloader import route_and_download, detect_platform, AudioDownloader
 from backend.task_queue import add_task, get_task, get_all_tasks, get_queue_stats, update_task_status, delete_task, clear_completed
 from backend.worker import start_worker, is_worker_running, pause_worker, resume_worker, is_paused, stop_worker, retry_failed_tasks
@@ -190,33 +191,35 @@ async def transcribe_local(
             raise HTTPException(status_code=400, detail="请提供 DashScope API Key")
 
         # 2. 转录（使用 DashScope 云端 ASR）
-        podcast_text = transcribe_with_sensevoice(file_path)
+        podcast_text, transcript_segments = transcribe_with_dashscope_and_segments(file_path, api_key)
 
-        # 4. 调用大模型生成摘要（使用前端指定的时间轴上限）
-        summary = get_podcast_summary_robust(api_key, podcast_text, max_timeline_items=max_timeline_items)
+        # 3. 根据 mode 生成内容
+        safe_basename = os.path.splitext(os.path.basename(file.filename))[0]
+        if mode == "timeline":
+            timeline_data = generate_timeline_json(api_key, podcast_text, transcript_segments, title=safe_basename)
+            ai_title = timeline_data.get("title", safe_basename)
+        else:
+            summary = get_podcast_summary_robust(api_key, podcast_text)
+            lines = summary.strip().split('\n')
+            ai_title = lines[0] if lines else safe_basename
 
-        # 5. 提取第一行作为标题
-        lines = summary.strip().split('\n')
-        ai_title = lines[0] if lines else os.path.splitext(os.path.basename(file.filename))[0]
-
-        # 6. 创建归档目录
+        # 4. 创建归档目录
         date_str = datetime.now().strftime("%Y%m%d_%H%M")
-        archive_name = f"{os.path.splitext(file.filename)[0]}_{date_str}"
+        archive_name = f"{safe_basename}_{date_str}"
         archive_path = os.path.join(ARCHIVE_DIR, archive_name)
         os.makedirs(archive_path, exist_ok=True)
 
-        # 6.5 保存音频副本
+        # 4.5 保存音频副本
         audio_filename = None
         audio_saved = False
         if os.path.exists(file_path):
-            import uuid
             _, ext = os.path.splitext(file.filename)
             audio_filename = f"source{ext}"
             audio_dest = os.path.join(archive_path, audio_filename)
             shutil.copy2(file_path, audio_dest)
             audio_saved = True
 
-        # 6.6 保存 metadata.json
+        # 4.6 保存 metadata.json
         save_archive_metadata(
             archive_path=archive_path,
             title=ai_title,
@@ -227,32 +230,34 @@ async def transcribe_local(
             audio_filename=audio_filename,
         )
 
-        # 7. 保存原始转录文本
+        # 5. 保存原始转录文本
         raw_path = os.path.join(archive_path, "raw.txt")
         with open(raw_path, "w", encoding="utf-8") as f:
             f.write(podcast_text)
+
+        # 6. 保存 segments.json
+        segments_path = os.path.join(archive_path, "segments.json")
+        with open(segments_path, "w", encoding="utf-8") as f:
+            json.dump(transcript_segments, f, ensure_ascii=False, indent=2)
+
+        # 7. 保存内容（mode 路由）
+        if mode == "timeline":
+            timeline_path = os.path.join(archive_path, "timeline.json")
+            with open(timeline_path, "w", encoding="utf-8") as f:
+                json.dump(timeline_data, f, ensure_ascii=False, indent=2)
+            summary_path = os.path.join(archive_path, "summary.md")
+            with open(summary_path, "w", encoding="utf-8") as f:
+                f.write(f"# {ai_title}\n\n[时间轴模式] 共 {len(timeline_data.get('nodes', []))} 个节点\n")
+        else:
+            summary_path = os.path.join(archive_path, "summary.md")
+            with open(summary_path, "w", encoding="utf-8") as f:
+                f.write(f"# {ai_title}\n\n{chr(10).join(lines[1:]).strip() if lines else ''}")
 
         # 7.5 自动索引到向量库
         try:
             index_archive(archive_name, archive_name, podcast_text)
         except Exception as e:
             print(f"[RAG] 向量索引失败（不影响归档）: {e}")
-
-        # 8. 保存摘要（确保有 H1 标题）
-        summary_path = os.path.join(archive_path, "summary.md")
-        lines = summary.strip().split('\n')
-        if lines:
-            first_line = lines[0].strip()
-            # 如果第一行已经是标题格式，使用它；否则使用 ai_title
-            if first_line.startswith('#'):
-                ai_title = first_line.lstrip('#').strip()
-                clean_summary = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
-            else:
-                ai_title = first_line if first_line else os.path.splitext(os.path.basename(file.filename))[0]
-                clean_summary = "\n".join(lines[1:]).strip() if len(lines) > 1 else ""
-
-        with open(summary_path, "w", encoding="utf-8") as f:
-            f.write(f"# {ai_title}\n\n{clean_summary}")
 
         # 9. 清理临时音频文件
         os.remove(file_path)
