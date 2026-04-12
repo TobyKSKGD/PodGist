@@ -8,6 +8,7 @@ import {
   IconMicrophone,
   IconTrash,
   IconChartBar,
+  IconTimelineEvent,
 } from '@tabler/icons-react';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { useToast } from '../components/Toast';
@@ -22,6 +23,9 @@ interface ArchiveItem {
   createTime: string;
   hasAudio: boolean;
   hasSegments: boolean;
+  mode: string;       // "summary" | "timeline"
+  hasTimeline: boolean;
+  canMigrate: boolean;
 }
 
 interface PlayProgress {
@@ -92,6 +96,9 @@ export default function LibraryPage() {
   // 删除确认框
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
 
+  // 迁移归档
+  const [migratingId, setMigratingId] = useState<string | null>(null);
+
   // 搜索与筛选
   const [search, setSearch] = useState('');
   const [filterAudio, setFilterAudio] = useState(false);
@@ -133,6 +140,24 @@ export default function LibraryPage() {
         showToast('error', '删除失败，请重试');
         setDeleteTarget(null);
       });
+  };
+
+  // 迁移为 timeline 模式
+  const handleMigrate = (archive: ArchiveItem) => {
+    if (!archive.canMigrate) {
+      showToast('info', '该归档缺少音频来源，无法重新生成时间轴');
+      return;
+    }
+    setMigratingId(archive.id);
+    api.post(`/api/archives/${encodeURIComponent(archive.id)}/migrate`)
+      .then(() => {
+        showToast('success', '时间轴模式归档已生成，可在资料库中查看');
+        refreshArchives();
+      })
+      .catch(() => {
+        showToast('error', '迁移失败，请重试');
+      })
+      .finally(() => setMigratingId(null));
   };
 
   // 计算继续收听
@@ -364,27 +389,43 @@ export default function LibraryPage() {
                       </p>
                     </div>
 
-                    {/* 状态标签（按维度分组，无冲突） */}
+                    {/* 状态标签 */}
                     <div className="flex items-center gap-1 shrink-0">
-                      {/* 音频维度 */}
+                      {/* 模式标签 */}
+                      {item.mode === 'timeline' ? (
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs rounded bg-purple-50 text-purple-500">
+                          <IconTimelineEvent size={10} />
+                          时间轴
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center px-1.5 py-0.5 text-xs rounded bg-slate-100 text-slate-400">
+                          总结
+                        </span>
+                      )}
                       {!item.hasAudio && (
                         <span className="inline-flex items-center px-1.5 py-0.5 text-xs rounded bg-slate-100 text-slate-400">
                           无音频
                         </span>
                       )}
-                      {item.hasAudio && !item.hasSegments && (
-                        <span className="inline-flex items-center px-1.5 py-0.5 text-xs rounded bg-blue-50 text-blue-500">
-                          可播放
-                        </span>
-                      )}
-                      {/* 结构维度（可与音频状态共存） */}
-                      {item.hasSegments && (
-                        <span className="inline-flex items-center px-1.5 py-0.5 text-xs rounded bg-[#00ADA6]/10 text-[#00ADA6]">
-                          有时间轴
-                        </span>
-                      )}
                     </div>
                   </button>
+
+                  {/* 迁移按钮 — summary 模式且可迁移时显示 */}
+                  {item.mode === 'summary' && item.canMigrate && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleMigrate(item); }}
+                      disabled={migratingId === item.id}
+                      className="flex items-center gap-1 px-2 py-1 rounded-md text-xs text-purple-500 hover:bg-purple-50 transition-colors opacity-0 group-hover:opacity-100 shrink-0"
+                      title="转换为时间轴模式"
+                    >
+                      {migratingId === item.id ? (
+                        <div className="w-3.5 h-3.5 border border-purple-300 border-t-purple-500 rounded-full animate-spin" />
+                      ) : (
+                        <IconTimelineEvent size={12} />
+                      )}
+                      <span className="hidden group-hover:inline text-xs">转时间轴</span>
+                    </button>
+                  )}
 
                   {/* 删除按钮 — hover 时显示在右侧 */}
                   <button
