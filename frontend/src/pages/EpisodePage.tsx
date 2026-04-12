@@ -183,6 +183,26 @@ export default function EpisodePage() {
       .finally(() => setLoading(false));
   }, [id]);
 
+  // ===== 从 localStorage 恢复播放进度（仅一次，首次 audio 加载完成后）=====
+  const progressRestoredRef = useRef(false);
+  useEffect(() => {
+    if (!archive || !audioRef.current || progressRestoredRef.current) return;
+    if (duration <= 0) return;
+    progressRestoredRef.current = true;
+    try {
+      const raw = localStorage.getItem('podgist_play_progress');
+      if (!raw) return;
+      const all = JSON.parse(raw);
+      const saved = all[id];
+      if (saved && saved.lastPositionSeconds > 0 && saved.lastPositionSeconds < saved.duration - 5) {
+        audioRef.current.currentTime = saved.lastPositionSeconds;
+        audioRef.current.pause();
+        setIsPlaying(false);
+        setCurrentTime(saved.lastPositionSeconds);
+      }
+    } catch { /* ignore */ }
+  }, [archive, duration]);
+
   // ===== 播放进度本地存储 =====
 
   const PROGRESS_KEY = 'podgist_play_progress';
@@ -220,25 +240,6 @@ export default function EpisodePage() {
     if (!audioRef.current) return;
     const dur = audioRef.current.duration;
     setDuration(dur);
-    if (id && dur > 0) {
-      try {
-        const raw = localStorage.getItem('podgist_play_progress');
-        if (raw) {
-          const all = JSON.parse(raw);
-          const saved = all[id];
-          // 有保存进度 → 恢复位置，不要自动播放（让用户自己决定何时开始）
-          if (saved && saved.lastPositionSeconds > 0 && saved.lastPositionSeconds < dur - 5) {
-            audioRef.current.currentTime = saved.lastPositionSeconds;
-            audioRef.current.pause();
-            setIsPlaying(false);
-            setCurrentTime(saved.lastPositionSeconds);
-            return;
-          }
-        }
-      } catch { /* ignore */ }
-      // 没有保存进度 → 正常自动播放
-      audioRef.current.play().catch(() => {});
-    }
   };
 
   const togglePlay = () => {
