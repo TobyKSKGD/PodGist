@@ -93,7 +93,7 @@ export default function EpisodePage() {
   const [duration, setDuration] = useState(0);
 
   // 时间轴状态
-  const [activeTab, setActiveTab] = useState<TimelineTab>('highlights');
+  const [activeTab, setActiveTab] = useState<TimelineTab>('chapters');
 
   // 选中项（用户主动点击）
   const [selectedItem, setSelectedItem] = useState<TimelineItem | null>(null);
@@ -118,13 +118,19 @@ export default function EpisodePage() {
       .then(res => {
         if (res.data.status === 'success') {
           setArchive(res.data.data);
-          // 默认选中第一个高光
-          if (res.data.data.timeline.highlights.length > 0) {
-            setSelectedItem(res.data.data.timeline.highlights[0]);
-            setAutoHighlightItem(res.data.data.timeline.highlights[0]);
-          } else if (res.data.data.transcriptSegments.length > 0) {
-            setSelectedItem(res.data.data.transcriptSegments[0]);
-            setAutoHighlightItem(res.data.data.transcriptSegments[0]);
+          // 默认选中第一个章节（优先）或第一个高光
+          const chapters = res.data.data.timeline.chapters;
+          const highlights = res.data.data.timeline.highlights;
+          const segments = res.data.data.transcriptSegments;
+          if (chapters.length > 0) {
+            setSelectedItem(chapters[0]);
+            setAutoHighlightItem(chapters[0]);
+          } else if (highlights.length > 0) {
+            setSelectedItem(highlights[0]);
+            setAutoHighlightItem(highlights[0]);
+          } else if (segments.length > 0) {
+            setSelectedItem(segments[0]);
+            setAutoHighlightItem(segments[0]);
           }
         }
       })
@@ -191,9 +197,9 @@ export default function EpisodePage() {
     }
   }, []);
 
-  /** 用户点击时间轴条目 */
+  /** 用户点击时间轴条目（chapters / highlights / terms） */
   const handleItemClick = (item: TimelineItem) => {
-    // 1. 记录用户选中（不再被自动高亮覆盖）
+    // 1. 记录用户选中
     setSelectedItem(item);
 
     // 2. seek 播放器
@@ -201,18 +207,23 @@ export default function EpisodePage() {
       audioRef.current.currentTime = item.seconds;
     }
 
-    // 3. 若当前是 highlights tab，点击后联动滚动到对应 transcript segment
+    // 3. 联动：找到包含该时间的 highlight，同步到右侧面板
+    if (archive) {
+      const hl = findActiveItem(archive.timeline.highlights, item.seconds);
+      if (hl) {
+        setAutoHighlightItem(hl);
+      }
+    }
+
+    // 4. 根据当前 tab 执行对应联动
     if (activeTab === 'highlights' && archive) {
       const seg = findActiveItem(archive.transcriptSegments, item.seconds);
       if (seg) {
-        // 同步更新 autoHighlightItem，避免等待 onTimeUpdate 的竞态
         setAutoHighlightItem(seg);
         setActiveTab('segments');
-        // 切换 tab 后等 DOM 更新再滚动
         setTimeout(() => scrollToItem(seg), 50);
       }
     } else if (activeTab === 'segments') {
-      // 在 segments tab 点击，直接滚动
       scrollToItem(item);
     }
   };
@@ -426,10 +437,12 @@ export default function EpisodePage() {
               <div className="flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-slate-700">时间轴</h2>
                 <div className="flex gap-1 bg-slate-100 rounded-lg p-1">
-                  {(['chapters', 'highlights', 'terms', 'segments'] as TimelineTab[]).map(tab => {
+                  {(['chapters', 'highlights', 'segments', 'terms'] as TimelineTab[]).map(tab => {
                     const count = tab === 'segments'
                       ? archive.transcriptSegments.length
                       : archive.timeline[tab].length;
+                    // terms tab 仅在有内容时显示
+                    if (tab === 'terms' && count === 0) return null;
                     return (
                       <button
                         key={tab}
