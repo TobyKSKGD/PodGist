@@ -325,6 +325,9 @@ export default function EpisodePage() {
       } else if (e.key === 'ArrowRight') {
         e.preventDefault();
         skipForward30();
+      } else if (e.key === ' ') {
+        e.preventDefault();
+        togglePlay();
       }
     };
 
