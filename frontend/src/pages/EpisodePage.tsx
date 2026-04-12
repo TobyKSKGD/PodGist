@@ -253,15 +253,21 @@ export default function EpisodePage() {
   };
 
   const seekTo = (seconds: number) => {
-    if (audioRef.current) {
-      const clamped = Math.max(0, Math.min(seconds, duration));
-      audioRef.current.currentTime = clamped;
-      setCurrentTime(clamped);
-    }
+    if (!audioRef.current) return;
+    const clamped = Math.max(0, Math.min(seconds, duration));
+    audioRef.current.currentTime = clamped;
+    // 注意：不在这里调用 setCurrentTime，由 onTimeUpdate 自然同步
   };
 
-  const skipForward30 = () => seekTo(currentTime + 30);
-  const skipBackward15 = () => seekTo(currentTime - 15);
+  // 读取音频真实当前位置，避免闭包捕获旧 state 值
+  const skipForward30 = () => {
+    if (!audioRef.current) return;
+    seekTo(audioRef.current.currentTime + 30);
+  };
+  const skipBackward15 = () => {
+    if (!audioRef.current) return;
+    seekTo(audioRef.current.currentTime - 15);
+  };
 
   // ===== 时间轴自动高亮（summary 模式）=====
 
