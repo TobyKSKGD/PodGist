@@ -75,6 +75,8 @@ PodGist 所有功能都围绕时间轴展开：
 - **B站视频**：粘贴 Bilibili 视频链接
 - **智能对话**：向全部历史归档提问，基于 RAG 精准定位相关内容
 
+> 📋 完整更新日志见 [CHANGELOG.md](CHANGELOG.md)
+
 ### Windows 版本
 
 #### 系统要求
