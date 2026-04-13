@@ -91,21 +91,19 @@ def _slice_spans_by_topics(segments: list, audio_duration: float) -> list:
         "不过", "然而", "但是",
         "那么", "所以", "因此",
     ]
-    # 短句（不一定是话题切换）
-    SHORT_SEGMENT_THRESHOLD = 20  # 字符数 < 20 的 segment
-
     spans = []
     cur_start = 0
 
     for i in range(len(segments)):
         seg = segments[i]
         text = seg.get("text", "")
-        seconds = seg.get("seconds", 0)
 
-        # 检测是否话题切换
+        # 检测话题切换：同时检查当前 segment 和前一个 segment
+        # 因为话题切换往往发生在前一个 segment 的结尾
+        prev_text = segments[i - 1].get("text", "") if i > 0 else ""
         is_switch = False
         for marker in TOPIC_SWITCH_MARKERS:
-            if marker in text and i > cur_start:
+            if (marker in text or marker in prev_text) and i > cur_start:
                 is_switch = True
                 break
 
@@ -141,23 +139,22 @@ def _slice_spans_by_topics(segments: list, audio_duration: float) -> list:
             "time": _format_time(segments[cur_start].get("seconds", 0)),
         })
 
-    # 合并过短 span（< MIN_SPAN_SECONDS）
+    # 只合并时长过短的 span（< MIN_SPAN_SECONDS），不按 gap 合并
     merged = []
     for span in spans:
         if not merged:
             merged.append(span)
             continue
         last = merged[-1]
-        gap = span["start"] - last["end"]
-        if gap < 0:
+        span_dur = span["start"] - last["end"]
+        if span_dur < 0:
             # 重叠，合并
             last["seg_end_idx"] = span["seg_end_idx"]
             last["end"] = span["end"]
-        elif gap < MIN_SPAN_SECONDS:
-            # 间隔太小，合并
+        elif last["end"] - last["start"] < MIN_SPAN_SECONDS:
+            # 前一个 span 太短，合并
             last["seg_end_idx"] = span["seg_end_idx"]
             last["end"] = span["end"]
-            last["time"] = _format_time(last["start"])
         else:
             merged.append(span)
 
