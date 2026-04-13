@@ -19,6 +19,7 @@ import {
   IconRewindForward30,
   IconChevronDown, IconExternalLink
 } from '@tabler/icons-react';
+import { resolveApiAssetUrl, resolveMediaUrl } from '../utils/apiAsset';
 
 const api = axios.create({ baseURL: 'http://localhost:8000' });
 
@@ -521,7 +522,7 @@ export default function EpisodePage() {
                 <div className="flex items-center gap-2.5 mb-5">
                   {archive?.coverUrl && (
                     <img
-                      src={archive.coverUrl}
+                      src={resolveApiAssetUrl(archive.coverUrl)}
                       alt="封面"
                       className="w-11 h-11 rounded-lg object-cover shrink-0 border border-slate-100"
                     />
@@ -633,7 +634,7 @@ export default function EpisodePage() {
                               <div className="flex gap-0">
                                 <div className="shrink-0 entity-card-media">
                                   <img
-                                    src={`/api/archives/${archive?.id}/media/${de.mediaFilename}`}
+                                    src={resolveMediaUrl(archive!.id, de.mediaFilename)}
                                     alt={de.displayName}
                                     className="w-24 h-24 object-cover"
                                     onError={(e) => {
@@ -922,7 +923,7 @@ export default function EpisodePage() {
             {hasAudio && archive && (
               <audio
                 ref={audioRef}
-                src={archive.audioUrl!}
+                src={resolveApiAssetUrl(archive.audioUrl!)}
                 onTimeUpdate={handleTimeUpdate}
                 onLoadedMetadata={handleLoadedMetadata}
                 onPlay={() => setIsPlaying(true)}
@@ -1033,7 +1034,7 @@ export default function EpisodePage() {
               {hasAudio && archive && (
                 <audio
                   ref={audioRef}
-                  src={archive.audioUrl!}
+                  src={resolveApiAssetUrl(archive.audioUrl!)}
                   onTimeUpdate={handleTimeUpdate}
                   onLoadedMetadata={handleLoadedMetadata}
                   onPlay={() => setIsPlaying(true)}
