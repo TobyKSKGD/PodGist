@@ -50,7 +50,9 @@ interface TimelineNode {
   entities: Array<{ name: string; type: string; description: string }>;
   facts: Array<{ label: string; value: string }>;
   quote_or_joke_explainer: string;
-  seek_start?: number; // 点击跳转的锚点，优先于 start
+  click_start?: number; // 程序侧计算的点击跳转锚点（基于标题/实体关键词在 segment span 内打分）
+  click_seg_idx?: number; // 调试用：click_start 对应的 segment 索引
+  click_reason?: string; // 调试用：为什么选了这个位置
 }
 
 interface TimelineData {
@@ -398,8 +400,8 @@ export default function EpisodePage() {
   const handleNodeClick = (node: TimelineNode, e: React.MouseEvent) => {
     e.stopPropagation();
     setSelectedNode(node);
-    // 暂时回退到 start（更稳定），等待 timeline 生成链路重新设计
-    seekTo(node.start);
+    // click_start 由程序侧计算（基于标题/实体关键词在 segment span 内打分），比 start 更精准
+    seekTo(node.click_start ?? node.start);
   };
 
   // ===== 渲染辅助（summary 模式）=====

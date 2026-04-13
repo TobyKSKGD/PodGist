@@ -286,11 +286,102 @@ def _normalize_timeline(timeline: dict, audio_duration: float) -> dict:
     }
 
 
+def _compute_click_start(
+    seg_start: int,
+    seg_end: int,
+    title: str,
+    entities: list,
+    facts: list,
+    segments: list
+) -> tuple[int, int, str]:
+    """
+    程序侧在节点覆盖范围内计算最适合点击跳转的位置（click_start）。
+
+    策略：
+    1. 提取关键词：title 词 + entities.name + facts.value 中的专有名词
+    2. 对 seg_start~seg_end 范围内每个 segment 打分：
+       - 命中标题关键词：高权重（3分）
+       - 命中 entities.name：中权重（2分）
+       - 命中 facts.value 中的词：中权重（1分）
+       - 命中承接/过渡句型：-2分（降权）
+    3. 取第一个得分 >= 2 的 segment 作为 click_start
+    4. 兜底：找不到则用 seg_start 对应的 seconds
+
+    返回：(click_seconds, click_seg_idx, reason_str)
+    """
+    # 承接/过渡句型（降权词）
+    TRANSITION_PATTERNS = [
+        "接下来", "另外", "刚才提到", "下面再说", "那我们继续",
+        "还有一个", "说到", "再补充", "值得注意的是",
+        "那么", "首先", "一、", "二、", "三、",
+        "首先", "其次", "最后", "总的来说",
+        "欢迎来到", "这里是", "我是",
+    ]
+
+    def score_segment(text: str, keywords: list[str]) -> int:
+        text_lower = text.lower()
+        score = 0
+        for kw in keywords:
+            if kw.lower() in text_lower:
+                score += 2
+        for pattern in TRANSITION_PATTERNS:
+            if pattern in text:
+                score -= 2
+        return max(score, 0)
+
+    # 构建关键词列表
+    keywords = []
+    if title:
+        # 标题去停用词，取有意义的词
+        stop_words = {"的", "是", "在", "和", "与", "为", "了", "于", "的", "是", "有"}
+        for word in title:
+            if word not in stop_words and len(word) >= 2:
+                keywords.append(word)
+
+    for ent in entities:
+        name = ent.get("name", "")
+        if name:
+            keywords.append(name)
+
+    for fact in facts:
+        val = fact.get("value", "")
+        # 提取 facts 中含数字或专有名词的片段
+        for word in val.split():
+            if len(word) >= 3:
+                keywords.append(word)
+
+    if not keywords or seg_start >= seg_end:
+        return segments[seg_start]["seconds"] if 0 <= seg_start < len(segments) else 0, seg_start, "fallback_empty_keywords"
+
+    best_seg_idx = seg_start
+    best_score = 0
+    found = False
+
+    for idx in range(seg_start, min(seg_end + 1, len(segments))):
+        seg_text = segments[idx].get("text", "")
+        score = score_segment(seg_text, keywords)
+        if score >= 2 and not found:
+            # 第一个达到阈值的 segment 作为 click_start
+            best_seg_idx = idx
+            best_score = score
+            found = True
+        elif not found:
+            # 记录最高分（即使没达到阈值），作为兜底
+            if score > best_score:
+                best_score = score
+                best_seg_idx = idx
+
+    click_seconds = segments[best_seg_idx]["seconds"] if 0 <= best_seg_idx < len(segments) else segments[seg_start]["seconds"]
+    reason = f"score={best_score}" if found else f"fallback_score={best_score}"
+    return click_seconds, best_seg_idx, reason
+
+
 def _post_process_chunk_nodes(chunk_nodes: list, chunk_start_seconds: int, segments: list) -> list:
     """
     对单个 chunk 生成的节点列表进行后处理：
     1. 转换 seg_start_idx/seg_end_idx → start/end/time
-    2. 对缺少 seg_idx 的节点用 chunk 边界时间兜底
+    2. 程序侧计算 click_start（点击跳转锚点）
+    3. 对缺少 seg_idx 的节点用 chunk 边界时间兜底
     """
     result = []
     for node in chunk_nodes:
@@ -316,18 +407,28 @@ def _post_process_chunk_nodes(chunk_nodes: list, chunk_start_seconds: int, segme
         if end_val <= start_val:
             end_val = start_val + 60
 
-        anchor_seg = node.get("anchor_seg_idx")
-        if anchor_seg is not None and 0 <= anchor_seg < len(segments):
-            seek_val = segments[anchor_seg].get("seconds", start_val)
+        # click_start 由程序侧计算（基于标题/实体/事实关键词在 segment span 内打分）
+        if seg_start is not None and seg_end is not None:
+            click_start, click_seg, reason = _compute_click_start(
+                seg_start, seg_end,
+                node.get("title", ""),
+                node.get("entities", []),
+                node.get("facts", []),
+                segments
+            )
         else:
-            seek_val = start_val
+            click_start = start_val
+            click_seg = seg_start if seg_start is not None else 0
+            reason = "fallback_no_seg_idx"
 
         clean = {k: v for k, v in node.items()
                  if k not in ("seg_start_idx", "seg_end_idx", "anchor_seg_idx", "start", "end", "time", "id")}
         clean["start"] = start_val
         clean["end"] = end_val
         clean["time"] = _format_time(start_val)
-        clean["seek_start"] = seek_val
+        clean["click_start"] = click_start
+        clean["click_seg_idx"] = click_seg
+        clean["click_reason"] = reason
         result.append(clean)
 
     return result
