@@ -17,7 +17,7 @@ import {
   IconChevronLeft, IconPlayerPlay, IconClock,
   IconMessageCircle, IconPlayerSkipForward, IconRewindBackward15,
   IconRewindForward30, IconCheck,
-  IconChevronDown, IconChevronRight
+  IconChevronDown, IconChevronRight, IconExternalLink
 } from '@tabler/icons-react';
 
 const api = axios.create({ baseURL: 'http://localhost:8000' });
@@ -38,6 +38,15 @@ interface Timeline {
   terms: TimelineItem[];
 }
 
+interface Reference {
+  title: string;
+  url: string;
+  source: string;
+  kind: string;
+  confidence: number;
+  note: string;
+}
+
 interface TimelineNode {
   id: string;
   start: number;
@@ -47,9 +56,18 @@ interface TimelineNode {
   node_type: string;
   summary: string;
   why_it_matters: string;
-  entities: Array<{ name: string; type: string; description: string }>;
+  entities: Array<{
+    name: string;
+    type: string;
+    description: string;
+    refUrl?: string;
+    refTitle?: string;
+    sourceTier?: string;
+  }>;
   facts: Array<{ label: string; value: string }>;
   quote_or_joke_explainer: string;
+  references: Reference[];
+  media: unknown[];
 }
 
 interface TimelineData {
@@ -66,6 +84,7 @@ interface ArchiveDetail {
   rawText: string;
   createTime: string;
   audioUrl: string | null;
+  coverUrl?: string | null;
   timeline: Timeline;
   transcriptSegments: TimelineItem[];
   mode?: string;
@@ -457,30 +476,34 @@ export default function EpisodePage() {
     const nodes = archive?.timelineData?.nodes ?? [];
     const activeNode = currentNode ?? selectedNode;
 
-    // 节点类型 → 配色
+    // 节点类型 → 配色（品牌色系深浅变化，避免彩虹化）
     const nodeTypeConfig: Record<string, { bg: string; text: string; label: string }> = {
-      company_news: { bg: 'bg-orange-50', text: 'text-orange-600', label: '公司动态' },
-      product:      { bg: 'bg-blue-50',   text: 'text-blue-600',   label: '产品' },
-      person:       { bg: 'bg-purple-50', text: 'text-purple-600', label: '人物' },
-      topic_change: { bg: 'bg-slate-50',  text: 'text-slate-500',  label: '话题切换' },
-      quote:        { bg: 'bg-green-50',  text: 'text-green-600',  label: '金句' },
-      background:   { bg: 'bg-slate-50',  text: 'text-slate-400',  label: '背景' },
-      fun_moment:   { bg: 'bg-yellow-50', text: 'text-yellow-600', label: '趣味时刻' },
-      other:        { bg: 'bg-slate-50',  text: 'text-slate-400',  label: '其他' },
+      // 公司动态 / 产品 / 人物 — 同一品牌色系，用深浅区分
+      company_news: { bg: 'bg-[#00ADA6]/10', text: 'text-[#00ADA6]', label: '公司动态' },
+      product:      { bg: 'bg-[#00ADA6]/8',  text: 'text-[#007A75]', label: '产品' },
+      person:       { bg: 'bg-[#0891B2]/10', text: 'text-[#0891B2]', label: '人物' },
+      // 背景/话题切换 — 用中性 slate 深浅
+      topic_change: { bg: 'bg-slate-100',    text: 'text-slate-500',  label: '话题切换' },
+      background:   { bg: 'bg-slate-50',     text: 'text-slate-400',  label: '背景' },
+      // 趣味/金句 — 唯一用暖色区分的类型，柔和的 orange
+      fun_moment:   { bg: 'bg-orange-50',    text: 'text-orange-500', label: '趣味时刻' },
+      // 合并 quote → fun_moment
+      quote:        { bg: 'bg-orange-50',    text: 'text-orange-500', label: '趣味时刻' },
+      other:        { bg: 'bg-slate-50',     text: 'text-slate-400',  label: '其他' },
     };
     const tc = activeNode?.node_type
       ? (nodeTypeConfig[activeNode.node_type] ?? nodeTypeConfig['other'])
       : null;
 
-    // 实体类型 → 配色
+    // 实体类型 → 配色（品牌色系，避免彩虹化）
     const entityTypeColors: Record<string, string> = {
-      company:  'bg-blue-50 text-blue-600 border-blue-100',
-      product:  'bg-indigo-50 text-indigo-600 border-indigo-100',
-      person:   'bg-purple-50 text-purple-600 border-purple-100',
-      location: 'bg-green-50 text-green-600 border-green-100',
-      concept:  'bg-orange-50 text-orange-600 border-orange-100',
-      media:    'bg-red-50 text-red-600 border-red-100',
-      other:    'bg-slate-50 text-slate-500 border-slate-100',
+      company:  'bg-[#00ADA6]/10 text-[#00ADA6] border-[#00ADA6]/20',
+      product:  'bg-[#0891B2]/10 text-[#0891B2] border-[#0891B2]/20',
+      person:   'bg-[#00ADA6]/8 text-[#007A75] border-[#00ADA6]/15',
+      location: 'bg-slate-100 text-slate-500 border-slate-200',
+      concept:  'bg-slate-100 text-slate-500 border-slate-200',
+      media:    'bg-[#0891B2]/10 text-[#0891B2] border-[#0891B2]/20',
+      other:    'bg-slate-50 text-slate-400 border-slate-200',
     };
 
     return (
@@ -493,8 +516,15 @@ export default function EpisodePage() {
             {activeNode ? (
               <div className="max-w-2xl mx-auto px-10 py-8">
 
-                {/* ——— 头部：时间 + 类型 ——— */}
-                <div className="flex items-center gap-2 mb-5">
+                {/* ——— 头部：封面缩略图 + 时间 + 类型 ——— */}
+                <div className="flex items-center gap-2.5 mb-5">
+                  {archive?.coverUrl && (
+                    <img
+                      src={archive.coverUrl}
+                      alt="封面"
+                      className="w-11 h-11 rounded-lg object-cover shrink-0 border border-slate-100"
+                    />
+                  )}
                   <div className="inline-flex items-center px-3 py-1 bg-white border border-[#00ADA6]/20 text-[#00ADA6] text-sm font-mono font-semibold rounded-lg shadow-sm">
                     {activeNode.time} → {formatTime(activeNode.end)}
                   </div>
@@ -517,11 +547,11 @@ export default function EpisodePage() {
                   </p>
                 )}
 
-                {/* ——— 为什么重要（重点提示块） ——— */}
+                {/* ——— 为什么重要（重点提示块）—— 品牌辅助色柔和提示，不使用过亮的 amber ——— */}
                 {activeNode.why_it_matters && (
-                  <div className="relative pl-4 mb-6 before:content-[''] before:absolute before:left-0 before:top-0 before:bottom-0 before:w-0.5 before:bg-amber-400 before:rounded-full">
-                    <p className="text-sm text-amber-700 leading-relaxed">
-                      <span className="font-semibold text-amber-800">重要原因 · </span>
+                  <div className="relative pl-4 mb-6 before:content-[''] before:absolute before:left-0 before:top-0 before:bottom-0 before:w-0.5 before:bg-[#00ADA6] before:rounded-full">
+                    <p className="text-sm text-slate-600 leading-relaxed">
+                      <span className="font-semibold text-[#00ADA6]">重要原因 · </span>
                       {activeNode.why_it_matters}
                     </p>
                   </div>
@@ -534,19 +564,45 @@ export default function EpisodePage() {
                     <div className="space-y-2">
                       {activeNode.entities.map((entity, i) => {
                         const ec = entityTypeColors[entity.type] ?? entityTypeColors['other'];
+                        const sourceTierBadge: Record<string, string> = {
+                          official: 'bg-[#EFF6FF] text-[#3B82F6] border-[#BFDBFE]',
+                          encyclopedia: 'bg-[#F0FDF4] text-[#16A34A] border-[#BBF7D0]',
+                          media: 'bg-[#FFF7ED] text-[#EA580C] border-[#FED7AA]',
+                          community: 'bg-slate-100 text-slate-500 border-slate-200',
+                        };
+                        const sl = sourceTierBadge[entity.sourceTier ?? ''] ?? '';
+                        const hasRef = !!entity.refUrl;
                         return (
-                          <div key={i} className={`flex items-start gap-3 p-3 rounded-xl border ${ec} bg-white/60`}>
+                          <div key={i} className={`flex items-start gap-3 p-3 rounded-xl border ${ec} bg-white/60 ${hasRef ? 'hover:shadow-sm transition-shadow cursor-default' : ''}`}>
                             <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-2 mb-1">
+                              <div className="flex items-center gap-2 mb-1 flex-wrap">
                                 <span className="text-sm font-semibold text-slate-800">{entity.name}</span>
                                 <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${ec}`}>
                                   {entity.type}
                                 </span>
+                                {hasRef && entity.sourceTier && (
+                                  <span className={`text-xs px-1.5 py-0.5 rounded border font-medium ${sl}`}>
+                                    {entity.sourceTier === 'official' ? '官方' :
+                                     entity.sourceTier === 'encyclopedia' ? '百科' :
+                                     entity.sourceTier === 'media' ? '媒体' : '社区'}
+                                  </span>
+                                )}
                               </div>
                               {entity.description && (
                                 <p className="text-xs text-slate-500 leading-relaxed">{entity.description}</p>
                               )}
                             </div>
+                            {hasRef && entity.refUrl && (
+                              <a
+                                href={entity.refUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="shrink-0 w-7 h-7 rounded-lg bg-white border border-slate-100 flex items-center justify-center hover:border-[#00ADA6]/40 hover:text-[#00ADA6] transition-colors"
+                                title={entity.refTitle || entity.name}
+                              >
+                                <IconExternalLink size={13} />
+                              </a>
+                            )}
                           </div>
                         );
                       })}
@@ -579,10 +635,73 @@ export default function EpisodePage() {
                   </div>
                 )}
 
+                {/* ——— 参考链接（references 区块） ——— */}
+                {activeNode.references && activeNode.references.length > 0 && (
+                  <div className="mb-6">
+                    <p className="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-3">参考链接</p>
+                    <div className="space-y-2">
+                      {activeNode.references.map((ref, i) => {
+                        const sourceLabel: Record<string, string> = {
+                          wikipedia: '维基百科',
+                          github: 'GitHub',
+                          official: '官网',
+                          article: '文章',
+                          webpage: '网页',
+                        };
+                        const kindLabel: Record<string, string> = {
+                          tool: '工具',
+                          company: '公司',
+                          product: '产品',
+                          game: '游戏',
+                          film: '影视',
+                          document: '文档',
+                          article: '文章',
+                          repo: '仓库',
+                          webpage: '网页',
+                          person: '人物',
+                          location: '地点',
+                        };
+                        const sl = sourceLabel[ref.source] ?? ref.source;
+                        const kl = kindLabel[ref.kind] ?? ref.kind;
+                        return (
+                          <a
+                            key={i}
+                            href={ref.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-3 p-3 bg-white border border-slate-100 rounded-xl hover:border-[#00ADA6]/30 hover:shadow-sm transition-all group"
+                          >
+                            <div className="w-8 h-8 rounded-lg bg-[#EFF6FF] flex items-center justify-center shrink-0">
+                              <IconExternalLink size={14} className="text-[#3B82F6]" />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2 mb-0.5">
+                                <span className="text-sm font-medium text-slate-700 group-hover:text-[#00ADA6] transition-colors truncate">
+                                  {ref.title}
+                                </span>
+                                <span className="text-xs px-1.5 py-0.5 rounded bg-[#EFF6FF] text-[#64748B] shrink-0">
+                                  {sl}
+                                </span>
+                                {kl && kl !== sl && (
+                                  <span className="text-xs px-1.5 py-0.5 rounded bg-slate-100 text-slate-400 shrink-0">
+                                    {kl}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-xs text-slate-400 truncate">{ref.note}</p>
+                            </div>
+                          </a>
+                        );
+                      })}
+                    </div>
+                    <p className="text-xs text-slate-300 mt-2">引用由 AI 辅助生成，请自行甄别</p>
+                  </div>
+                )}
+
                 {/* ——— 空状态 ——— */}
                 {!activeNode.summary && !activeNode.why_it_matters
                   && !activeNode.entities?.length && !activeNode.facts?.length
-                  && !activeNode.quote_or_joke_explainer && (
+                  && !activeNode.quote_or_joke_explainer && !activeNode.references?.length && (
                     <div className="py-16 text-center">
                       <p className="text-sm text-slate-400">暂无详细解读内容</p>
                     </div>
@@ -1024,7 +1143,7 @@ export default function EpisodePage() {
         <div className="h-4 w-px bg-slate-200" />
         {isTimeline && (
           <>
-            <div className="inline-flex items-center px-2 py-0.5 bg-purple-100 text-purple-600 text-xs font-medium rounded">
+            <div className="inline-flex items-center px-2 py-0.5 bg-[#00ADA6]/10 text-[#00ADA6] text-xs font-medium rounded">
               时间轴模式
             </div>
             <div className="h-4 w-px bg-slate-200" />
