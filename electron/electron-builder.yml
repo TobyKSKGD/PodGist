@@ -14,7 +14,7 @@ target:
 # App 元数据
 appId: com.podgist.desktop
 productName: PodGist
-copyright: Copyright © 2026 PodGist Team
+copyright: Copyright © 2026 TobyKSKGD
 icon: assets/icon.ico
 
 # 构建产物输出目录
