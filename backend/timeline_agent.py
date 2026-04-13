@@ -14,7 +14,7 @@ import re
 import time
 import os
 import urllib.parse
-import urllib.request
+import requests
 from typing import Optional
 
 from dashscope import Generation
@@ -91,53 +91,63 @@ SOURCE_LABELS = {
 
 
 def _http_get(url: str, timeout: int = 5) -> Optional[str]:
-    """轻量 GET，失败返回 None"""
+    """轻量 GET，失败返回 None（统一使用 requests）"""
     try:
-        req = urllib.request.Request(
+        resp = requests.get(
             url,
             headers={"User-Agent": "Mozilla/5.0 PodGist/1.0"},
-            method="GET",
+            timeout=timeout,
         )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            if resp.status == 200:
-                charset = resp.headers.get_content_charset() or "utf-8"
-                return resp.read().decode(charset, errors="replace")
-    except Exception:
-        pass
+        if resp.status_code == 200:
+            return resp.text
+        print(f"[HTTP GET] {url} → status={resp.status_code}")
+    except requests.exceptions.Timeout:
+        print(f"[HTTP GET] {url} → timeout ({timeout}s)")
+    except requests.exceptions.RequestException as e:
+        print(f"[HTTP GET] {url} → {type(e).__name__}: {e}")
+    except Exception as e:
+        print(f"[HTTP GET] {url} → {type(e).__name__}: {e}")
     return None
 
 
 def _http_get_bytes(url: str, timeout: int = 8) -> Optional[bytes]:
-    """下载图片等二进制资源，失败返回 None。返回原始字节，不做解码。"""
+    """下载图片等二进制资源，失败返回 None。返回原始字节，不做解码（统一使用 requests）。"""
     try:
-        req = urllib.request.Request(
+        resp = requests.get(
             url,
             headers={
                 "User-Agent": "Mozilla/5.0 PodGist/1.0",
                 "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
                 "Referer": "https://www.google.com/",
             },
-            method="GET",
+            timeout=timeout,
         )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            if resp.status != 200:
-                return None
-            # 验证 Content-Type 必须是图片
-            content_type = resp.headers.get("Content-Type", "").lower()
-            if not content_type.startswith("image/"):
-                return None
-            # 过滤非图片 MIME（有些服务器错误地返回 text/html 或 application/octet-stream）
-            # 同时禁用 SVG（XML 格式，浏览器兼容性问题多，当前阶段不稳定）
-            forbidden = ("text/html", "application/octet-stream", "application/json", "image/svg+xml")
-            if any(ct in content_type for ct in forbidden):
-                return None
-            data = resp.read()
-            # 最小文件大小过滤（太小可能是 favicon/占位图/错误页）
-            if len(data) < 5000:
-                return None
-            return data
-    except Exception:
-        pass
+        if resp.status_code != 200:
+            print(f"[HTTP GET BYTES] {url} → status={resp.status_code}")
+            return None
+        # 验证 Content-Type 必须是图片
+        content_type = resp.headers.get("Content-Type", "").lower()
+        if not content_type.startswith("image/"):
+            print(f"[HTTP GET BYTES] {url} → non-image Content-Type: {content_type}")
+            return None
+        # 过滤非图片 MIME（有些服务器错误地返回 text/html 或 application/octet-stream）
+        # 同时禁用 SVG（XML 格式，浏览器兼容性问题多，当前阶段不稳定）
+        forbidden = ("text/html", "application/octet-stream", "application/json", "image/svg+xml")
+        if any(ct in content_type for ct in forbidden):
+            print(f"[HTTP GET BYTES] {url} → forbidden Content-Type: {content_type}")
+            return None
+        data = resp.content
+        # 最小文件大小过滤（太小可能是 favicon/占位图/错误页）
+        if len(data) < 5000:
+            print(f"[HTTP GET BYTES] {url} → too small: {len(data)} bytes")
+            return None
+        return data
+    except requests.exceptions.Timeout:
+        print(f"[HTTP GET BYTES] {url} → timeout ({timeout}s)")
+    except requests.exceptions.RequestException as e:
+        print(f"[HTTP GET BYTES] {url} → {type(e).__name__}: {e}")
+    except Exception as e:
+        print(f"[HTTP GET BYTES] {url} → {type(e).__name__}: {e}")
     return None
 
 

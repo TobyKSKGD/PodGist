@@ -4,6 +4,23 @@
 
 ---
 
+## [0.2.2] - 2026-04-14
+
+> 测试版 - 修复 macOS 打包版 entity refUrl/media 全部无法获取的问题
+
+### 修复
+
+- **统一 HTTP 库为 requests**：Mac 打包版中 `urllib.request.urlopen` 会静默失败，导致 entity `refUrl` 和 `media.filename` 全部无法写出。将 `timeline_agent.py` 中的 `_http_get` 和 `_http_get_bytes` 统一改为 `requests` 库，修复 Mac 打包版 entity 无链接、无图片的问题
+- **增加 HTTP 失败日志**：两个函数均增加了 print 日志，记录 URL、status_code、异常类型，不再静默失败
+
+### 技术细节
+
+- `fetch_cover.py` 原本就使用 `requests`，在 Mac 打包版正常
+- `timeline_agent.py` 原本使用 `urllib.request.urlopen`，在 Mac 打包版静默失败（不抛异常但返回 None）
+- 根因：PyInstaller 打包后，`urllib.request.urlopen` 在 macOS 特定网络环境下会静默失败，`requests` 库不受影响
+
+---
+
 ## [0.2.1] - 2026-04-13
 
 > 测试版 - 从"音频总结工具"走向"AI 时间轴播放器"
