@@ -23,7 +23,7 @@ function detectPlatform(url: string): { platform: string; name: string; icon: Re
   if (lowerUrl.includes('bilibili.com')) return { platform: 'bilibili', name: 'Bilibili', icon: <IconVideo size={18} /> };
   if (lowerUrl.includes('163cn.tv') || lowerUrl.includes('music.163.com')) return { platform: 'netease', name: '网易云音乐', icon: <IconMusic size={18} /> };
   if (lowerUrl.includes('xima.tv') || lowerUrl.includes('ximalaya.com')) return { platform: 'ximalaya', name: '喜马拉雅', icon: <IconRadio size={18} /> };
-  if (lowerUrl.includes('podcasts.apple.com')) return { platform: 'apple', name: 'Apple Podcasts', icon: <IconRadio size={18} /> };
+  if (lowerUrl.includes('podcasts.apple.com')) return { platform: 'applepodcasts', name: 'Apple Podcasts', icon: <IconRadio size={18} /> };
   return { platform: 'unknown', name: '未知平台', icon: <IconGlobe size={18} /> };
 }
 
@@ -40,7 +40,7 @@ export default function PodcastDownloadForm({ settings, downloadType, mode = 'su
   // Bilibili 专用检测
   const isValidBilibiliUrl = url.toLowerCase().includes('bilibili.com');
   // 播客专用检测
-  const isValidPodcastUrl = ['xiaoyuzhou', 'netease', 'ximalaya', 'apple'].includes(platform.platform);
+  const isValidPodcastUrl = ['xiaoyuzhou', 'netease', 'ximalaya', 'applepodcasts'].includes(platform.platform);
 
   const handleSubmit = async () => {
     if (!url.trim()) {

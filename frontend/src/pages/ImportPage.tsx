@@ -20,7 +20,7 @@ export default function ImportPage() {
   const initialTab = (searchParams.get('tab') || 'local') as 'local' | 'podcast' | 'bilibili' | 'batch';
   const [activeInputTab, setActiveInputTab] = useState<'local' | 'podcast' | 'bilibili' | 'batch'>(initialTab);
   const [isUploading, setIsUploading] = useState(false);
-  const [mode, setMode] = useState<ImportMode>('summary');
+  const [mode, setMode] = useState<ImportMode>('timeline');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -58,17 +58,6 @@ export default function ImportPage() {
         {/* 模式选择开关 */}
         <div className="flex items-center gap-3 mb-6 p-1 bg-slate-100 rounded-xl w-fit">
           <button
-            onClick={() => setMode('summary')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-              mode === 'summary'
-                ? 'bg-white text-[#00ADA6] shadow-sm'
-                : 'text-slate-500 hover:text-slate-700'
-            }`}
-          >
-            <IconAlignLeft size={15} />
-            总结模式
-          </button>
-          <button
             onClick={() => setMode('timeline')}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
               mode === 'timeline'
@@ -78,6 +67,17 @@ export default function ImportPage() {
           >
             <IconTimelineEvent size={15} />
             时间轴模式
+          </button>
+          <button
+            onClick={() => setMode('summary')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+              mode === 'summary'
+                ? 'bg-white text-[#00ADA6] shadow-sm'
+                : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            <IconAlignLeft size={15} />
+            总结模式
           </button>
         </div>
 

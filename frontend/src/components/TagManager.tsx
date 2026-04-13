@@ -94,7 +94,7 @@ export default function TagManager({ archiveId }: TagManagerProps) {
         onClick={() => setIsOpen(!isOpen)}
         className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg transition-colors ${
           isOpen || archiveTags.length > 0
-            ? 'bg-purple-50 text-purple-600 border border-purple-200'
+            ? 'bg-[#00ADA6]/10 text-[#00ADA6] border border-[#00ADA6]/20'
             : 'text-slate-600 hover:bg-slate-100'
         }`}
       >
@@ -127,12 +127,12 @@ export default function TagManager({ archiveId }: TagManagerProps) {
                 onChange={e => setNewTagName(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && createTag()}
                 placeholder="新建标签名..."
-                className="flex-1 px-3 py-1.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:border-purple-400"
+                className="flex-1 px-3 py-1.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:border-[#00ADA6]"
               />
               <button
                 onClick={createTag}
                 disabled={!newTagName.trim() || isCreating}
-                className="px-3 py-1.5 bg-purple-500 text-white text-sm rounded-lg hover:bg-purple-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                className="px-3 py-1.5 bg-[#00ADA6] text-white text-sm rounded-lg hover:bg-[#009A94] disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
               >
                 {isCreating ? <IconX size={12} /> : <IconPlus size={12} />}
               </button>
@@ -156,11 +156,11 @@ export default function TagManager({ archiveId }: TagManagerProps) {
                     <button
                       onClick={() => toggleTag(tag)}
                       className={`flex-1 flex items-center gap-2 text-sm text-left transition-colors ${
-                        isActive ? 'text-purple-700 font-medium' : 'text-slate-600'
+                        isActive ? 'text-[#00ADA6] font-medium' : 'text-slate-600'
                       }`}
                     >
                       <span className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
-                        isActive ? 'bg-purple-500 border-purple-500' : 'border-slate-300'
+                        isActive ? 'bg-[#00ADA6] border-[#00ADA6]' : 'border-slate-300'
                       }`}>
                         {isActive && <IconCheck size={10} className="text-white" />}
                       </span>

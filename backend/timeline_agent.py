@@ -107,6 +107,40 @@ def _http_get(url: str, timeout: int = 5) -> Optional[str]:
     return None
 
 
+def _http_get_bytes(url: str, timeout: int = 8) -> Optional[bytes]:
+    """下载图片等二进制资源，失败返回 None。返回原始字节，不做解码。"""
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 PodGist/1.0",
+                "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
+                "Referer": "https://www.google.com/",
+            },
+            method="GET",
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if resp.status != 200:
+                return None
+            # 验证 Content-Type 必须是图片
+            content_type = resp.headers.get("Content-Type", "").lower()
+            if not content_type.startswith("image/"):
+                return None
+            # 过滤非图片 MIME（有些服务器错误地返回 text/html 或 application/octet-stream）
+            # 同时禁用 SVG（XML 格式，浏览器兼容性问题多，当前阶段不稳定）
+            forbidden = ("text/html", "application/octet-stream", "application/json", "image/svg+xml")
+            if any(ct in content_type for ct in forbidden):
+                return None
+            data = resp.read()
+            # 最小文件大小过滤（太小可能是 favicon/占位图/错误页）
+            if len(data) < 5000:
+                return None
+            return data
+    except Exception:
+        pass
+    return None
+
+
 def _best_result(results: list) -> Optional[dict]:
     """从多个候选结果中选择最优的（按 sourceTier > confidence > 匹配度）"""
     if not results:
@@ -394,10 +428,7 @@ def _resolve_entity_reference(entity_name: str, entity_kind: str) -> Optional[di
 
     # 2. 按类型分支
     if is_tool:
-        # 工具/项目：GitHub → 官方域名（已查） → Wikipedia
-        gh = _resolve_github(clean)
-        if gh:
-            results.append(gh)
+        # 工具/项目：官方域名（已查） → Wikipedia（GitHub 已暂时禁用）
         wiki = _resolve_wikipedia(clean, clean_for_search)
         if wiki:
             results.append(wiki)
@@ -417,17 +448,13 @@ def _resolve_entity_reference(entity_name: str, entity_kind: str) -> Optional[di
         if baidu:
             results.append(baidu)
     else:
-        # 公司/品牌/其他：百度百科 → Wikipedia → GitHub（作为补充）
+        # 公司/品牌/其他：百度百科 → Wikipedia（GitHub 已暂时禁用）
         baidu = _resolve_baidu_baike(clean)
         if baidu:
             results.append(baidu)
         wiki = _resolve_wikipedia(clean, clean_for_search)
         if wiki:
             results.append(wiki)
-        if kind == "company" or kind == "product":
-            gh = _resolve_github(clean)
-            if gh:
-                results.append(gh)
 
     # 选最优
     best = _best_result(results)
@@ -808,6 +835,124 @@ def _normalize_ref_candidates(raw: list) -> list:
 
 
 # ---------------------------------------------------------------------------
+# Entity 媒体缩略图提取
+# ---------------------------------------------------------------------------
+
+def _extract_og_image(ref_url: str, entity_name: str, archive_path: str, entity_idx: int) -> Optional[dict]:
+    """
+    从 ref_url 页面提取 og:image，下载到 archive_path/media/ 目录。
+    返回本地文件名（相对于 archive）或 None。
+
+    修复：使用 _http_get_bytes() 下载原始字节，Content-Type 校验 + Pillow 验证，
+    确保只保存真实图片不过滤横幅/ICO/favicon 类图片。
+    """
+    if not ref_url or not ref_url.startswith("http"):
+        return None
+    try:
+        import os as _os
+        media_dir = _os.path.join(archive_path, "media")
+        _os.makedirs(media_dir, exist_ok=True)
+
+        # 清理实体名作为文件名
+        safe = re.sub(r'[^\w\-]', '_', entity_name)[:30]
+
+        # 1. 获取页面 HTML，提取 og:image URL
+        text = _http_get(ref_url, timeout=8)
+        if not text:
+            return None
+
+        og_match = re.search(
+            r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
+            text, re.I
+        )
+        if not og_match:
+            og_match = re.search(
+                r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
+                text, re.I
+            )
+        if not og_match:
+            return None
+
+        img_url = og_match.group(1).strip()
+        if not img_url or not img_url.startswith("http"):
+            return None
+
+        # 2. 推断扩展名（从 URL 猜测，真实类型由 Pillow 检测）
+        ext_match = re.search(r'\.(jpg|jpeg|png|webp|svg|gif)', img_url, re.I)
+        ext = ext_match.group(1).lower() if ext_match else "jpg"
+        if ext == "jpeg":
+            ext = "jpg"
+
+        # 3. 二进制下载（含 Content-Type 校验）
+        img_data = _http_get_bytes(img_url, timeout=10)
+        if not img_data:
+            return None
+
+        # 4. Pillow 图像验证（确保不是 HTML/JSON/损坏数据）
+        try:
+            from PIL import Image
+            import io
+            img = Image.open(io.BytesIO(img_data))
+            img.verify()  # 验证图像完整性
+            # 重新打开（verify 后需要重新创建对象才能操作）
+            img = Image.open(io.BytesIO(img_data))
+            actual_format = img.format.lower() if img.format else ext
+            # SVG 被 Pillow 识别为 SVG，不稳定，彻底禁用
+            if actual_format == "svg":
+                return None
+        except Exception:
+            return None
+
+        # 5. 质量过滤
+        width, height = img.size
+        # 过滤太小的图（可能是 favicon/banner 占位图）
+        if width < 120 or height < 80:
+            return None
+        # 过滤极端宽高比（超宽横幅或超窄竖条）
+        ratio = max(width, height) / max(min(width, height), 1)
+        if ratio > 8:
+            return None
+
+        # 6. 统一转为 JPEG 或保留原格式（SVG/PDF 等非 raster 转 JPEG）
+        local_name = f"entity_{entity_idx:03d}_{safe}.{ext}"
+        local_path = _os.path.join(media_dir, local_name)
+
+        try:
+            if actual_format in ("svg", "webp", "gif"):
+                # 转为 JPEG
+                rgb_img = img.convert("RGB")
+                rgb_img.save(local_path, "JPEG", quality=85, optimize=True)
+            elif actual_format in ("jpeg", "jpg", "png"):
+                # 直接保存，PNG 保持透明通道
+                if actual_format == "png":
+                    img.save(local_path, "PNG", optimize=True)
+                else:
+                    img.save(local_path, "JPEG", quality=85, optimize=True)
+            else:
+                # 其他格式统一转 JPEG
+                rgb_img = img.convert("RGB")
+                rgb_img.save(local_path, "JPEG", quality=85, optimize=True)
+        except Exception:
+            # 写入失败时清理
+            if _os.path.exists(local_path):
+                _os.remove(local_path)
+            return None
+
+        # 7. 二次验证：写入后检查文件大小
+        file_size = _os.path.getsize(local_path)
+        if file_size < 3000:
+            _os.remove(local_path)
+            return None
+
+        return {
+            "filename": local_name,
+            "source_url": img_url,
+        }
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # 主入口
 # ---------------------------------------------------------------------------
 
@@ -815,7 +960,8 @@ def generate_timeline_json(
     api_key: str,
     podcast_text: str,
     transcript_segments: list,
-    title: str = "未命名节目"
+    title: str = "未命名节目",
+    archive_path: Optional[str] = None,
 ) -> dict:
     """
     时间轴模式主入口（程序切段，模型写内容）。
@@ -855,7 +1001,7 @@ def generate_timeline_json(
 
         entities = _normalize_entities(content.get("entities", []))
         # 为每个 entity 解析参考链接（per-entity 模式）
-        for ent in entities:
+        for idx, ent in enumerate(entities):
             ref = _resolve_entity_reference(ent.get("name", ""), ent.get("type", "other"))
             if ref:
                 ent["refUrl"] = ref.get("url", "")
@@ -865,6 +1011,21 @@ def generate_timeline_json(
                 ent["refUrl"] = ""
                 ent["refTitle"] = ""
                 ent["sourceTier"] = ""
+
+            # 提取 og:image（高可信来源才提取，不阻塞主流程）
+            if ref and archive_path:
+                try:
+                    media = _extract_og_image(
+                        ref.get("url", ""),
+                        ent.get("name", ""),
+                        archive_path,
+                        idx,
+                    )
+                    ent["media"] = media if media else {}
+                except Exception:
+                    ent["media"] = {}
+            else:
+                ent["media"] = {}
 
         # 节点级引用（新闻/报告/文档等，非实体解释型）
         ref_candidates = _normalize_ref_candidates(content.get("reference_candidates", []))

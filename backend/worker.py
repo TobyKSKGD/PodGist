@@ -24,6 +24,7 @@ from backend.transcriber import transcribe_with_sensevoice, transcribe_with_dash
 from backend.llm_agent import get_podcast_summary_robust
 from backend.timeline_agent import generate_timeline_json
 from backend.downloader import route_and_download
+from backend.fetch_cover import fetch_cover, download_cover_image
 
 
 # Worker 线程名称
@@ -289,6 +290,29 @@ def process_single_task(task, api_key):
             audio_saved = True
             print(f"[Worker] 音频已保存到归档: {audio_dest}")
 
+        # 封面抓取（不阻塞主流程）
+        cover_saved = False
+        cover_filename = None
+        cover_source_url = None
+        cover_type = None
+        if source_type != "local_file" and source.startswith("http"):
+            try:
+                cover_url, cover_type = fetch_cover(source, source_type)
+                if cover_url:
+                    tmp_cover = os.path.join(archive_path, "cover.tmp")
+                    if download_cover_image(cover_url, tmp_cover):
+                        actual_ext = os.path.splitext(tmp_cover)[1]
+                        cover_filename = "cover" + actual_ext
+                        cover_dest = os.path.join(archive_path, cover_filename)
+                        os.rename(tmp_cover, cover_dest)
+                        cover_saved = True
+                        cover_source_url = cover_url
+                        print(f"[Worker] 封面已保存: {cover_filename}")
+                    elif os.path.exists(tmp_cover):
+                        os.remove(tmp_cover)
+            except Exception as e:
+                print(f"[Worker] 封面抓取失败（不阻塞）: {e}")
+
         # 保存 metadata.json
         import json
         from datetime import datetime as dt
@@ -302,6 +326,10 @@ def process_single_task(task, api_key):
             "audio_filename": audio_filename,
             "can_redownload": source.startswith("http") or source.startswith("www"),
             "created_at": dt.now().isoformat(),
+            "cover_saved": cover_saved,
+            "cover_filename": cover_filename,
+            "cover_source_url": cover_source_url,
+            "cover_type": cover_type,
         }
         with open(os.path.join(archive_path, "metadata.json"), "w", encoding="utf-8") as f:
             json.dump(metadata, f, ensure_ascii=False, indent=2)
@@ -317,7 +345,7 @@ def process_single_task(task, api_key):
         print(f"[Worker] 生成内容中 (mode={mode}): {title}")
         if mode == "timeline":
             task_queue.update_progress_status(task_id, "正在生成时间轴...")
-            timeline_data = generate_timeline_json(api_key, podcast_text, transcript_segments, title=safe_title)
+            timeline_data = generate_timeline_json(api_key, podcast_text, transcript_segments, title=safe_title, archive_path=archive_path)
             ai_title = timeline_data.get("title", safe_title)
         else:
             task_queue.update_progress_status(task_id, "正在调用通义千问提炼高光...")
