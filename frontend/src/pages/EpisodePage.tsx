@@ -50,6 +50,7 @@ interface TimelineNode {
   entities: Array<{ name: string; type: string; description: string }>;
   facts: Array<{ label: string; value: string }>;
   quote_or_joke_explainer: string;
+  seek_start?: number; // 点击跳转的锚点，优先于 start
 }
 
 interface TimelineData {
@@ -397,7 +398,8 @@ export default function EpisodePage() {
   const handleNodeClick = (node: TimelineNode, e: React.MouseEvent) => {
     e.stopPropagation();
     setSelectedNode(node);
-    seekTo(node.start);
+    // seek_start 是话题真正切入点；若无则降级用 start
+    seekTo(node.seek_start ?? node.start);
   };
 
   // ===== 渲染辅助（summary 模式）=====
