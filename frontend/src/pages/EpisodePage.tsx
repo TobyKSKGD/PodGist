@@ -398,8 +398,8 @@ export default function EpisodePage() {
   const handleNodeClick = (node: TimelineNode, e: React.MouseEvent) => {
     e.stopPropagation();
     setSelectedNode(node);
-    // seek_start 是话题真正切入点；若无则降级用 start
-    seekTo(node.seek_start ?? node.start);
+    // 暂时回退到 start（更稳定），等待 timeline 生成链路重新设计
+    seekTo(node.start);
   };
 
   // ===== 渲染辅助（summary 模式）=====

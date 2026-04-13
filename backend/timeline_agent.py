@@ -320,7 +320,6 @@ def _post_process_chunk_nodes(chunk_nodes: list, chunk_start_seconds: int, segme
         if anchor_seg is not None and 0 <= anchor_seg < len(segments):
             seek_val = segments[anchor_seg].get("seconds", start_val)
         else:
-            # fallback: anchor 与 start 相同
             seek_val = start_val
 
         clean = {k: v for k, v in node.items()
