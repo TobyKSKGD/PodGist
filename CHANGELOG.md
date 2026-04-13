@@ -10,14 +10,39 @@
 
 ### 修复
 
-- **统一 HTTP 库为 requests**：Mac 打包版中 `urllib.request.urlopen` 会静默失败，导致 entity `refUrl` 和 `media.filename` 全部无法写出。将 `timeline_agent.py` 中的 `_http_get` 和 `_http_get_bytes` 统一改为 `requests` 库，修复 Mac 打包版 entity 无链接、无图片的问题
+- **统一 HTTP 库为 requests**：将 `timeline_agent.py` 中的 `_http_get` 和 `_http_get_bytes` 统一改为 `requests` 库，修复 Mac 打包版 entity 无链接、无图片的问题
 - **增加 HTTP 失败日志**：两个函数均增加了 print 日志，记录 URL、status_code、异常类型，不再静默失败
 
-### 技术细节
+### 问题排查过程
 
-- `fetch_cover.py` 原本就使用 `requests`，在 Mac 打包版正常
-- `timeline_agent.py` 原本使用 `urllib.request.urlopen`，在 Mac 打包版静默失败（不抛异常但返回 None）
-- 根因：PyInstaller 打包后，`urllib.request.urlopen` 在 macOS 特定网络环境下会静默失败，`requests` 库不受影响
+**现象**：macOS 打包版中，时间轴节点的 entity 卡片没有图片、没有参考链接，而 Windows 正常。
+
+**排查路径**：
+
+1. **排除前端渲染问题**：确认 EpisodePage.tsx 中 `if (!displayName) return null` 过滤逻辑正确，无标题 entity 不会渲染
+2. **确认打包代码正确**：workflow run 确认 macOS DMG 来自 commit 79ea7a0（v0.2.1），代码本身包含正确的 entity 渲染逻辑
+3. **确认打包产物正确**：通过 GitHub Actions 重新触发 macOS 构建，替换原有 DMG，问题依旧
+4. **深入数据分析**：读取用户 Mac 上新生成的归档 `timeline.json`，发现 42 个 entity 中仅有 2 个有 `refUrl`，0 个有 `media.filename`，40 个两者都没有——**问题不在前端渲染，是后端生成时就没写出这些字段**
+5. **定位根因**：`fetch_cover.py`（封面抓取）使用 `requests`，用户 Mac 上封面正常显示；`timeline_agent.py`（entity URL 解析）使用 `urllib.request.urlopen`，全部静默失败。两者形成鲜明对比，指向 `urllib.request` 在 macOS 打包环境下的问题
+
+**根因**：`urllib.request.urlopen` 在 PyInstaller 打包后的 macOS 环境下会静默失败（不抛异常，直接返回 None），而 `requests` 库不受此影响。这是 PyInstaller 打包 Python stdlib 时的已知问题。
+
+**修复方式**：
+- `_http_get`：改用 `requests.get`，保留 User-Agent，设置合理 timeout，失败时打印 `[HTTP GET] URL → status=xxx` 或异常类型
+- `_http_get_bytes`：改用 `requests.get`，失败时打印 `[HTTP GET BYTES] URL → timeout` 等日志
+- 图片下载的 Content-Type 校验、Pillow verify、尺寸过滤等逻辑全部保留，未退化
+
+### 开发心得
+
+1. **"CI build success" 不等于"安装包运行正常"**：PyInstaller 打包后，某些 stdlib 在特定平台会静默失败，CI 只验证了"打得出来"，没有验证"用得没问题"。这次 macOS 构建成功、workflow 显示绿色，但实际运行时 entity 全部没有链接和图片。
+2. **静默失败是定位噩梦**：`_http_get` 和 `_http_get_bytes` 原来的 `except: pass` 让问题延迟了整整两个版本才被发现。以后所有底层 HTTP 函数必须打印失败日志，至少记录 URL + 状态码。
+3. **同款软件不同平台差异**：封面抓取用 `requests` 正常，entity URL 解析用 `urllib` 失败——同一个打包应用里，两套 HTTP 库表现完全不同。统一使用 `requests` 是最稳妥的选择。
+4. **Win/Mac 数据一致性必须做双平台验证**：不能只在一个平台测试就发布另一个平台。这次如果不是用户反馈，问题的发现会推迟更久。
+
+### 相关文件
+
+- `backend/timeline_agent.py` — `_http_get`、`_http_get_bytes` 改用 `requests`
+- `backend/fetch_cover.py` — 原本就使用 `requests`，不受影响
 
 ---
 
