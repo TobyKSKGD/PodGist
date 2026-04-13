@@ -54,9 +54,9 @@ def _extract_json(content: str) -> dict:
     从 LLM 输出中提取 JSON。
     支持：
     - Markdown ```json ... ``` 包裹的 { ... } 对象
-    - Markdown ```json ... ``` 包裹的 [ ... ] 数组（转为 {"nodes": [...]})
+    - Markdown ```json ... ``` 包裹的 [ ... ] 数组（转为 {"nodes": [...]}）
     - 纯粹的 { ... } 对象
-    - 纯粹的 [ ... ] 数组（转为 {"nodes": [...]})
+    - 纯粹的 [ ... ] 数组（转为 {"nodes": [...]}）
     """
     content = content.strip()
 
@@ -148,7 +148,185 @@ def _split_transcript_by_segments(transcript_text: str, segments: list, max_char
     return chunks
 
 
-def _generate_nodes_for_chunk(api_key: str, chunk_text: str, chunk_index: int, total_chunks: int, title_hint: str = "") -> list:
+def _format_time(seconds: float) -> str:
+    """将秒数转换为 M:SS 格式"""
+    s = int(seconds)
+    m = s // 60
+    sec = s % 60
+    return f"{m}:{sec:02d}"
+
+
+def _find_segment_index(segments: list, seconds: float) -> int:
+    """找到 seconds 对应的 segment 下标（二分查找）"""
+    lo, hi = 0, len(segments) - 1
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if segments[mid].get("seconds", 0) < seconds:
+            lo = mid + 1
+        else:
+            hi = mid
+    return lo
+
+
+def _fill_coverage_gaps(nodes: list, audio_duration: float, segments: list) -> list:
+    """
+    检查节点间的覆盖缺口，对过大的时间间隔（> 180s ≈ 3 分钟）补充粗粒度节点。
+    只在空白过大的区间插入填充节点，不改变已有的高质量节点。
+    """
+    if not nodes or audio_duration <= 0:
+        return nodes
+
+    result = list(nodes)
+    i = 0
+    while i < len(result) - 1:
+        cur_end = result[i].get("end", 0) or 0
+        next_start = result[i + 1].get("start", 0) or 0
+        gap = next_start - cur_end
+        if gap > 180:
+            # 找到 cur_end 附近的 segment
+            seg_idx = 0
+            for idx, seg in enumerate(segments):
+                if seg.get("seconds", 0) >= cur_end:
+                    seg_idx = idx
+                    break
+            mid_idx = (seg_idx + _find_segment_index(segments, next_start)) // 2
+            mid_seconds = segments[mid_idx].get("seconds", cur_end) if mid_idx < len(segments) else cur_end
+            fill_node = {
+                "id": "_fill_",
+                "title": f"{_format_time(cur_end)}~{_format_time(next_start)}",
+                "node_type": "background",
+                "start": int(cur_end),
+                "end": int(next_start),
+                "time": _format_time(cur_end),
+                "summary": f"覆盖 {_format_time(cur_end)} 至 {_format_time(next_start)} 的内容",
+                "why_it_matters": "",
+                "entities": [],
+                "facts": [],
+                "quote_or_joke_explainer": "",
+            }
+            result.insert(i + 1, fill_node)
+        i += 1
+
+    return result
+
+
+def _normalize_timeline(timeline: dict, audio_duration: float) -> dict:
+    """
+    对 timeline 节点做合法性校验与修正：
+    1. 去除越界节点（start >= audio_duration）
+    2. clamp end > audio_duration → audio_duration
+    3. 确保 start < end
+    4. 按 start 排序
+    5. 合并重叠超过 80% 的相邻节点
+    6. 重新分配 node_id
+    """
+    nodes = timeline.get("nodes", [])
+    if not nodes:
+        return timeline
+
+    # Step 1: 过滤越界节点（start >= audio_duration 的直接丢弃）
+    filtered = []
+    for n in nodes:
+        start = n.get("start", 0) or 0
+        if start < audio_duration:
+            filtered.append(n)
+
+    # Step 2: clamp end，处理无 end 或 end 异常的情况
+    for n in filtered:
+        end = n.get("end")
+        if end is None or end <= 0 or end > audio_duration:
+            n["end"] = audio_duration
+
+    # Step 3: 确保 start < end
+    for n in filtered:
+        start = n.get("start", 0) or 0
+        end = n.get("end", 0) or 0
+        if end <= start:
+            n["end"] = min(start + 60, audio_duration)
+
+    # Step 4: 按 start 排序
+    filtered.sort(key=lambda n: n.get("start", 0) or 0)
+
+    # Step 5: 合并严重重叠节点（重叠 > 80%）
+    merged = []
+    for n in filtered:
+        if not merged:
+            merged.append(n)
+            continue
+        last = merged[-1]
+        last_end = last.get("end", 0) or 0
+        last_start = last.get("start", 0) or 0
+        n_start = n.get("start", 0) or 0
+        n_end = n.get("end", 0) or 0
+
+        overlap = last_end - n_start
+        last_dur = last_end - last_start
+        if overlap > 0 and last_dur > 0 and overlap / last_dur > 0.8:
+            if n.get("summary"):
+                last["summary"] = (last.get("summary", "") + " " + n.get("summary", "")).strip()
+            if n.get("entities"):
+                existing = {e["name"] for e in last.get("entities", [])}
+                for e in n["entities"]:
+                    if e["name"] not in existing:
+                        last.setdefault("entities", []).append(e)
+            last["end"] = max(last_end, n_end)
+        else:
+            merged.append(n)
+
+    # Step 6: 重新分配 node_id
+    final_nodes = []
+    for i, n in enumerate(merged):
+        final_nodes.append({**n, "id": f"node_{i + 1:03d}"})
+
+    return {
+        "mode": "timeline",
+        "version": 1,
+        "title": timeline.get("title", ""),
+        "nodes": final_nodes,
+    }
+
+
+def _post_process_chunk_nodes(chunk_nodes: list, chunk_start_seconds: int, segments: list) -> list:
+    """
+    对单个 chunk 生成的节点列表进行后处理：
+    1. 转换 seg_start_idx/seg_end_idx → start/end/time
+    2. 对缺少 seg_idx 的节点用 chunk 边界时间兜底
+    """
+    result = []
+    for node in chunk_nodes:
+        seg_start = node.get("seg_start_idx")
+        seg_end = node.get("seg_end_idx")
+
+        # 解析 start 时间（优先用 segment seconds，兜底用 chunk_start_seconds）
+        if seg_start is not None and 0 <= seg_start < len(segments):
+            start_val = segments[seg_start].get("seconds", 0)
+        elif seg_start is not None and seg_start < 0:
+            start_val = 0
+        else:
+            start_val = chunk_start_seconds
+
+        # 解析 end 时间
+        if seg_end is not None and 0 <= seg_end < len(segments):
+            end_val = segments[seg_end].get("seconds", 0)
+        elif seg_end is not None and seg_end >= len(segments):
+            end_val = segments[-1].get("seconds", 0) if segments else chunk_start_seconds
+        else:
+            end_val = start_val + 60
+
+        if end_val <= start_val:
+            end_val = start_val + 60
+
+        clean = {k: v for k, v in node.items()
+                 if k not in ("seg_start_idx", "seg_end_idx", "start", "end", "time", "id")}
+        clean["start"] = start_val
+        clean["end"] = end_val
+        clean["time"] = _format_time(start_val)
+        result.append(clean)
+
+    return result
+
+
+def _generate_nodes_for_chunk(api_key: str, chunk_text: str, chunk_index: int, total_chunks: int, segments: list, title_hint: str = "") -> list:
     """
     为一个文本块生成 timeline 节点列表。
 
@@ -157,16 +335,36 @@ def _generate_nodes_for_chunk(api_key: str, chunk_text: str, chunk_index: int, t
         chunk_text: 该块的完整文本（含时间戳）
         chunk_index: 块编号（从 0 开始）
         total_chunks: 总块数
-        title_hint: 节目标题提示（用于 entity linking）
+        segments: 完整 transcript_segments（用于推导时间）
+        title_hint: 节目标题提示
 
     返回:
-        list[dict]: 该块的节点列表
+        list[dict]: 该块的节点列表（包含 seg_start_idx/seg_end_idx，由 post-processing 转为时间）
     """
     system_prompt = """你是一个播客与音频内容分析专家，擅长从转录稿中提取结构化的、有价值的时间轴节点。
 
 你必须严格输出 JSON 数组，不要输出任何解释性文字。
 每个节点代表一个有意义的内容片段（通常 1-5 分钟）。
+
+【重要】时间信息必须基于转录文本中的 [MM:SS] 时间戳，不允许自由发明时间点。
 """
+
+    # 构建 segment 索引映射供模型参考
+    # 仅取前 20 个和最后 5 个 segment 作为上下文示例，避免上下文过长
+    if len(segments) <= 25:
+        sample_indices = list(range(len(segments)))
+    else:
+        sample_indices = list(range(20)) + list(range(len(segments) - 5, len(segments)))
+
+    seg_hint_lines = []
+    for idx in sample_indices:
+        seg = segments[idx]
+        seg_time = seg.get("time", "00:00")
+        seg_sec = seg.get("seconds", 0)
+        seg_text = seg.get("text", "")[:40]
+        seg_hint_lines.append(f"  [{idx}] time={seg_time} seconds={seg_sec} text=\"{seg_text}\"")
+
+    seg_hint = "\n".join(seg_hint_lines)
 
     user_prompt = f"""请分析以下播客转录片段，生成结构化的时间轴节点。
 
@@ -177,14 +375,18 @@ def _generate_nodes_for_chunk(api_key: str, chunk_text: str, chunk_index: int, t
 - 如果转录文本中某段话涉及具体事实（公司名/人名/日期/价格/地点），请尽量提取
 - 对于提及的名词，如果是公司/产品/电影/游戏/书籍/地点，请给出简短解释
 
+【时间约束 - 关键】
+- 时间必须来自转录文本中的 [MM:SS] 时间戳，不允许自由发明
+- 每个节点通过 segment 索引范围指定：seg_start_idx（第几个 segment 开始）, seg_end_idx（第几个 segment 结束）
+- 以下是当前转录稿的 segment 索引对应表（text 仅显示前 40 字）：
+{seg_hint}
+
 【输出格式】
 直接输出 JSON 数组，不要用 markdown 包裹，不要写任何解释：
 [
   {{
-    "id": "node_001",
-    "start": 26,
-    "end": 177,
-    "time": "00:26",
+    "seg_start_idx": 0,   // 节点内容在第几个 segment 开始（填数字索引）
+    "seg_end_idx": 5,     // 节点内容在第几个 segment 结束（填数字索引）
     "title": "节点标题（10字以内，能概括这段在讲什么）",
     "node_type": "company_news|product|person|topic_change|quote|background|fun_moment|other",
     "summary": "这一段主要说了什么（1-3句话）",
@@ -227,14 +429,16 @@ def _generate_nodes_for_chunk(api_key: str, chunk_text: str, chunk_index: int, t
         return []
 
 
-def _merge_timeline_chunks(chunks_results: list, title: str, api_key: str) -> dict:
+def _merge_timeline_chunks(chunks_results: list, title: str, audio_duration: float, segments: list) -> dict:
     """
     将各 chunk 生成的节点列表合并为一个完整的 timeline.json。
 
     策略：
     1. 将所有节点按 start 秒数排序
-    2. 去掉明显重叠/碎片节点（合并时间重叠超过 50% 的相邻节点）
-    3. 重新分配 node_id（格式 node_001, node_002 ...）
+    2. 合并严重重叠节点（> 80%）
+    3. 校验并修正越界时间
+    4. 重新分配 node_id
+    5. 填充过大的时间缺口
     """
     all_nodes = []
     for chunk_nodes in chunks_results:
@@ -252,7 +456,7 @@ def _merge_timeline_chunks(chunks_results: list, title: str, api_key: str) -> di
     # 按 start 排序
     all_nodes.sort(key=lambda n: n.get("start", 0) or 0)
 
-    # 合并重叠节点（时间重叠超过 50% 且标题相似）
+    # 合并重叠节点（重叠 > 80%）
     merged = []
     for node in all_nodes:
         if not merged:
@@ -261,36 +465,35 @@ def _merge_timeline_chunks(chunks_results: list, title: str, api_key: str) -> di
         last = merged[-1]
         last_end = last.get("end", 0) or 0
         last_start = last.get("start", 0) or 0
-        node_start = node.get("start", 0) or 0
+        n_start = node.get("start", 0) or 0
+        n_end = node.get("end", 0) or 0
 
-        overlap = last_end - node_start
-        last_duration = last_end - last_start
-        if overlap > 0 and overlap / max(last_duration, 1) > 0.5:
-            # 重叠超过 50%，合并：将新节点内容合并到 last
+        overlap = last_end - n_start
+        last_dur = last_end - last_start
+        if overlap > 0 and last_dur > 0 and overlap / last_dur > 0.8:
             if node.get("summary"):
-                last["summary"] = (last.get("summary", "") + " " + node.get("summary")).strip()
+                last["summary"] = (last.get("summary", "") + " " + node.get("summary", "")).strip()
             if node.get("entities"):
-                existing_names = {e["name"] for e in last.get("entities", [])}
+                existing = {e["name"] for e in last.get("entities", [])}
                 for e in node["entities"]:
-                    if e["name"] not in existing_names:
+                    if e["name"] not in existing:
                         last.setdefault("entities", []).append(e)
-            last["end"] = max(last_end, node.get("end", 0) or 0)
+            last["end"] = max(last_end, n_end)
         else:
             merged.append(node)
 
-    # 重新分配 node_id
-    final_nodes = []
-    for i, node in enumerate(merged):
-        final_nodes.append({
-            **node,
-            "id": f"node_{i + 1:03d}",
-        })
+    # 标准化（过滤越界、clamp、排序）
+    timeline_raw = {"mode": "timeline", "version": 1, "title": title, "nodes": merged}
+    normalized = _normalize_timeline(timeline_raw, audio_duration)
+
+    # 填充覆盖缺口
+    final_nodes = _fill_coverage_gaps(normalized.get("nodes", []), audio_duration, segments)
 
     return {
         "mode": "timeline",
         "version": 1,
         "title": title,
-        "nodes": final_nodes,
+        "nodes": [{**n, "id": f"node_{i + 1:03d}"} for i, n in enumerate(final_nodes)],
     }
 
 
@@ -305,7 +508,7 @@ def generate_timeline_json(
 
     策略：
     1. 短文本（≤15000 字符）：直接整稿生成
-    2. 长文本：按 segments 自然边界分块，各块并行生成，再合并
+    2. 长文本：按 segments 自然边界分块，各块顺序生成，再合并
 
     参数:
         api_key: DashScope API Key
@@ -319,12 +522,19 @@ def generate_timeline_json(
     text_len = len(podcast_text)
     print(f"[Timeline] 开始生成 timeline.json (text_len={text_len}, segments={len(transcript_segments)})")
 
+    # 获取音频总时长（从最后一个 segment 推断）
+    audio_duration = 0
+    if transcript_segments:
+        audio_duration = transcript_segments[-1].get("seconds", 0)
+        audio_duration = max(audio_duration, 60)
+
     # 短文本：整稿生成
     if text_len <= 15000:
         print(f"[Timeline] 短文本策略：整稿生成")
         try:
-            nodes = _generate_nodes_for_chunk(api_key, podcast_text, 0, 1, title)
-            timeline = _merge_timeline_chunks([nodes], title, api_key)
+            nodes = _generate_nodes_for_chunk(api_key, podcast_text, 0, 1, transcript_segments, title)
+            processed = _post_process_chunk_nodes(nodes, 0, transcript_segments)
+            timeline = _merge_timeline_chunks([processed], title, audio_duration, transcript_segments)
             print(f"[Timeline] 生成成功，共 {len(timeline.get('nodes', []))} 个节点")
             return timeline
         except Exception as e:
@@ -339,18 +549,17 @@ def generate_timeline_json(
     for i, chunk in enumerate(chunks):
         print(f"[Timeline] 处理块 {i + 1}/{len(chunks)} ...")
         try:
-            nodes = _generate_nodes_for_chunk(api_key, chunk["text"], i, len(chunks), title)
-            # 为节点补充时间范围
-            for node in nodes:
-                if not node.get("start") and chunk.get("start_seconds"):
-                    node["start"] = chunk["start_seconds"]
-                if not node.get("end") and chunk.get("end_seconds"):
-                    node["end"] = chunk["end_seconds"]
-            chunk_results.append(nodes)
+            nodes = _generate_nodes_for_chunk(
+                api_key, chunk["text"], i, len(chunks), transcript_segments, title
+            )
+            processed = _post_process_chunk_nodes(
+                nodes, chunk.get("start_seconds", 0), transcript_segments
+            )
+            chunk_results.append(processed)
         except Exception as e:
             print(f"[Timeline] 块 {i + 1} 生成失败: {e}")
             chunk_results.append([])
 
-    timeline = _merge_timeline_chunks(chunk_results, title, api_key)
+    timeline = _merge_timeline_chunks(chunk_results, title, audio_duration, transcript_segments)
     print(f"[Timeline] 生成完成，共 {len(timeline.get('nodes', []))} 个节点")
     return timeline
