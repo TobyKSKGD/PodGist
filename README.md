@@ -26,6 +26,8 @@ PodGist 所有功能都围绕时间轴展开：
 | **语义定位** | 向 AI 提问"这段话在第几分钟"，AI 告诉你具体时间戳 |
 | **归档溯源** | 每条引用自动标注来源归档和时间，回复中所有观点都有据可查 |
 
+![PodGist Homepage](assets/screenshot-timeline.png)
+
 ---
 
 ## 安装与使用
