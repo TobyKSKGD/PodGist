@@ -316,11 +316,19 @@ def _post_process_chunk_nodes(chunk_nodes: list, chunk_start_seconds: int, segme
         if end_val <= start_val:
             end_val = start_val + 60
 
+        anchor_seg = node.get("anchor_seg_idx")
+        if anchor_seg is not None and 0 <= anchor_seg < len(segments):
+            seek_val = segments[anchor_seg].get("seconds", start_val)
+        else:
+            # fallback: anchor 与 start 相同
+            seek_val = start_val
+
         clean = {k: v for k, v in node.items()
-                 if k not in ("seg_start_idx", "seg_end_idx", "start", "end", "time", "id")}
+                 if k not in ("seg_start_idx", "seg_end_idx", "anchor_seg_idx", "start", "end", "time", "id")}
         clean["start"] = start_val
         clean["end"] = end_val
         clean["time"] = _format_time(start_val)
+        clean["seek_start"] = seek_val
         result.append(clean)
 
     return result
@@ -385,8 +393,9 @@ def _generate_nodes_for_chunk(api_key: str, chunk_text: str, chunk_index: int, t
 直接输出 JSON 数组，不要用 markdown 包裹，不要写任何解释：
 [
   {{
-    "seg_start_idx": 0,   // 节点内容在第几个 segment 开始（填数字索引）
-    "seg_end_idx": 5,     // 节点内容在第几个 segment 结束（填数字索引）
+    "seg_start_idx": 0,   // 节点覆盖范围在第几个 segment 开始
+    "seg_end_idx": 5,     // 节点覆盖范围在第几个 segment 结束
+    "anchor_seg_idx": 2,  // 点击跳转的真正切入点 segment（选话题真正开始的位置，可以与 seg_start_idx 相同或略靠后）
     "title": "节点标题（10字以内，能概括这段在讲什么）",
     "node_type": "company_news|product|person|topic_change|quote|background|fun_moment|other",
     "summary": "这一段主要说了什么（1-3句话）",
