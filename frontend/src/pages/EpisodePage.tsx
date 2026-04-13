@@ -16,8 +16,8 @@ import axios from 'axios';
 import {
   IconChevronLeft, IconPlayerPlay, IconClock,
   IconMessageCircle, IconPlayerSkipForward, IconRewindBackward15,
-  IconRewindForward30, IconCheck,
-  IconChevronDown, IconChevronRight, IconExternalLink
+  IconRewindForward30,
+  IconChevronDown, IconExternalLink
 } from '@tabler/icons-react';
 
 const api = axios.create({ baseURL: 'http://localhost:8000' });
@@ -30,6 +30,7 @@ interface TimelineItem {
   time: string;        // "MM:SS"
   seconds: number;     // 总秒数
   description?: string;
+  text?: string;       // transcript segment text (segments tab)
 }
 
 interface Timeline {
@@ -213,8 +214,8 @@ export default function EpisodePage() {
     try {
       const raw = localStorage.getItem('podgist_play_progress');
       if (!raw) return;
-      const all = JSON.parse(raw);
-      const saved = all[id];
+      const all: Record<string, { archiveId: string; lastPositionSeconds: number; duration: number; updatedAt: number }> = JSON.parse(raw);
+      const saved = id ? all[id] : null;
       if (saved && saved.lastPositionSeconds > 0 && saved.lastPositionSeconds < saved.duration - 5) {
         audioRef.current.currentTime = saved.lastPositionSeconds;
         audioRef.current.pause();
@@ -244,7 +245,6 @@ export default function EpisodePage() {
 
   // ===== 音频事件 =====
 
-  const rafRef = useRef<number | null>(null);
   const lastUpdateRef = useRef<number>(0);
 
   const handleTimeUpdate = useCallback(() => {
@@ -574,9 +574,25 @@ export default function EpisodePage() {
                   };
 
                   // 统一归一化：过滤无标题实体，计算派生字段
-                  const displayEntities = (activeNode.entities ?? [])
+                  interface DisplayEntity {
+                    key: string;
+                    displayName: string;
+                    displayType: string;
+                    displayDescription: string;
+                    ec: string;
+                    sl: string;
+                    hasRef: boolean;
+                    hasMedia: boolean;
+                    mediaFilename: string;
+                    refUrl: string;
+                    refTitle: string;
+                    tier: string;
+                    tierLabel: string;
+                    refLabel: string;
+                  }
+                  const displayEntities: DisplayEntity[] = (activeNode.entities ?? [])
                     .map((entity, i) => {
-                      const displayName = entity.name || entity.title || entity.label || entity.refTitle || '';
+                      const displayName = entity.name || entity.refTitle || '';
                       if (!displayName) return null;
                       const ec = entityTypeColors[entity.type ?? ''] ?? entityTypeColors['other'];
                       const sl = sourceTierBadge[entity.sourceTier ?? ''] ?? '';
@@ -601,7 +617,7 @@ export default function EpisodePage() {
                         refLabel: refLabel[tier] ?? '链接',
                       };
                     })
-                    .filter(Boolean) as NonNullable<(typeof displayEntities)[number]>[];
+                    .filter((e): e is DisplayEntity => e !== null);
 
                   if (!displayEntities.length) return null;
                   return (
@@ -621,7 +637,7 @@ export default function EpisodePage() {
                                     alt={de.displayName}
                                     className="w-24 h-24 object-cover"
                                     onError={(e) => {
-                                      (e.target as HTMLImageElement).closest('.entity-card-media')!.style.display = 'none';
+                                      ((e.target as HTMLImageElement).closest('.entity-card-media') as HTMLElement | null)!.style.display = 'none';
                                     }}
                                   />
                                 </div>
@@ -903,7 +919,7 @@ export default function EpisodePage() {
           <div className="flex items-center gap-4">
 
             {/* 音频源 */}
-            {hasAudio && (
+            {hasAudio && archive && (
               <audio
                 ref={audioRef}
                 src={archive.audioUrl!}
@@ -1014,7 +1030,7 @@ export default function EpisodePage() {
           {/* 播放器区 */}
           <div className="px-6 py-3.5 border-b border-slate-100 shrink-0">
             <div className="flex items-center gap-3">
-              {hasAudio && (
+              {hasAudio && archive && (
                 <audio
                   ref={audioRef}
                   src={archive.audioUrl!}
@@ -1095,8 +1111,8 @@ export default function EpisodePage() {
                 <div className="flex gap-1 bg-slate-100 rounded-lg p-1">
                   {(['chapters', 'highlights', 'terms', 'segments'] as TimelineTab[]).map(tab => {
                     const count = tab === 'segments'
-                      ? archive.transcriptSegments.length
-                      : archive.timeline[tab].length;
+                      ? archive!.transcriptSegments.length
+                      : archive!.timeline[tab].length;
                     if (tab === 'terms' && count === 0) return null;
                     return (
                       <button
@@ -1170,7 +1186,7 @@ export default function EpisodePage() {
             )}
           </div>
 
-          {archive.summary && (
+          {archive && archive.summary && (
             <div className="pt-4 border-t border-slate-100">
               <button
                 onClick={() => setSummaryCollapsed(c => !c)}
@@ -1183,7 +1199,7 @@ export default function EpisodePage() {
               </button>
               {!summaryCollapsed && (
                 <p className="text-xs text-slate-500 leading-relaxed whitespace-pre-wrap line-clamp-6">
-                  {archive.summary}
+                  {archive!.summary}
                 </p>
               )}
             </div>
