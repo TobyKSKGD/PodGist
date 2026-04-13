@@ -190,10 +190,23 @@ def _generate_content_for_span(
 输出格式：纯 JSON 对象，不要 markdown 包裹，不要任何解释文字。
 字段说明：
 - title: 节点标题（10字以内，概括这段在讲什么）
+- node_type: 节点内容类型，从以下选项中选择最准确的一个：
+  company_news（公司财报/战略/合作动态）、
+  product（产品发布/评测）、
+  person（人物动态/专访）、
+  topic_change（话题切换/承上启下）、
+  background（背景知识/行业概况）、
+  fun_moment（趣味片段/金句/梗）、
+  other（不属于以上类型的杂项）
 - summary: 这段主要说了什么（1-3句话）
 - why_it_matters: 为什么这个节点重要（1句话）
-- entities: 提到的公司/人/产品/地点列表
-- facts: 具体事实（日期/数字/价格等）
+- entities: 提到的公司/人/产品/地点列表，每项须包含 name/type/description：
+  - name: 实体名称
+  - type: company|product|person|location|concept|media|other
+  - description: 在本期语境下的简要解释（1句话）
+- facts: 具体事实列表，每项须包含 label/value：
+  - label: 事实标签（如"市值"、"发布时间"、"同比增长"等）
+  - value: 具体事实内容
 - quote_or_joke_explainer: 梗/双关/上下文解释（无则空字符串）
 
 注意：只基于提供的转录片段输出，不要自由发挥时间或事实。"""
@@ -275,6 +288,92 @@ def _normalize_timeline(timeline: dict, audio_duration: float) -> dict:
     }
 
 
+# node_type 归一化映射表（支持中英文、模糊匹配）
+_NODE_TYPE_ALIASES = {
+    # company_news 变体
+    "company_news": "company_news", "company": "company_news", "公司动态": "company_news",
+    "企业动态": "company_news", "企业": "company_news",
+    # product 变体
+    "product": "product", "产品": "product", "产品发布": "product",
+    "新品": "product",
+    # person 变体
+    "person": "person", "人物": "person", "人物动态": "person", "人物专访": "person",
+    # topic_change 变体
+    "topic_change": "topic_change", "话题切换": "topic_change", "过渡": "topic_change",
+    "承上启下": "topic_change",
+    # background 变体
+    "background": "background", "背景": "background", "背景知识": "background",
+    "行业背景": "background",
+    # fun_moment / quote 变体
+    "fun_moment": "fun_moment", "趣味": "fun_moment", "金句": "fun_moment",
+    "quote": "fun_moment", "quote_or_joke_explainer": "fun_moment",
+    # 数字类
+    "1": "other", "2": "other",
+}
+
+
+def _normalize_node_type(raw: str) -> str:
+    """将模型输出的各种 node_type 格式归一化为标准值"""
+    if not raw:
+        return "other"
+    raw = raw.strip().lower()
+    return _NODE_TYPE_ALIASES.get(raw, "other")
+
+
+def _normalize_entities(raw: list) -> list:
+    """
+    规范化 entities 字段：
+    - 字符串项 -> {name: str, type: "other", description: ""}
+    - 对象项 -> 确保有 name/type/description，无则补空字符串
+    - 跳过无效项（无 name 或 name 为空）
+    """
+    if not isinstance(raw, list):
+        return []
+    result = []
+    for item in raw:
+        if isinstance(item, str):
+            name = item.strip()
+            if name:
+                result.append({"name": name, "type": "other", "description": ""})
+        elif isinstance(item, dict):
+            name = item.get("name", "")
+            if not name or not isinstance(name, str) or not name.strip():
+                continue
+            result.append({
+                "name": name.strip(),
+                "type": item.get("type", "other") or "other",
+                "description": item.get("description", "") or "",
+            })
+    return result
+
+
+def _normalize_facts(raw: list) -> list:
+    """
+    规范化 facts 字段：
+    - 字符串项 -> {label: "事实", value: str}
+    - 对象项 -> 确保有 label/value，无则补空字符串
+    - 跳过无效项
+    """
+    if not isinstance(raw, list):
+        return []
+    result = []
+    for item in raw:
+        if isinstance(item, str):
+            value = item.strip()
+            if value:
+                result.append({"label": "事实", "value": value})
+        elif isinstance(item, dict):
+            label = item.get("label", "")
+            value = item.get("value", "")
+            if not isinstance(label, str):
+                label = ""
+            if not isinstance(value, str):
+                value = ""
+            if label.strip() or value.strip():
+                result.append({"label": label.strip() or "事实", "value": value.strip()})
+    return result
+
+
 def generate_timeline_json(
     api_key: str,
     podcast_text: str,
@@ -326,11 +425,11 @@ def generate_timeline_json(
             "end": span["end"],
             "time": span["time"],
             "title": content.get("title", f"话题 {i + 1}"),
-            "node_type": content.get("node_type", "other"),
+            "node_type": _normalize_node_type(content.get("node_type", "")),
             "summary": content.get("summary", ""),
             "why_it_matters": content.get("why_it_matters", ""),
-            "entities": content.get("entities", []),
-            "facts": content.get("facts", []),
+            "entities": _normalize_entities(content.get("entities", [])),
+            "facts": _normalize_facts(content.get("facts", [])),
             "quote_or_joke_explainer": content.get("quote_or_joke_explainer", ""),
         }
         nodes.append(node)
