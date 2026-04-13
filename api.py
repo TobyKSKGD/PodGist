@@ -9,6 +9,7 @@ import re
 import argparse
 import stat
 import platform
+import mimetypes
 from datetime import datetime
 from backend.diagnostics import run_all_diagnostics
 from backend.transcriber import transcribe_with_sensevoice, transcribe_with_dashscope_and_segments, get_available_devices
@@ -206,7 +207,7 @@ async def transcribe_local(
         # 3. 根据 mode 生成内容
         safe_basename = os.path.splitext(os.path.basename(file.filename))[0]
         if mode == "timeline":
-            timeline_data = generate_timeline_json(api_key, podcast_text, transcript_segments, title=safe_basename)
+            timeline_data = generate_timeline_json(api_key, podcast_text, transcript_segments, title=safe_basename, archive_path=None)
             ai_title = timeline_data.get("title", safe_basename)
         else:
             summary = get_podcast_summary_robust(api_key, podcast_text)
@@ -585,7 +586,7 @@ def migrate_archive_to_timeline(archive_id: str):
             raise HTTPException(status_code=400, detail="请先配置 DashScope API Key")
 
         # 生成 timeline
-        timeline_data = generate_timeline_json(api_key, podcast_text, transcript_segments, title=archive_id)
+        timeline_data = generate_timeline_json(api_key, podcast_text, transcript_segments, title=archive_id, archive_path=archive_path)
 
         # 读取原 metadata
         metadata_path = os.path.join(archive_path, "metadata.json")
@@ -1282,6 +1283,27 @@ def serve_archive_cover(archive_id: str):
                 "Cache-Control": "public, max-age=86400",
                 "Content-Disposition": f'inline; filename="{cover_filename}"',
             }
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/archives/{archive_id}/media/{filename}")
+def serve_entity_media(archive_id: str, filename: str):
+    """提供 entity media 缩略图"""
+    try:
+        media_path = os.path.join(ARCHIVE_DIR, archive_id, "media", filename)
+        if not os.path.exists(media_path):
+            raise HTTPException(status_code=404, detail="文件不存在")
+        if not os.path.abspath(media_path).startswith(os.path.abspath(os.path.join(ARCHIVE_DIR, archive_id))):
+            raise HTTPException(status_code=400, detail="无效路径")
+        mime_type = mimetypes.guess_type(filename)[0] or "image/jpeg"
+        return StreamingResponse(
+            open(media_path, "rb"),
+            media_type=mime_type,
+            headers={"Cache-Control": "public, max-age=86400"},
         )
     except HTTPException:
         raise

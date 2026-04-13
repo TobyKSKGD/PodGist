@@ -63,6 +63,7 @@ interface TimelineNode {
     refUrl?: string;
     refTitle?: string;
     sourceTier?: string;
+    media?: { filename?: string; source_url?: string };
   }>;
   facts: Array<{ label: string; value: string }>;
   quote_or_joke_explainer: string;
@@ -474,7 +475,7 @@ export default function EpisodePage() {
 
   const renderTimelineMode = () => {
     const nodes = archive?.timelineData?.nodes ?? [];
-    const activeNode = currentNode ?? selectedNode;
+    const activeNode = selectedNode ?? currentNode;
 
     // 节点类型 → 配色（品牌色系深浅变化，避免彩虹化）
     const nodeTypeConfig: Record<string, { bg: string; text: string; label: string }> = {
@@ -485,10 +486,10 @@ export default function EpisodePage() {
       // 背景/话题切换 — 用中性 slate 深浅
       topic_change: { bg: 'bg-slate-100',    text: 'text-slate-500',  label: '话题切换' },
       background:   { bg: 'bg-slate-50',     text: 'text-slate-400',  label: '背景' },
-      // 趣味/金句 — 唯一用暖色区分的类型，柔和的 orange
-      fun_moment:   { bg: 'bg-orange-50',    text: 'text-orange-500', label: '趣味时刻' },
+      // 趣味/金句 — 改用主题青蓝色调
+      fun_moment:   { bg: 'bg-[#00ADA6]/10', text: 'text-[#00ADA6]', label: '趣味时刻' },
       // 合并 quote → fun_moment
-      quote:        { bg: 'bg-orange-50',    text: 'text-orange-500', label: '趣味时刻' },
+      quote:        { bg: 'bg-[#00ADA6]/10', text: 'text-[#00ADA6]', label: '趣味时刻' },
       other:        { bg: 'bg-slate-50',     text: 'text-slate-400',  label: '其他' },
     };
     const tc = activeNode?.node_type
@@ -558,57 +559,125 @@ export default function EpisodePage() {
                 )}
 
                 {/* ——— 相关实体（信息卡片） ——— */}
-                {activeNode.entities && activeNode.entities.length > 0 && (
-                  <div className="mb-6">
-                    <p className="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-3">相关实体</p>
-                    <div className="space-y-2">
-                      {activeNode.entities.map((entity, i) => {
-                        const ec = entityTypeColors[entity.type] ?? entityTypeColors['other'];
-                        const sourceTierBadge: Record<string, string> = {
-                          official: 'bg-[#EFF6FF] text-[#3B82F6] border-[#BFDBFE]',
-                          encyclopedia: 'bg-[#F0FDF4] text-[#16A34A] border-[#BBF7D0]',
-                          media: 'bg-[#FFF7ED] text-[#EA580C] border-[#FED7AA]',
-                          community: 'bg-slate-100 text-slate-500 border-slate-200',
-                        };
-                        const sl = sourceTierBadge[entity.sourceTier ?? ''] ?? '';
-                        const hasRef = !!entity.refUrl;
-                        return (
-                          <div key={i} className={`flex items-start gap-3 p-3 rounded-xl border ${ec} bg-white/60 ${hasRef ? 'hover:shadow-sm transition-shadow cursor-default' : ''}`}>
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-2 mb-1 flex-wrap">
-                                <span className="text-sm font-semibold text-slate-800">{entity.name}</span>
-                                <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${ec}`}>
-                                  {entity.type}
-                                </span>
-                                {hasRef && entity.sourceTier && (
-                                  <span className={`text-xs px-1.5 py-0.5 rounded border font-medium ${sl}`}>
-                                    {entity.sourceTier === 'official' ? '官方' :
-                                     entity.sourceTier === 'encyclopedia' ? '百科' :
-                                     entity.sourceTier === 'media' ? '媒体' : '社区'}
-                                  </span>
+                {(() => {
+                  const sourceTierBadge: Record<string, string> = {
+                    official: 'bg-[#EFF6FF] text-[#3B82F6] border-[#BFDBFE]',
+                    encyclopedia: 'bg-[#F0FDF4] text-[#16A34A] border-[#BBF7D0]',
+                    media: 'bg-[#FFF7ED] text-[#EA580C] border-[#FED7AA]',
+                    community: 'bg-slate-100 text-slate-500 border-slate-200',
+                  };
+                  const tierLabel: Record<string, string> = {
+                    official: '官方', encyclopedia: '百科', media: '媒体', community: '社区',
+                  };
+                  const refLabel: Record<string, string> = {
+                    official: '官网', encyclopedia: '百度百科', media: '媒体', community: '链接',
+                  };
+
+                  // 统一归一化：过滤无标题实体，计算派生字段
+                  const displayEntities = (activeNode.entities ?? [])
+                    .map((entity, i) => {
+                      const displayName = entity.name || entity.title || entity.label || entity.refTitle || '';
+                      if (!displayName) return null;
+                      const ec = entityTypeColors[entity.type ?? ''] ?? entityTypeColors['other'];
+                      const sl = sourceTierBadge[entity.sourceTier ?? ''] ?? '';
+                      const tier = entity.sourceTier ?? '';
+                      const hasRef = !!(entity.refUrl && !entity.refUrl.includes('github.com'));
+                      const hasMedia = !!(entity.media?.filename);
+                      const mediaFilename = entity.media?.filename ?? '';
+                      return {
+                        key: `${activeNode.id}-${displayName}-${i}`,
+                        displayName,
+                        displayType: entity.type ?? 'other',
+                        displayDescription: entity.description ?? '',
+                        ec,
+                        sl,
+                        hasRef,
+                        hasMedia,
+                        mediaFilename,
+                        refUrl: entity.refUrl ?? '',
+                        refTitle: entity.refTitle ?? '',
+                        tier,
+                        tierLabel: tierLabel[tier] ?? tier,
+                        refLabel: refLabel[tier] ?? '链接',
+                      };
+                    })
+                    .filter(Boolean) as NonNullable<(typeof displayEntities)[number]>[];
+
+                  if (!displayEntities.length) return null;
+                  return (
+                    <div className="mb-6">
+                      <p className="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-3">相关实体</p>
+                      <div className="space-y-2">
+                        {displayEntities.map((de) => (
+                          <div
+                            key={de.key}
+                            className={`rounded-xl border ${de.ec} bg-white/60 overflow-hidden ${de.hasRef ? 'hover:shadow-sm transition-shadow cursor-default' : ''}`}
+                          >
+                            {de.hasMedia ? (
+                              <div className="flex gap-0">
+                                <div className="shrink-0 entity-card-media">
+                                  <img
+                                    src={`/api/archives/${archive?.id}/media/${de.mediaFilename}`}
+                                    alt={de.displayName}
+                                    className="w-24 h-24 object-cover"
+                                    onError={(e) => {
+                                      (e.target as HTMLImageElement).closest('.entity-card-media')!.style.display = 'none';
+                                    }}
+                                  />
+                                </div>
+                                <div className="flex-1 min-w-0 p-3 flex flex-col gap-1.5">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="text-sm font-semibold text-slate-800">{de.displayName}</span>
+                                    <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${de.ec}`}>{de.displayType}</span>
+                                    {de.hasRef && de.tier && (
+                                      <span className={`text-xs px-1.5 py-0.5 rounded border font-medium ${de.sl}`}>{de.tierLabel}</span>
+                                    )}
+                                  </div>
+                                  {de.displayDescription && (
+                                    <p className="text-xs text-slate-500 leading-relaxed line-clamp-2">{de.displayDescription}</p>
+                                  )}
+                                  {de.hasRef && de.refUrl && (
+                                    <a
+                                      href={de.refUrl}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-xs text-[#00ADA6] hover:text-[#009A94] flex items-center gap-1 mt-0.5"
+                                    >
+                                      参考：{de.refTitle || de.refLabel}<IconExternalLink size={11} />
+                                    </a>
+                                  )}
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="p-3 flex flex-col gap-1.5">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="text-sm font-semibold text-slate-800">{de.displayName}</span>
+                                  <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${de.ec}`}>{de.displayType}</span>
+                                  {de.hasRef && de.tier && (
+                                    <span className={`text-xs px-1.5 py-0.5 rounded border font-medium ${de.sl}`}>{de.tierLabel}</span>
+                                  )}
+                                </div>
+                                {de.displayDescription && (
+                                  <p className="text-xs text-slate-500 leading-relaxed">{de.displayDescription}</p>
+                                )}
+                                {de.hasRef && de.refUrl && (
+                                  <a
+                                    href={de.refUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-xs text-[#00ADA6] hover:text-[#009A94] flex items-center gap-1 mt-0.5"
+                                  >
+                                    参考：{de.refTitle || de.refLabel}<IconExternalLink size={11} />
+                                  </a>
                                 )}
                               </div>
-                              {entity.description && (
-                                <p className="text-xs text-slate-500 leading-relaxed">{entity.description}</p>
-                              )}
-                            </div>
-                            {hasRef && entity.refUrl && (
-                              <a
-                                href={entity.refUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="shrink-0 w-7 h-7 rounded-lg bg-white border border-slate-100 flex items-center justify-center hover:border-[#00ADA6]/40 hover:text-[#00ADA6] transition-colors"
-                                title={entity.refTitle || entity.name}
-                              >
-                                <IconExternalLink size={13} />
-                              </a>
                             )}
                           </div>
-                        );
-                      })}
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
 
                 {/* ——— 关键事实（结构化事实卡） ——— */}
                 {activeNode.facts && activeNode.facts.length > 0 && (
@@ -636,67 +705,78 @@ export default function EpisodePage() {
                 )}
 
                 {/* ——— 参考链接（references 区块） ——— */}
-                {activeNode.references && activeNode.references.length > 0 && (
-                  <div className="mb-6">
-                    <p className="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-3">参考链接</p>
-                    <div className="space-y-2">
-                      {activeNode.references.map((ref, i) => {
-                        const sourceLabel: Record<string, string> = {
-                          wikipedia: '维基百科',
-                          github: 'GitHub',
-                          official: '官网',
-                          article: '文章',
-                          webpage: '网页',
-                        };
-                        const kindLabel: Record<string, string> = {
-                          tool: '工具',
-                          company: '公司',
-                          product: '产品',
-                          game: '游戏',
-                          film: '影视',
-                          document: '文档',
-                          article: '文章',
-                          repo: '仓库',
-                          webpage: '网页',
-                          person: '人物',
-                          location: '地点',
-                        };
-                        const sl = sourceLabel[ref.source] ?? ref.source;
-                        const kl = kindLabel[ref.kind] ?? ref.kind;
-                        return (
-                          <a
-                            key={i}
-                            href={ref.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex items-center gap-3 p-3 bg-white border border-slate-100 rounded-xl hover:border-[#00ADA6]/30 hover:shadow-sm transition-all group"
-                          >
-                            <div className="w-8 h-8 rounded-lg bg-[#EFF6FF] flex items-center justify-center shrink-0">
-                              <IconExternalLink size={14} className="text-[#3B82F6]" />
-                            </div>
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-2 mb-0.5">
-                                <span className="text-sm font-medium text-slate-700 group-hover:text-[#00ADA6] transition-colors truncate">
-                                  {ref.title}
-                                </span>
-                                <span className="text-xs px-1.5 py-0.5 rounded bg-[#EFF6FF] text-[#64748B] shrink-0">
-                                  {sl}
-                                </span>
-                                {kl && kl !== sl && (
-                                  <span className="text-xs px-1.5 py-0.5 rounded bg-slate-100 text-slate-400 shrink-0">
-                                    {kl}
-                                  </span>
-                                )}
+                {(() => {
+                  const entityUrls = new Set(
+                    (activeNode.entities || [])
+                      .filter(e => e.refUrl && !e.refUrl.includes('github.com'))
+                      .map(e => e.refUrl)
+                  );
+                  const filteredRefs = (activeNode.references || []).filter(ref => {
+                    if (ref.source === 'github' || ref.kind === 'repo') return false;
+                    if (entityUrls.has(ref.url)) return false;
+                    return true;
+                  });
+                  if (!filteredRefs.length) return null;
+                  return (
+                    <div className="mb-6">
+                      <p className="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-3">参考链接</p>
+                      <div className="space-y-2">
+                        {filteredRefs.map((ref, i) => {
+                          const sourceLabel: Record<string, string> = {
+                            wikipedia: '维基百科',
+                            official: '官网',
+                            article: '文章',
+                            webpage: '网页',
+                          };
+                          const kindLabel: Record<string, string> = {
+                            tool: '工具',
+                            company: '公司',
+                            product: '产品',
+                            game: '游戏',
+                            film: '影视',
+                            document: '文档',
+                            article: '文章',
+                            webpage: '网页',
+                            person: '人物',
+                            location: '地点',
+                          };
+                          const sl = sourceLabel[ref.source] ?? ref.source;
+                          const kl = kindLabel[ref.kind] ?? ref.kind;
+                          return (
+                            <a
+                              key={i}
+                              href={ref.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center gap-3 p-3 bg-white border border-slate-100 rounded-xl hover:border-[#00ADA6]/30 hover:shadow-sm transition-all group"
+                            >
+                              <div className="w-8 h-8 rounded-lg bg-[#EFF6FF] flex items-center justify-center shrink-0">
+                                <IconExternalLink size={14} className="text-[#3B82F6]" />
                               </div>
-                              <p className="text-xs text-slate-400 truncate">{ref.note}</p>
-                            </div>
-                          </a>
-                        );
-                      })}
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-2 mb-0.5">
+                                  <span className="text-sm font-medium text-slate-700 group-hover:text-[#00ADA6] transition-colors truncate">
+                                    {ref.title}
+                                  </span>
+                                  <span className="text-xs px-1.5 py-0.5 rounded bg-[#EFF6FF] text-[#64748B] shrink-0">
+                                    {sl}
+                                  </span>
+                                  {kl && kl !== sl && (
+                                    <span className="text-xs px-1.5 py-0.5 rounded bg-slate-100 text-slate-400 shrink-0">
+                                      {kl}
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-xs text-slate-400 truncate">{ref.note}</p>
+                              </div>
+                            </a>
+                          );
+                        })}
+                      </div>
+                      <p className="text-xs text-slate-300 mt-2">链接由 AI 辅助生成，请自行判断</p>
                     </div>
-                    <p className="text-xs text-slate-300 mt-2">引用由 AI 辅助生成，请自行甄别</p>
-                  </div>
-                )}
+                  );
+                })()}
 
                 {/* ——— 空状态 ——— */}
                 {!activeNode.summary && !activeNode.why_it_matters
@@ -706,6 +786,13 @@ export default function EpisodePage() {
                       <p className="text-sm text-slate-400">暂无详细解读内容</p>
                     </div>
                   )}
+
+                {/* ——— 节点级统一提示（只在有内容时显示）———— */}
+                {(activeNode.entities?.length || activeNode.facts?.length || activeNode.references?.length) && (
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    链接、图片等内容由 AI 辅助收集，请自行判断。
+                  </p>
+                )}
 
                 {/* 底部留白（让滚动有呼吸感） */}
                 <div className="h-8" />

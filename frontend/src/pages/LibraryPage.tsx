@@ -26,6 +26,7 @@ interface ArchiveItem {
   mode: string;       // "summary" | "timeline"
   hasTimeline: boolean;
   canMigrate: boolean;
+  coverUrl?: string;  // 本地封面地址，有则优先显示
 }
 
 interface PlayProgress {
@@ -232,12 +233,30 @@ export default function LibraryPage() {
                     onClick={() => navigate(`/episode/${item.archiveId}`)}
                     className="relative w-[180px] h-[180px] flex-shrink-0 rounded-2xl overflow-hidden group cursor-pointer focus:outline-none"
                   >
-                    {/* 封面层：占位图标 */}
-                    <div className="absolute inset-0 bg-gradient-to-br from-[#00ADA6]/15 to-[#0891B2]/8 flex items-center justify-center">
-                      <div className="w-12 h-12 rounded-xl bg-white/90 shadow-sm flex items-center justify-center">
-                        <IconMicrophone size={22} className="text-[#00ADA6]" />
+                    {/* 封面层：优先本地封面，无则占位图标 */}
+                    {item.archive.coverUrl ? (
+                      <img
+                        src={item.archive.coverUrl}
+                        alt={item.archive.name}
+                        className="absolute inset-0 w-full h-full object-cover"
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).style.display = 'none';
+                          const parent = (e.target as HTMLImageElement).parentElement;
+                          if (parent) {
+                            const fallback = document.createElement('div');
+                            fallback.className = 'absolute inset-0 bg-gradient-to-br from-[#00ADA6]/15 to-[#0891B2]/8 flex items-center justify-center';
+                            fallback.innerHTML = '<div class="w-12 h-12 rounded-xl bg-white/90 shadow-sm flex items-center justify-center"><svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#00ADA6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg></div>';
+                            parent.appendChild(fallback);
+                          }
+                        }}
+                      />
+                    ) : (
+                      <div className="absolute inset-0 bg-gradient-to-br from-[#00ADA6]/15 to-[#0891B2]/8 flex items-center justify-center">
+                        <div className="w-12 h-12 rounded-xl bg-white/90 shadow-sm flex items-center justify-center">
+                          <IconMicrophone size={22} className="text-[#00ADA6]" />
+                        </div>
                       </div>
-                    </div>
+                    )}
 
                     {/* 默认状态：仅底部极细进度线 */}
                     <div className="absolute bottom-0 left-0 right-0 h-[3px] bg-slate-200/60">
@@ -374,8 +393,23 @@ export default function LibraryPage() {
                     onClick={() => navigate(`/episode/${item.id}`)}
                     className="flex items-center gap-3 flex-1 min-w-0 text-left"
                   >
-                    {/* 占位图标 */}
-                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${item.hasAudio ? 'bg-[#00ADA6]/10' : 'bg-slate-100'}`}>
+                    {/* 封面缩略图 */}
+                    {item.coverUrl ? (
+                      <img
+                        src={item.coverUrl}
+                        alt={item.name}
+                        className="w-8 h-8 rounded-lg object-cover shrink-0"
+                        onError={(e) => {
+                          const img = e.target as HTMLImageElement;
+                          img.style.display = 'none';
+                          const span = img.nextElementSibling as HTMLElement;
+                          if (span) span.style.display = '';
+                        }}
+                      />
+                    ) : null}
+                    <div
+                      className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${item.hasAudio ? 'bg-[#00ADA6]/10' : 'bg-slate-100'} ${item.coverUrl ? 'hidden' : ''}`}
+                    >
                       <IconMicrophone size={14} className={item.hasAudio ? 'text-[#00ADA6]' : 'text-slate-400'} />
                     </div>
 
@@ -393,7 +427,7 @@ export default function LibraryPage() {
                     <div className="flex items-center gap-1 shrink-0">
                       {/* 模式标签 */}
                       {item.mode === 'timeline' ? (
-                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs rounded bg-purple-50 text-purple-500">
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs rounded bg-[#00ADA6]/10 text-[#00ADA6]">
                           <IconTimelineEvent size={10} />
                           时间轴
                         </span>
@@ -415,11 +449,11 @@ export default function LibraryPage() {
                     <button
                       onClick={(e) => { e.stopPropagation(); handleMigrate(item); }}
                       disabled={migratingId === item.id}
-                      className="flex items-center gap-1 px-2 py-1 rounded-md text-xs text-purple-500 hover:bg-purple-50 transition-colors opacity-0 group-hover:opacity-100 shrink-0"
+                      className="flex items-center gap-1 px-2 py-1 rounded-md text-xs text-[#0891B2] hover:bg-[#0891B2]/10 transition-colors opacity-0 group-hover:opacity-100 shrink-0"
                       title="转换为时间轴模式"
                     >
                       {migratingId === item.id ? (
-                        <div className="w-3.5 h-3.5 border border-purple-300 border-t-purple-500 rounded-full animate-spin" />
+                        <div className="w-3.5 h-3.5 border border-[#0891B2]/30 border-t-[#0891B2] rounded-full animate-spin" />
                       ) : (
                         <IconTimelineEvent size={12} />
                       )}

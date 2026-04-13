@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
+import { useNavigate } from 'react-router-dom';
 import { IconRefresh, IconTrash, IconPlayerPlay, IconPlayerPause, IconAlertCircle, IconCircleCheck, IconClock, IconLoader2, IconX, IconChevronDown, IconChevronUp, IconFileDescription, IconExternalLink } from '@tabler/icons-react';
 import { useToast } from './Toast';
 
@@ -40,6 +41,7 @@ export default function TaskQueue({
   onRefreshArchives,
 }: TaskQueueProps) {
   const { showToast } = useToast();
+  const navigate = useNavigate();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [stats, setStats] = useState<QueueStats | null>(null);
   const [loading, setLoading] = useState(false);
@@ -244,12 +246,13 @@ export default function TaskQueue({
 
   const getTypeBadge = (type: string) => {
     const typeMap: Record<string, { label: string; className: string }> = {
-      xiaoyuzhou: { label: '播客', className: 'bg-[#FFF1F3] text-[#E11D48]' },
+      xiaoyuzhou: { label: '播客', className: 'bg-[#E1F5FE] text-[#009A94]' },
       bilibili: { label: '视频', className: 'bg-[#E1F5FE] text-[#009A94]' },
-      netease: { label: '网易云', className: 'bg-[#FFF1F3] text-[#E11D48]' },
-      ximalaya: { label: '喜马拉雅', className: 'bg-[#D1FAF5] text-[#0891B2]' },
-      applepodcasts: { label: '苹果播客', className: 'bg-slate-100 text-slate-600' },
-      local: { label: '本地', className: 'bg-slate-100 text-slate-600' },
+      netease: { label: '网易云', className: 'bg-[#E1F5FE] text-[#009A94]' },
+      ximalaya: { label: '喜马拉雅', className: 'bg-[#E1F5FE] text-[#009A94]' },
+      applepodcasts: { label: '苹果播客', className: 'bg-[#E1F5FE] text-[#009A94]' },
+      apple: { label: '苹果播客', className: 'bg-[#E1F5FE] text-[#009A94]' },
+      local: { label: '本地', className: 'bg-[#E1F5FE] text-[#009A94]' },
     };
     const info = typeMap[type] || { label: '未知', className: 'bg-slate-100 text-slate-500' };
     return (
@@ -431,7 +434,10 @@ export default function TaskQueue({
                             <button
                               onClick={() => {
                                 const archiveId = task.result_path?.split('/').pop();
-                                if (archiveId && onViewArchive) onViewArchive(archiveId);
+                                if (archiveId) {
+                                  navigate(`/episode/${archiveId}`);
+                                  if (onViewArchive) onViewArchive(archiveId);
+                                }
                               }}
                               className="flex items-center gap-1 text-xs text-[#10B981] hover:text-[#0891B2] transition-colors"
                             >

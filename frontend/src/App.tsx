@@ -139,7 +139,7 @@ function AppContent() {
   const handleViewNotification = (archiveId: string, id: string, taskId: string) => {
     setSelectedArchiveId(archiveId);
     setCurrentView('result');
-    navigate(`/result/${archiveId}`, { replace: true });
+    navigate(`/episode/${archiveId}`, { replace: true });
     removeNotification(id, taskId);
   };
 
@@ -243,7 +243,7 @@ function AppContent() {
     return (
       <div className="flex h-screen w-full items-center justify-center bg-[#F9F9F9]">
         <div className="flex flex-col items-center gap-4">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#008080]"></div>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#00ADA6]"></div>
           <p className="text-slate-500 font-medium">PodGist 核心引擎启动中...</p>
         </div>
       </div>
