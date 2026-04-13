@@ -12,6 +12,7 @@ import {
 } from '@tabler/icons-react';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { useToast } from '../components/Toast';
+import { resolveApiAssetUrl } from '../utils/apiAsset';
 
 const api = axios.create({ baseURL: 'http://localhost:8000' });
 
@@ -236,7 +237,7 @@ export default function LibraryPage() {
                     {/* 封面层：优先本地封面，无则占位图标 */}
                     {item.archive.coverUrl ? (
                       <img
-                        src={item.archive.coverUrl}
+                        src={resolveApiAssetUrl(item.archive.coverUrl)}
                         alt={item.archive.name}
                         className="absolute inset-0 w-full h-full object-cover"
                         onError={(e) => {
@@ -396,7 +397,7 @@ export default function LibraryPage() {
                     {/* 封面缩略图 */}
                     {item.coverUrl ? (
                       <img
-                        src={item.coverUrl}
+                        src={resolveApiAssetUrl(item.coverUrl)}
                         alt={item.name}
                         className="w-8 h-8 rounded-lg object-cover shrink-0"
                         onError={(e) => {
