@@ -24,6 +24,7 @@ from backend.rag_db import (
     index_archive, delete_archive_vectors, get_archives_by_tag, init_db as init_rag_db
 )
 from backend.rag_retriever import generate_chat_response
+from backend.fetch_cover import fetch_cover, download_cover_image
 from sse_starlette.sse import EventSourceResponse
 import asyncio
 
@@ -131,7 +132,7 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 os.makedirs(ARCHIVE_DIR, exist_ok=True)
 
 
-def save_archive_metadata(archive_path: str, title: str, mode: str, source_type: str, source_url: str, audio_saved: bool, audio_filename: str | None):
+def save_archive_metadata(archive_path: str, title: str, mode: str, source_type: str, source_url: str, audio_saved: bool, audio_filename: str | None, cover_saved: bool = False, cover_filename: str | None = None, cover_source_url: str | None = None, cover_type: str | None = None):
     """
     将归档元数据写入 archive_path/metadata.json。
 
@@ -143,6 +144,10 @@ def save_archive_metadata(archive_path: str, title: str, mode: str, source_type:
         source_url: 原始来源 URL（本地文件为本地路径）
         audio_saved: 是否保存了音频副本
         audio_filename: 归档中音频文件名（如 source.mp3），无则为 None
+        cover_saved: 是否保存了封面副本
+        cover_filename: 归档中封面文件名（如 cover.jpg），无则为 None
+        cover_source_url: 原始封面来源 URL
+        cover_type: 封面类型 'episode' | 'show' | 'video' | 'webpage'
     """
     import json
     metadata = {
@@ -155,6 +160,10 @@ def save_archive_metadata(archive_path: str, title: str, mode: str, source_type:
         "audio_filename": audio_filename,
         "can_redownload": source_url.startswith("http") or source_url.startswith("www"),
         "created_at": datetime.now().isoformat(),
+        "cover_saved": cover_saved,
+        "cover_filename": cover_filename,
+        "cover_source_url": cover_source_url,
+        "cover_type": cover_type,
     }
     metadata_path = os.path.join(archive_path, "metadata.json")
     with open(metadata_path, "w", encoding="utf-8") as f:
@@ -349,20 +358,43 @@ async def transcribe_url(
         archive_path = os.path.join(ARCHIVE_DIR, archive_name)
         os.makedirs(archive_path, exist_ok=True)
 
-        # 6.5 确定 source_type
+        # 6.5 确定 source_type 并尝试抓取封面
         source_type = "bilibili" if type == "bilibili" else "podcast_url"
 
-        # 6.6 保存音频副本
+        # 6.6 抓取封面（不阻塞主流程）
+        cover_saved = False
+        cover_filename = None
+        cover_source_url = None
+        cover_type = None
+        try:
+            cover_url, cover_type = fetch_cover(url, source_type)
+            if cover_url:
+                tmp_cover = os.path.join(archive_path, "cover.tmp")
+                if download_cover_image(cover_url, tmp_cover):
+                    # 重命名获取实际后缀
+                    actual_ext = os.path.splitext(tmp_cover)[1]
+                    cover_filename = "cover" + actual_ext
+                    cover_dest = os.path.join(archive_path, cover_filename)
+                    os.rename(tmp_cover, cover_dest)
+                    cover_saved = True
+                    cover_source_url = cover_url
+                    print(f"[Cover] 封面已保存: {cover_filename}")
+                elif os.path.exists(tmp_cover):
+                    os.remove(tmp_cover)
+        except Exception as e:
+            print(f"[Cover] 封面抓取失败（不阻塞主流程）: {e}")
+
+        # 6.7 保存音频副本
         audio_filename = None
         audio_saved = False
         if os.path.exists(file_path):
-            _, ext = os.path.splitext(file.filename)
+            _, ext = os.path.splitext(file_path)
             audio_filename = f"source{ext}"
             audio_dest = os.path.join(archive_path, audio_filename)
             shutil.copy2(file_path, audio_dest)
             audio_saved = True
 
-        # 6.7 保存 metadata.json
+        # 6.8 保存 metadata.json
         save_archive_metadata(
             archive_path=archive_path,
             title=safe_title,
@@ -371,6 +403,10 @@ async def transcribe_url(
             source_url=url,
             audio_saved=audio_saved,
             audio_filename=audio_filename,
+            cover_saved=cover_saved,
+            cover_filename=cover_filename,
+            cover_source_url=cover_source_url,
+            cover_type=cover_type,
         )
 
         # 7. 保存原始转录文本
@@ -476,6 +512,25 @@ def get_archives():
                         pass
                 # 检查是否有 timeline.json
                 has_timeline = os.path.exists(os.path.join(item_path, "timeline.json"))
+
+                # 读取封面信息（容错：metadata 可能有误，以磁盘实际文件为准）
+                cover_url = None
+                if os.path.exists(metadata_path):
+                    try:
+                        with open(metadata_path, "r", encoding="utf-8") as f:
+                            meta = json.load(f)
+                            cf = meta.get("cover_filename")
+                            if cf and os.path.exists(os.path.join(item_path, cf)):
+                                cover_url = f"/api/archives/{item}/cover"
+                    except Exception:
+                        pass
+                # metadata 读取失败或 cover_saved 不准确时，扫描磁盘上是否有 cover.* 文件
+                if not cover_url:
+                    for fname in os.listdir(item_path):
+                        if fname.startswith("cover.") and not fname.startswith("cover.tmp"):
+                            cover_url = f"/api/archives/{item}/cover"
+                            break
+
                 archives.append({
                     "id": item,
                     "name": display_name,
@@ -485,6 +540,7 @@ def get_archives():
                     "mode": mode,
                     "hasTimeline": has_timeline,
                     "canMigrate": can_migrate,
+                    "coverUrl": cover_url,
                 })
 
         return {
@@ -1019,6 +1075,24 @@ def get_archive_detail(archive_id: str):
             with open(tl_path, "r", encoding="utf-8") as f:
                 timeline_data = json.load(f)
 
+        # 解析封面 URL（容错：metadata 可能有误，以磁盘实际文件为准）
+        cover_url = None
+        if os.path.exists(metadata_path):
+            try:
+                import json as _json
+                with open(metadata_path, "r", encoding="utf-8") as f:
+                    meta = _json.load(f)
+                cf = meta.get("cover_filename")
+                if cf and os.path.exists(os.path.join(archive_path, cf)):
+                    cover_url = f"/api/archives/{archive_id}/cover"
+            except Exception:
+                pass
+        if not cover_url:
+            for fname in os.listdir(archive_path):
+                if fname.startswith("cover.") and not fname.startswith("cover.tmp"):
+                    cover_url = f"/api/archives/{archive_id}/cover"
+                    break
+
         return {
             "status": "success",
             "data": {
@@ -1029,6 +1103,7 @@ def get_archive_detail(archive_id: str):
                 "createTime": create_time,
                 "audioUrl": audio_url,
                 "audioFilename": audio_filename,
+                "coverUrl": cover_url,
                 "timeline": timeline,
                 "transcriptSegments": transcript_segments,
                 "mode": metadata.get("mode", "summary") if metadata else "summary",
@@ -1139,6 +1214,73 @@ def stream_archive_audio(archive_id: str, request: Request):
                 "Content-Length": str(file_size),
                 "Accept-Ranges": "bytes",
                 "Content-Disposition": f'inline; filename="{audio_filename}"',
+            }
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/archives/{archive_id}/cover")
+def serve_archive_cover(archive_id: str):
+    """
+    返回归档目录中的封面图片文件。
+    """
+    try:
+        archive_path = os.path.join(ARCHIVE_DIR, archive_id)
+
+        # 安全检查
+        if not os.path.abspath(archive_path).startswith(os.path.abspath(ARCHIVE_DIR)):
+            raise HTTPException(status_code=400, detail="无效的归档ID")
+
+        if not os.path.exists(archive_path) or not os.path.isdir(archive_path):
+            raise HTTPException(status_code=404, detail="归档不存在")
+
+        # 读取 metadata 找到封面文件名（容错：以磁盘实际文件为准）
+        metadata_path = os.path.join(archive_path, "metadata.json")
+        cover_filename = None
+        if os.path.exists(metadata_path):
+            try:
+                with open(metadata_path, "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+                    cf = meta.get("cover_filename")
+                    if cf and os.path.exists(os.path.join(archive_path, cf)):
+                        cover_filename = cf
+            except Exception:
+                pass
+
+        # metadata 读取失败或 cover_saved 不准确时，扫描磁盘上是否有 cover.* 文件
+        if not cover_filename:
+            for fname in os.listdir(archive_path):
+                if fname.startswith("cover.") and not fname.startswith("cover.tmp"):
+                    cover_filename = fname
+                    break
+
+        if not cover_filename:
+            raise HTTPException(status_code=404, detail="归档无封面")
+
+        cover_path = os.path.join(archive_path, cover_filename)
+        if not os.path.exists(cover_path):
+            raise HTTPException(status_code=404, detail="封面文件不存在")
+
+        import mimetypes
+        mime_type, _ = mimetypes.guess_type(cover_path)
+        mime_type = mime_type or "image/jpeg"
+        file_size = os.path.getsize(cover_path)
+
+        def iterfile():
+            with open(cover_path, "rb") as f:
+                while chunk := f.read(65536):
+                    yield chunk
+
+        return StreamingResponse(
+            iterfile(),
+            media_type=mime_type,
+            headers={
+                "Content-Length": str(file_size),
+                "Cache-Control": "public, max-age=86400",
+                "Content-Disposition": f'inline; filename="{cover_filename}"',
             }
         )
     except HTTPException:

@@ -4,13 +4,17 @@ timeline_agent.py — 时间轴模式专用生成链路（Program-Slices-Span, M
 协议重构：程序切段，模型写内容。
 - 程序先基于 transcript segments 自然边界切分连续 span
 - 程序确定 span 的 start/end/time/seg_start_idx/seg_end_idx
-- 模型只负责为每个 span 输出 title/summary/entities/facts 等内容字段
+- 模型只负责为每个 span 输出 title/summary/entities 等内容字段
 - 不再让模型决定节点边界
+- 程序负责 URL 解析（references），模型只提供候选实体
 """
 
 import json
 import re
 import time
+import os
+import urllib.parse
+import urllib.request
 from typing import Optional
 
 from dashscope import Generation
@@ -18,6 +22,9 @@ from http import HTTPStatus
 
 TIMELINE_MODEL = 'qwen-plus'
 
+# ---------------------------------------------------------------------------
+# LLM 调用
+# ---------------------------------------------------------------------------
 
 def _call_llm_json(api_key: str, messages: list, temperature: float = 0.3) -> dict:
     last_err = None
@@ -63,24 +70,415 @@ def _format_time(seconds: float) -> str:
     return f"{s // 60}:{s % 60:02d}"
 
 
+# ---------------------------------------------------------------------------
+# URL 解析服务（程序侧，非 LLM 直接生成）
+# 来源层级：official > encyclopedia > media > community
+# ---------------------------------------------------------------------------
+
+# 来源层级定义（数值越高越可信）
+SOURCE_TIERS = {
+    "official": 4,
+    "encyclopedia": 3,
+    "media": 2,
+    "community": 1,
+}
+SOURCE_LABELS = {
+    "official": "官方",
+    "encyclopedia": "百科",
+    "media": "媒体",
+    "community": "社区",
+}
+
+
+def _http_get(url: str, timeout: int = 5) -> Optional[str]:
+    """轻量 GET，失败返回 None"""
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 PodGist/1.0"},
+            method="GET",
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if resp.status == 200:
+                charset = resp.headers.get_content_charset() or "utf-8"
+                return resp.read().decode(charset, errors="replace")
+    except Exception:
+        pass
+    return None
+
+
+def _best_result(results: list) -> Optional[dict]:
+    """从多个候选结果中选择最优的（按 sourceTier > confidence > 匹配度）"""
+    if not results:
+        return None
+    results.sort(key=lambda r: (
+        SOURCE_TIERS.get(r.get("sourceTier", "community"), 0),
+        r.get("confidence", 0),
+    ), reverse=True)
+    return results[0]
+
+
+def _normalize_title_match(query: str, title: str) -> float:
+    """返回 0~1 的标题匹配度分数"""
+    q = query.lower().replace('-', '').replace(' ', '').replace('_', '')
+    t = title.lower().replace('-', '').replace(' ', '').replace('_', '')
+    if q == t:
+        return 1.0
+    if q in t or t in q:
+        return 0.85
+    # 部分匹配
+    q_chars = set(q)
+    t_chars = set(t)
+    overlap = len(q_chars & t_chars) / max(len(q_chars), 1)
+    return overlap * 0.6 if overlap > 0.5 else 0
+
+
+# ---- 百度百科 ----
+def _resolve_baidu_baike(query: str) -> Optional[dict]:
+    """百度百科搜索"""
+    search_url = (
+        "https://www.baidu.com/s?wd="
+        f"{urllib.parse.quote(query + ' 百度百科')}"
+        "&rn=1&ie=utf-8"
+    )
+    text = _http_get(search_url)
+    if not text:
+        return None
+    try:
+        # 从搜索结果中提取百度百科链接
+        baike_match = re.search(r'href="(https?://baike\.baidu\.com/item[^"#]+)"', text)
+        if not baike_match:
+            baike_match = re.search(r'href="([^"]+baike\.baidu\.com[^"]+)"', text)
+        if baike_match:
+            url = baike_match.group(1).split('?')[0].split('#')[0]
+            title_match = re.search(r'>([^<]*' + re.escape(query) + r'[^<]*百科[^<]*)<', text)
+            title = title_match.group(1).strip() if title_match else query
+            match_score = _normalize_title_match(query, title)
+            return {
+                "title": re.sub(r'[（）()【】\[\]]', '', title)[:60],
+                "url": url[:200],
+                "sourceTier": "encyclopedia",
+                "confidence": 0.82 if match_score > 0.7 else 0.65,
+                "note": "AI 生成，请自行判断",
+            }
+    except Exception:
+        pass
+    return None
+
+
+# ---- 维基百科（中英文） ----
+def _resolve_wikipedia(query: str, clean_query: str) -> Optional[dict]:
+    """中英文 Wikipedia 搜索，返回最优结果"""
+
+    def _search_wiki(lang: str, q: str) -> Optional[dict]:
+        search_url = (
+            f"https://{lang}.wikipedia.org/w/api.php"
+            "?action=opensearch"
+            f"&search={urllib.parse.quote(q)}"
+            "&limit=1"
+            "&namespace=0"
+            "&format=json"
+        )
+        text = _http_get(search_url)
+        if not text:
+            return None
+        try:
+            data = json.loads(text)
+            if not data or len(data) < 4:
+                return None
+            titles = data[1]
+            urls = data[3]
+            if not titles or not urls or not titles[0] or not urls[0]:
+                return None
+            title = titles[0]
+            url = urls[0]
+            match_score = _normalize_title_match(q, title)
+            confidence = 0.85 if match_score > 0.75 else 0.65
+            return {
+                "title": title[:60],
+                "url": url,
+                "sourceTier": "encyclopedia",
+                "confidence": confidence,
+                "note": "AI 生成，请自行判断",
+            }
+        except Exception:
+            return None
+
+    results = []
+    r1 = _search_wiki("en", clean_query)
+    if r1:
+        results.append(r1)
+    r2 = _search_wiki("zh", clean_query)
+    if r2:
+        results.append(r2)
+    return _best_result(results)
+
+
+# ---- GitHub ----
+def _resolve_github(query: str) -> Optional[dict]:
+    """GitHub 仓库搜索"""
+    search_url = (
+        "https://api.github.com/search/repositories"
+        f"?q={urllib.parse.quote(query)}"
+        "&sort=stars"
+        "&order=desc"
+        "&per_page=3"
+    )
+    text = _http_get(search_url)
+    if not text:
+        return None
+    try:
+        data = json.loads(text)
+        items = data.get("items", [])
+        if not items:
+            return None
+        repo = items[0]
+        return {
+            "title": repo.get("full_name", query),
+            "url": repo.get("html_url", ""),
+            "sourceTier": "media",
+            "confidence": 0.8,
+            "note": "AI 生成，请自行判断",
+        }
+    except Exception:
+        return None
+
+
+# ---- 官方域名直接匹配 ----
+# 按实体类型分配官方域名
+_OFFICIAL_PATTERNS: list[tuple[str, str, str, str]] = [
+    # (关键词, 显示名, 官网URL, 实体kind)
+    ("youtube", "YouTube", "https://www.youtube.com", "company"),
+    ("bilibili", "Bilibili", "https://www.bilibili.com", "company"),
+    ("tencent", "Tencent", "https://www.tencent.com", "company"),
+    ("bytedance", "ByteDance", "https://www.bytedance.com", "company"),
+    ("alibaba", "Alibaba", "https://www.alibaba.com", "company"),
+    ("baidu", "Baidu", "https://www.baidu.com", "company"),
+    ("meta", "Meta", "https://www.meta.com", "company"),
+    ("nvidia", "NVIDIA", "https://www.nvidia.com", "company"),
+    ("openai", "OpenAI", "https://openai.com", "company"),
+    ("microsoft", "Microsoft", "https://www.microsoft.com", "company"),
+    ("google", "Google", "https://www.google.com", "company"),
+    ("apple", "Apple", "https://www.apple.com", "company"),
+    ("amazon", "Amazon", "https://www.amazon.com", "company"),
+    ("spacex", "SpaceX", "https://www.spacex.com", "company"),
+    ("tesla", "Tesla", "https://www.tesla.com", "company"),
+    ("amd", "AMD", "https://www.amd.com", "company"),
+    ("intel", "Intel", "https://www.intel.com", "company"),
+    ("snapdragon", "Snapdragon", "https://www.qualcomm.com/snapdragon", "product"),
+    ("apple podcasts", "Apple Podcasts", "https://podcasts.apple.com", "product"),
+    ("小宇宙", "小宇宙", "https://www.xiaoyuzhoufm.com", "product"),
+    ("喜马拉雅", "喜马拉雅", "https://www.ximalaya.com", "product"),
+    ("网易云音乐", "网易云音乐", "https://music.163.com", "product"),
+    ("网易云", "网易云音乐", "https://music.163.com", "product"),
+    ("微信", "微信", "https://www.wechat.com", "product"),
+    ("滴滴", "滴滴", "https://www.didiglobal.com", "company"),
+    ("抖音", "抖音", "https://www.douyin.com", "product"),
+    ("抖音", "抖音", "https://www.douyin.com", "company"),
+    ("美团", "美团", "https://www.meituan.com", "company"),
+    ("拼多多", "拼多多", "https://www.pinduoduo.com", "company"),
+    ("京东", "京东", "https://www.jd.com", "company"),
+    ("阿里巴巴", "阿里巴巴", "https://www.alibaba.com", "company"),
+    ("腾讯音乐", "腾讯音乐", "https://www.tencent.com", "company"),
+]
+
+
+def _try_official_url(entity_name: str) -> Optional[dict]:
+    """尝试通过已知官方域名构建 URL"""
+    key = entity_name.lower()
+    for kw, title, url, _ in _OFFICIAL_PATTERNS:
+        if kw in key or key in kw:
+            return {
+                "title": title,
+                "url": url,
+                "sourceTier": "official",
+                "confidence": 0.88,
+                "note": "AI 生成，请自行判断",
+            }
+    return None
+
+
+# ---- Steam / TapTap ----
+def _resolve_game_store(query: str) -> Optional[dict]:
+    """Steam 商店搜索（游戏）"""
+    search_url = (
+        f"https://store.steampowered.com/search/?term={urllib.parse.quote(query)}&format=json"
+    )
+    text = _http_get(search_url)
+    if not text:
+        return None
+    try:
+        # Steam search 结果含 HTML，简单提取第一个结果链接和标题
+        match = re.search(
+            r'href="(https://store\.steampowered\.com/app/\d+[^"]*)"[^>]*>.*?<img[^>]*title="([^"]+)"',
+            text, re.DOTALL
+        )
+        if not match:
+            match = re.search(r'href="(https://store\.steampowered\.com/app/\d+[^"]*)"', text)
+        if match:
+            url = match.group(1).split('?')[0]
+            title = match.group(2).strip() if match.lastindex and match.group(2) else query
+            return {
+                "title": title[:60],
+                "url": url,
+                "sourceTier": "official",
+                "confidence": 0.82,
+                "note": "AI 生成，请自行判断",
+            }
+    except Exception:
+        pass
+    return None
+
+
+# ---- 豆瓣 ----
+def _resolve_douban(query: str) -> Optional[dict]:
+    """豆瓣搜索（影视/作品）"""
+    search_url = (
+        f"https://www.douban.com/search?cat=1002&q={urllib.parse.quote(query)}"
+    )
+    text = _http_get(search_url)
+    if not text:
+        return None
+    try:
+        match = re.search(
+            r'href="(https://www\.douban\.com/subject/\d+[^"]*)"[^>]*>.*?title="([^"]+)"',
+            text, re.DOTALL
+        )
+        if match:
+            url = match.group(1).split('?')[0]
+            title = match.group(2).strip()[:60]
+            match_score = _normalize_title_match(query, title)
+            return {
+                "title": title,
+                "url": url,
+                "sourceTier": "media",
+                "confidence": 0.78 if match_score > 0.6 else 0.65,
+                "note": "AI 生成，请自行判断",
+            }
+    except Exception:
+        pass
+    return None
+
+
+def _resolve_entity_reference(entity_name: str, entity_kind: str) -> Optional[dict]:
+    """
+    为单个实体解析参考链接（per-entity 版本）。
+    返回带 sourceTier 的结果字典，或 None。
+
+    来源优先级（按 kind 分）：
+      company/product → 官方域名 → 百度百科 → Wikipedia
+      tool/repo → GitHub → 官方域名 → Wikipedia
+      game/film/media → Steam/豆瓣 → Wikipedia
+      other → Wikipedia → 百度百科
+    """
+    # 去噪声词
+    clean = re.sub(r'[\[\]【】()（)《》<>""'']', '', entity_name).strip()
+    if not clean or len(clean) < 2:
+        return None
+
+    # 预处理：去掉数字前缀
+    clean_for_search = re.sub(
+        r'^(?:\d+\s*[.。]?\s*|第[一二三四五六七八九十百千\d]+[节章节个条次号]?\s*)',
+        '', clean
+    )
+
+    results: list[dict] = []
+    kind = entity_kind.lower()
+    is_tool = kind in {"tool", "repo", "product"}
+    is_game_film = kind in {"game", "film", "media"}
+
+    # 1. 官方域名（最高优先级）
+    official = _try_official_url(clean)
+    if official:
+        results.append(official)
+
+    # 2. 按类型分支
+    if is_tool:
+        # 工具/项目：GitHub → 官方域名（已查） → Wikipedia
+        gh = _resolve_github(clean)
+        if gh:
+            results.append(gh)
+        wiki = _resolve_wikipedia(clean, clean_for_search)
+        if wiki:
+            results.append(wiki)
+    elif is_game_film:
+        # 游戏/影视：Steam → 豆瓣 → Wikipedia
+        steam = _resolve_game_store(clean)
+        if steam:
+            results.append(steam)
+        douban = _resolve_douban(clean)
+        if douban:
+            results.append(douban)
+        wiki = _resolve_wikipedia(clean, clean_for_search)
+        if wiki:
+            results.append(wiki)
+        # 百度百科作为游戏/影视的补充
+        baidu = _resolve_baidu_baike(clean)
+        if baidu:
+            results.append(baidu)
+    else:
+        # 公司/品牌/其他：百度百科 → Wikipedia → GitHub（作为补充）
+        baidu = _resolve_baidu_baike(clean)
+        if baidu:
+            results.append(baidu)
+        wiki = _resolve_wikipedia(clean, clean_for_search)
+        if wiki:
+            results.append(wiki)
+        if kind == "company" or kind == "product":
+            gh = _resolve_github(clean)
+            if gh:
+                results.append(gh)
+
+    # 选最优
+    best = _best_result(results)
+    if best and best.get("confidence", 0) >= 0.7:
+        return best
+    return None
+
+
+def _resolve_node_references(ref_candidates: list) -> list:
+    """
+    节点级引用（新闻/报告/文档/文章等，非实体解释型）。
+    这类引用不映射到具体实体，放入 node.references[]。
+    只保留 sourceTier >= encyclopedia 的结果。
+    """
+    refs = []
+    seen_urls = set()
+    for ent in ref_candidates[:6]:
+        name = ent.get("name", "")
+        kind = ent.get("kind", "webpage")
+        ref = _resolve_entity_reference(name, kind)
+        # 只保留 encyclopedia（维基/百科）及以上层级的节点级引用
+        tier = SOURCE_TIERS.get(ref.get("sourceTier", "community"), 0) if ref else 0
+        if ref and ref["url"] not in seen_urls and tier >= SOURCE_TIERS["encyclopedia"]:
+            seen_urls.add(ref["url"])
+            refs.append(ref)
+            if len(refs) >= 3:
+                break
+    return refs
+
+
+# ---------------------------------------------------------------------------
+# Span 切分（程序侧）
+# ---------------------------------------------------------------------------
+
 def _slice_spans_by_topics(segments: list, audio_duration: float) -> list:
     """
     程序侧按话题自然边界切分 segment spans。
 
     策略：
-    1. 扫描所有 segment 的文本
-    2. 检测话题切换信号（新主题句、过渡承接句）
+    1. 扫描所有 segment 的文本，检测话题切换信号
+    2. 额外检测"新实体/产品首次出现"作为切分信号
     3. 合并短于 MIN_SPAN_SECONDS 的相邻 span
-    4. 拆分长于 MAX_SPAN_SECONDS 的超长 span
+    4. 拆分超长 span
     5. 保证覆盖整期节目，不留大空洞
-
-    返回: list[dict] 每个含 {seg_start_idx, seg_end_idx, start, end, time}
     """
+
     if not segments:
         return []
 
-    MIN_SPAN_SECONDS = 60   # 最小 span 60 秒
-    MAX_SPAN_SECONDS = 300   # 最大 span 5 分钟
+    MIN_SPAN_SECONDS = 60
+    MAX_SPAN_SECONDS = 300
     TOPIC_SWITCH_MARKERS = [
         "一、", "二、", "三、", "四、", "五、",
         "首先", "其次", "最后",
@@ -90,16 +488,27 @@ def _slice_spans_by_topics(segments: list, audio_duration: float) -> list:
         "总之", "总的来说",
         "不过", "然而", "但是",
         "那么", "所以", "因此",
+        "接下来", "然后", "我们先说",
+        "进入", "来看看", "来聊聊",
     ]
+    # 已知产品/公司名触发词（首次出现时常标志新话题）
+    ENTITY_MARKERS = [
+        "发布", "推出", "上线", "推出", "宣布",
+        "推出", "发布", "推出",
+        "收购", "获得", "完成",
+        "万", "亿美元", "亿元",
+    ]
+
     spans = []
     cur_start = 0
+    # 追踪本 span 内已出现过的产品/公司名（避免重复切分）
+    seen_entities_in_span: set[str] = set()
 
     for i in range(len(segments)):
         seg = segments[i]
         text = seg.get("text", "")
 
-        # 检测话题切换：同时检查当前 segment 和前一个 segment
-        # 因为话题切换往往发生在前一个 segment 的结尾
+        # 检测话题切换
         prev_text = segments[i - 1].get("text", "") if i > 0 else ""
         is_switch = False
         for marker in TOPIC_SWITCH_MARKERS:
@@ -107,19 +516,36 @@ def _slice_spans_by_topics(segments: list, audio_duration: float) -> list:
                 is_switch = True
                 break
 
+        # 检测新实体首次出现（带金额/产品词时更可能是新话题）
+        has_new_entity = False
+        for marker in ENTITY_MARKERS:
+            if marker in text and len(text) < 200:
+                # 提取附近的名词短语作为实体名
+                for m in re.finditer(rf'{marker}\s*([\u4e00-\u9fa5a-zA-Z0-9（）\(\)《》]+)', text):
+                    entity_mention = m.group(1).strip()
+                    if entity_mention and entity_mention not in seen_entities_in_span:
+                        # 跳过常见动词/副词
+                        skip_words = {"一个", "这个", "那个", "我们", "他们", "一些", "很多", "什么", "怎么"}
+                        if entity_mention not in skip_words and len(entity_mention) >= 2:
+                            has_new_entity = True
+                            seen_entities_in_span.add(entity_mention)
+                            break
+            if has_new_entity:
+                break
+
         # 当前 span 时长
         span_end_seconds = segments[i].get("seconds", 0)
         span_duration = span_end_seconds - segments[cur_start].get("seconds", 0) if cur_start <= i else 0
 
-        # 强制切分条件：超长 或 话题切换（且 span 已有足够内容）
         should_split = False
         if span_duration >= MAX_SPAN_SECONDS:
             should_split = True
         elif is_switch and span_duration >= MIN_SPAN_SECONDS:
             should_split = True
+        elif has_new_entity and span_duration >= MIN_SPAN_SECONDS:
+            should_split = True
 
         if should_split:
-            # 封口当前 span
             spans.append({
                 "seg_start_idx": cur_start,
                 "seg_end_idx": i - 1,
@@ -128,6 +554,7 @@ def _slice_spans_by_topics(segments: list, audio_duration: float) -> list:
                 "time": _format_time(segments[cur_start].get("seconds", 0)),
             })
             cur_start = i
+            seen_entities_in_span.clear()
 
     # 最后一个 span
     if cur_start < len(segments):
@@ -139,7 +566,7 @@ def _slice_spans_by_topics(segments: list, audio_duration: float) -> list:
             "time": _format_time(segments[cur_start].get("seconds", 0)),
         })
 
-    # 只合并时长过短的 span（< MIN_SPAN_SECONDS），不按 gap 合并
+    # 合并时长过短的 span
     merged = []
     for span in spans:
         if not merged:
@@ -148,17 +575,14 @@ def _slice_spans_by_topics(segments: list, audio_duration: float) -> list:
         last = merged[-1]
         span_dur = span["start"] - last["end"]
         if span_dur < 0:
-            # 重叠，合并
             last["seg_end_idx"] = span["seg_end_idx"]
             last["end"] = span["end"]
         elif last["end"] - last["start"] < MIN_SPAN_SECONDS:
-            # 前一个 span 太短，合并
             last["seg_end_idx"] = span["seg_end_idx"]
             last["end"] = span["end"]
         else:
             merged.append(span)
 
-    # 重新计算 time 字段
     for span in merged:
         span["time"] = _format_time(span["start"])
 
@@ -173,6 +597,10 @@ def _get_span_text(segments: list, seg_start: int, seg_end: int) -> str:
         lines.append(f"[{seg.get('time', '00:00')}] {seg.get('text', '')}")
     return "\n".join(lines)
 
+
+# ---------------------------------------------------------------------------
+# 模型调用（写内容）
+# ---------------------------------------------------------------------------
 
 def _generate_content_for_span(
     api_key: str,
@@ -208,6 +636,11 @@ def _generate_content_for_span(
   - label: 事实标签（如"市值"、"发布时间"、"同比增长"等）
   - value: 具体事实内容
 - quote_or_joke_explainer: 梗/双关/上下文解释（无则空字符串）
+- reference_candidates: 本段中提到的值得查证的实体列表，每项需含 name/kind/keywords：
+  - name: 实体准确名称
+  - kind: 该实体类型，取值 tool|company|product|game|film|article|person|location|webpage
+  - keywords: 用于搜索该实体官网/维基的关键词（英文，适合 API 搜索）
+  注意：只列出你确定在转录中明确提到的实体，不要捏造。最多 4 项。
 
 注意：只基于提供的转录片段输出，不要自由发挥时间或事实。"""
 
@@ -234,16 +667,18 @@ def _generate_content_for_span(
         return {}
 
 
+# ---------------------------------------------------------------------------
+# 规范化工具
+# ---------------------------------------------------------------------------
+
 def _normalize_timeline(timeline: dict, audio_duration: float) -> dict:
     """合法性校验 + 过滤越界节点"""
     nodes = timeline.get("nodes", [])
     if not nodes:
         return timeline
 
-    # 过滤 start >= audio_duration
     filtered = [n for n in nodes if (n.get("start", 0) or 0) < audio_duration]
 
-    # clamp end
     for n in filtered:
         end = n.get("end")
         if end is None or end <= 0 or end > audio_duration:
@@ -251,10 +686,8 @@ def _normalize_timeline(timeline: dict, audio_duration: float) -> dict:
         if n["end"] <= n["start"]:
             n["end"] = min(n["start"] + 60, audio_duration)
 
-    # 排序
     filtered.sort(key=lambda n: n.get("start", 0) or 0)
 
-    # 合并重叠 > 80%
     merged = []
     for n in filtered:
         if not merged:
@@ -282,38 +715,28 @@ def _normalize_timeline(timeline: dict, audio_duration: float) -> dict:
 
     return {
         "mode": "timeline",
-        "version": 1,
+        "version": 2,
         "title": timeline.get("title", ""),
         "nodes": [{**n, "id": f"node_{i + 1:03d}"} for i, n in enumerate(merged)],
     }
 
 
-# node_type 归一化映射表（支持中英文、模糊匹配）
 _NODE_TYPE_ALIASES = {
-    # company_news 变体
     "company_news": "company_news", "company": "company_news", "公司动态": "company_news",
     "企业动态": "company_news", "企业": "company_news",
-    # product 变体
-    "product": "product", "产品": "product", "产品发布": "product",
-    "新品": "product",
-    # person 变体
+    "product": "product", "产品": "product", "产品发布": "product", "新品": "product",
     "person": "person", "人物": "person", "人物动态": "person", "人物专访": "person",
-    # topic_change 变体
     "topic_change": "topic_change", "话题切换": "topic_change", "过渡": "topic_change",
     "承上启下": "topic_change",
-    # background 变体
     "background": "background", "背景": "background", "背景知识": "background",
     "行业背景": "background",
-    # fun_moment / quote 变体
     "fun_moment": "fun_moment", "趣味": "fun_moment", "金句": "fun_moment",
     "quote": "fun_moment", "quote_or_joke_explainer": "fun_moment",
-    # 数字类
     "1": "other", "2": "other",
 }
 
 
 def _normalize_node_type(raw: str) -> str:
-    """将模型输出的各种 node_type 格式归一化为标准值"""
     if not raw:
         return "other"
     raw = raw.strip().lower()
@@ -321,12 +744,6 @@ def _normalize_node_type(raw: str) -> str:
 
 
 def _normalize_entities(raw: list) -> list:
-    """
-    规范化 entities 字段：
-    - 字符串项 -> {name: str, type: "other", description: ""}
-    - 对象项 -> 确保有 name/type/description，无则补空字符串
-    - 跳过无效项（无 name 或 name 为空）
-    """
     if not isinstance(raw, list):
         return []
     result = []
@@ -348,12 +765,6 @@ def _normalize_entities(raw: list) -> list:
 
 
 def _normalize_facts(raw: list) -> list:
-    """
-    规范化 facts 字段：
-    - 字符串项 -> {label: "事实", value: str}
-    - 对象项 -> 确保有 label/value，无则补空字符串
-    - 跳过无效项
-    """
     if not isinstance(raw, list):
         return []
     result = []
@@ -374,6 +785,32 @@ def _normalize_facts(raw: list) -> list:
     return result
 
 
+def _normalize_ref_candidates(raw: list) -> list:
+    """规范化 reference_candidates 字段"""
+    if not isinstance(raw, list):
+        return []
+    result = []
+    for item in raw:
+        if isinstance(item, dict):
+            name = item.get("name", "")
+            if not name or not isinstance(name, str) or not name.strip():
+                continue
+            result.append({
+                "name": name.strip(),
+                "kind": item.get("kind", "webpage") or "webpage",
+                "keywords": item.get("keywords", name) or name,
+            })
+        elif isinstance(item, str):
+            name = item.strip()
+            if name:
+                result.append({"name": name, "kind": "webpage", "keywords": name})
+    return result
+
+
+# ---------------------------------------------------------------------------
+# 主入口
+# ---------------------------------------------------------------------------
+
 def generate_timeline_json(
     api_key: str,
     podcast_text: str,
@@ -383,10 +820,11 @@ def generate_timeline_json(
     """
     时间轴模式主入口（程序切段，模型写内容）。
 
-    1. 程序侧按话题边界切分 segment spans
-    2. 对每个 span 调用模型输出 title/summary/entities/facts
+    1. 程序侧按话题边界切分 segment spans（含实体首次出现检测）
+    2. 对每个 span 调用模型输出 title/summary/entities/facts + reference_candidates
     3. 程序确定 start/end/time/seg_start_idx/seg_end_idx
-    4. 合并 + 合法性校验 + 写盘
+    4. 程序侧解析 reference_candidates 生成 references（URL 查证）
+    5. 合并 + 合法性校验 + 写盘
     """
     print(f"[Timeline] 程序切段模式开始 (segments={len(transcript_segments)})")
 
@@ -395,14 +833,12 @@ def generate_timeline_json(
         audio_duration = transcript_segments[-1].get("seconds", 0)
         audio_duration = max(audio_duration, 60)
 
-    # Step 1: 程序切分 spans
     spans = _slice_spans_by_topics(transcript_segments, audio_duration)
     print(f"[Timeline] 程序切出 {len(spans)} 个 spans")
 
     if not spans:
-        return {"mode": "timeline", "version": 1, "title": title, "nodes": []}
+        return {"mode": "timeline", "version": 2, "title": title, "nodes": []}
 
-    # Step 2: 对每个 span 调用模型写内容
     nodes = []
     for i, span in enumerate(spans):
         print(f"[Timeline] 生成 span {i + 1}/{len(spans)} ...")
@@ -417,6 +853,23 @@ def generate_timeline_json(
             i, len(spans), audio_duration
         )
 
+        entities = _normalize_entities(content.get("entities", []))
+        # 为每个 entity 解析参考链接（per-entity 模式）
+        for ent in entities:
+            ref = _resolve_entity_reference(ent.get("name", ""), ent.get("type", "other"))
+            if ref:
+                ent["refUrl"] = ref.get("url", "")
+                ent["refTitle"] = ref.get("title", "")
+                ent["sourceTier"] = ref.get("sourceTier", "community")
+            else:
+                ent["refUrl"] = ""
+                ent["refTitle"] = ""
+                ent["sourceTier"] = ""
+
+        # 节点级引用（新闻/报告/文档等，非实体解释型）
+        ref_candidates = _normalize_ref_candidates(content.get("reference_candidates", []))
+        references = _resolve_node_references(ref_candidates) if ref_candidates else []
+
         node = {
             "id": f"node_{i + 1:03d}",
             "seg_start_idx": span["seg_start_idx"],
@@ -428,14 +881,15 @@ def generate_timeline_json(
             "node_type": _normalize_node_type(content.get("node_type", "")),
             "summary": content.get("summary", ""),
             "why_it_matters": content.get("why_it_matters", ""),
-            "entities": _normalize_entities(content.get("entities", [])),
+            "entities": entities,
             "facts": _normalize_facts(content.get("facts", [])),
             "quote_or_joke_explainer": content.get("quote_or_joke_explainer", ""),
+            "references": references,
+            "media": [],
         }
         nodes.append(node)
 
-    # Step 3: 合并 + 校验
-    timeline_raw = {"mode": "timeline", "version": 1, "title": title, "nodes": nodes}
+    timeline_raw = {"mode": "timeline", "version": 2, "title": title, "nodes": nodes}
     normalized = _normalize_timeline(timeline_raw, audio_duration)
 
     print(f"[Timeline] 生成完成，共 {len(normalized.get('nodes', []))} 个节点")
