@@ -195,10 +195,10 @@ export default function EpisodePage() {
             setAutoHighlightItem(segments[0]);
           }
 
-          // timeline 模式默认选中第一个节点
+          // timeline 模式默认跟随播放进度。selectedNode 只表示用户手动点选的节点。
           if (data.timelineData?.nodes?.length) {
             setCurrentNode(data.timelineData.nodes[0]);
-            setSelectedNode(data.timelineData.nodes[0]);
+            setSelectedNode(null);
           }
         }
       })
@@ -321,10 +321,31 @@ export default function EpisodePage() {
   useEffect(() => {
     if (!archive?.timelineData?.nodes) return;
     const node = findActiveNode(archive.timelineData.nodes, currentTime);
-    if (node && node.id !== currentNode?.id) {
-      setCurrentNode(node);
-    }
+    if (!node) return;
+
+    setCurrentNode(prev => (prev?.id === node.id ? prev : node));
+    setSelectedNode(prev => (prev && prev.id !== node.id ? null : prev));
   }, [currentTime, archive]);
+
+  useEffect(() => {
+    const activeNode = selectedNode ?? currentNode;
+    const container = nodeListRef.current;
+    if (!activeNode || !container) return;
+
+    const activeButton = container.querySelector(
+      `[data-node-id="${CSS.escape(activeNode.id)}"]`
+    ) as HTMLElement | null;
+    if (!activeButton) return;
+
+    const targetTop =
+      activeButton.offsetTop -
+      (container.clientHeight / 2) +
+      (activeButton.offsetHeight / 2);
+    const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+    const nextScrollTop = Math.max(0, Math.min(targetTop, maxScrollTop));
+
+    container.scrollTo({ top: nextScrollTop, behavior: 'smooth' });
+  }, [currentNode, selectedNode]);
 
   // ===== 键盘快捷键 =====
   useEffect(() => {
@@ -855,8 +876,9 @@ export default function EpisodePage() {
                     return (
                       <button
                         key={node.id}
+                        data-node-id={node.id}
                         onClick={(e) => handleNodeClick(node, e)}
-                        className={`w-full text-left rounded-lg px-3 py-2.5 transition-all duration-150 group ${
+                        className={`relative w-full text-left rounded-lg px-3 py-2.5 transition-all duration-150 group ${
                           isActive
                             ? 'bg-white shadow-sm border border-[#00ADA6]/20'
                             : 'hover:bg-white/70'
