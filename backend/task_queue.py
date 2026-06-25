@@ -145,11 +145,9 @@ def add_task(source, task_type, engine="sensevoice", max_timeline_items=15, name
 def fetch_bilibili_title(url):
     """获取B站视频标题"""
     try:
-        import yt_dlp
-        ydl_opts = {'quiet': True, 'no_warnings': True, 'extract_flat': False}
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            return info.get('title', None)
+        from backend.downloader import get_bilibili_video_info
+        info = get_bilibili_video_info(url)
+        return info.get('title') if info.get('success') else None
     except Exception as e:
         print(f"[TaskQueue] 获取B站标题失败: {e}")
         return None

@@ -7,7 +7,15 @@ import re
 import requests
 import threading
 import sys
-from urllib.parse import urlparse
+from http.cookiejar import MozillaCookieJar
+from urllib.parse import parse_qs, urlparse
+
+
+BILIBILI_USER_AGENT = (
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+    'AppleWebKit/537.36 (KHTML, like Gecko) '
+    'Chrome/124.0.0.0 Safari/537.36'
+)
 
 # 延迟导入 get_ffmpeg_path，兼容开发环境和 electron 打包环境
 def _get_ffmpeg_path_impl():
@@ -100,6 +108,214 @@ def _check_ffmpeg_in_dir(ffmpeg_dir):
         exists = os.path.exists(fpath)
         executable = os.access(fpath, os.X_OK) if exists else False
         print(f'  {name}: exists={exists}, executable={executable}, path={fpath}')
+
+
+def _create_bilibili_session(url, cookies_path=None):
+    """创建供 Bilibili API/CDN 使用的 Session。
+
+    Bilibili 会根据 User-Agent 等请求特征返回 HTTP 412。这里固定使用已验证可用的
+    浏览器标识，并让 API 请求与媒体下载复用 cookie。
+    """
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': BILIBILI_USER_AGENT,
+        'Referer': url,
+    })
+
+    if cookies_path and os.path.exists(cookies_path):
+        try:
+            cookie_jar = MozillaCookieJar(cookies_path)
+            cookie_jar.load(ignore_discard=True, ignore_expires=True)
+            session.cookies.update(cookie_jar)
+        except Exception as e:
+            print(f'[Downloader] Bilibili cookies 加载失败，将按未登录方式继续: {type(e).__name__}')
+
+    return session
+
+
+def _extract_bilibili_bvid(url):
+    match = re.search(r'(?i)(BV[0-9A-Za-z]+)', url)
+    return match.group(1) if match else None
+
+
+def get_bilibili_video_info(url, cookies_path=None):
+    """通过 Bilibili 公共 API 获取视频元数据，避开 yt-dlp 当前会触发的 WBI 412。"""
+    bvid = _extract_bilibili_bvid(url)
+    if not bvid:
+        return {'success': False, 'error': '无法从链接中识别 BV 号'}
+
+    session = _create_bilibili_session(url, cookies_path)
+    try:
+        response = session.get(
+            'https://api.bilibili.com/x/web-interface/view',
+            params={'bvid': bvid},
+            timeout=15,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get('code') != 0 or not payload.get('data'):
+            return {
+                'success': False,
+                'error': payload.get('message') or f'Bilibili API 返回错误码 {payload.get("code")}',
+            }
+
+        data = payload['data']
+        pages = data.get('pages') or []
+        requested_page = 1
+        try:
+            requested_page = max(1, int(parse_qs(urlparse(url).query).get('p', ['1'])[0]))
+        except (TypeError, ValueError):
+            requested_page = 1
+        selected_page = min(requested_page, len(pages)) if pages else 1
+        page = pages[selected_page - 1] if pages else {}
+
+        title = data.get('title') or bvid
+        if len(pages) > 1 and page.get('part'):
+            title = f'{title} - P{selected_page} {page["part"]}'
+
+        return {
+            'success': True,
+            'bvid': bvid,
+            'cid': page.get('cid') or data.get('cid'),
+            'title': title,
+            'thumbnail': data.get('pic'),
+            'session': session,
+        }
+    except requests.RequestException as e:
+        return {'success': False, 'error': f'获取 Bilibili 视频信息失败: {e}'}
+    except (ValueError, TypeError) as e:
+        return {'success': False, 'error': f'解析 Bilibili 视频信息失败: {e}'}
+
+
+def _download_stream_to_file(session, urls, destination, timeout=30):
+    """依次尝试主 CDN 与备用 CDN，将媒体流保存到 destination。"""
+    last_error = None
+    for media_url in [url for url in urls if url]:
+        try:
+            with session.get(media_url, stream=True, timeout=(15, timeout)) as response:
+                response.raise_for_status()
+                with open(destination, 'wb') as output:
+                    for chunk in response.iter_content(chunk_size=1024 * 1024):
+                        if chunk:
+                            output.write(chunk)
+            if os.path.exists(destination) and os.path.getsize(destination) > 0:
+                return None
+        except (requests.RequestException, OSError) as e:
+            last_error = e
+            try:
+                if os.path.exists(destination):
+                    os.remove(destination)
+            except OSError:
+                pass
+    return last_error or RuntimeError('Bilibili 未返回可用的媒体地址')
+
+
+def download_bilibili_audio_direct(url, save_dir, cookies_path=None):
+    """使用 Bilibili 公共 API 下载音轨。
+
+    这是 yt-dlp 遇到 HTTP 412 时的独立路径。优先下载 DASH 音轨；若接口只返回
+    durl，则下载其中的媒体文件并交给 FFmpeg 提取音频。
+    """
+    os.makedirs(save_dir, exist_ok=True)
+    info = get_bilibili_video_info(url, cookies_path)
+    if not info['success']:
+        return {
+            'success': False, 'file_path': None, 'title': None,
+            'error': info['error'], 'platform': 'bilibili',
+        }
+    if not info.get('cid'):
+        return {
+            'success': False, 'file_path': None, 'title': info.get('title'),
+            'error': 'Bilibili 视频信息中缺少 cid', 'platform': 'bilibili',
+        }
+
+    title = _sanitize_title(info['title'])
+    session = info['session']
+    try:
+        response = session.get(
+            'https://api.bilibili.com/x/player/playurl',
+            params={
+                'bvid': info['bvid'],
+                'cid': info['cid'],
+                'fnval': 4048,
+                'qn': 80,
+                'fourk': 1,
+            },
+            timeout=15,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get('code') != 0 or not payload.get('data'):
+            raise RuntimeError(payload.get('message') or f'播放接口错误码 {payload.get("code")}')
+        play_data = payload['data']
+    except (requests.RequestException, ValueError, RuntimeError) as e:
+        return {
+            'success': False, 'file_path': None, 'title': title,
+            'error': f'获取 Bilibili 音轨失败: {e}', 'platform': 'bilibili',
+        }
+
+    audio_streams = ((play_data.get('dash') or {}).get('audio') or [])
+    source_ext = '.m4s'
+    media_urls = []
+    if audio_streams:
+        audio = max(audio_streams, key=lambda item: item.get('bandwidth') or 0)
+        media_urls = [
+            audio.get('baseUrl') or audio.get('base_url'),
+            *(audio.get('backupUrl') or audio.get('backup_url') or []),
+        ]
+    elif play_data.get('durl'):
+        durl = play_data['durl'][0]
+        source_ext = '.media'
+        media_urls = [durl.get('url'), *(durl.get('backup_url') or [])]
+    else:
+        return {
+            'success': False, 'file_path': None, 'title': title,
+            'error': 'Bilibili 未返回可下载的音轨', 'platform': 'bilibili',
+        }
+
+    source_path = os.path.join(save_dir, f'{title}{source_ext}')
+    mp3_path = os.path.join(save_dir, f'{title}.mp3')
+    print(f'[Downloader] Bilibili API 直连下载: {title}')
+    download_error = _download_stream_to_file(session, media_urls, source_path)
+    if download_error:
+        return {
+            'success': False, 'file_path': None, 'title': title,
+            'error': f'Bilibili 音轨下载失败: {download_error}', 'platform': 'bilibili',
+        }
+
+    ffmpeg_path = get_ffmpeg_path()
+    try:
+        result = subprocess.run(
+            [ffmpeg_path, '-i', source_path, '-vn', '-codec:a', 'libmp3lame', '-q:a', '2', mp3_path, '-y'],
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or '')[-500:]
+            raise RuntimeError(detail or f'FFmpeg 退出码 {result.returncode}')
+    except (OSError, subprocess.TimeoutExpired, RuntimeError) as e:
+        return {
+            'success': False, 'file_path': None, 'title': title,
+            'error': f'Bilibili 音频转换失败: {e}', 'platform': 'bilibili',
+        }
+    finally:
+        try:
+            if os.path.exists(source_path):
+                os.remove(source_path)
+        except OSError:
+            pass
+
+    if not os.path.exists(mp3_path) or os.path.getsize(mp3_path) == 0:
+        return {
+            'success': False, 'file_path': None, 'title': title,
+            'error': 'Bilibili 音频转换后文件为空', 'platform': 'bilibili',
+        }
+    print(f'[Downloader] Bilibili 音频下载完成: {mp3_path}')
+    return {
+        'success': True, 'file_path': mp3_path, 'title': title,
+        'error': None, 'platform': 'bilibili',
+    }
 
 
 def extract_info_with_ytdlp(url, cookies_path=None):
@@ -261,8 +477,30 @@ class AudioDownloader:
         return _sanitize_title(filename)
 
     def download_bilibili_audio(self, url, cookies_path=None):
-        result = download_audio_with_ytdlp(url=url, save_dir=self.save_dir, prefer_m4a=False, cookies_path=cookies_path, timeout=300)
+        # 2026-06 起，Bilibili 的 WBI playurl 接口可能对 yt-dlp 返回 HTTP 412。
+        # 优先使用经验证的公共 API 路径；失败时再回退 yt-dlp，兼容特殊链接。
+        direct_result = download_bilibili_audio_direct(
+            url=url,
+            save_dir=self.save_dir,
+            cookies_path=cookies_path,
+        )
+        if direct_result['success']:
+            return direct_result
+
+        print(f'[Downloader] Bilibili API 直连失败，回退 yt-dlp: {direct_result["error"]}')
+        result = download_audio_with_ytdlp(
+            url=url,
+            save_dir=self.save_dir,
+            prefer_m4a=False,
+            cookies_path=cookies_path,
+            timeout=300,
+        )
         result['platform'] = 'bilibili'
+        if not result['success'] and ('HTTP Error 412' in str(result.get('error')) or '412' in str(result.get('error'))):
+            result['error'] = (
+                'Bilibili 拒绝了当前下载请求（HTTP 412）。'
+                f'备用下载方式也失败：{direct_result["error"]}'
+            )
         return result
 
 

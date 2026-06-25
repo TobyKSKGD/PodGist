@@ -147,11 +147,20 @@ def fetch_cover(url: str, source_type: str = 'podcast_url') -> tuple:
     if source_type == 'local_file' or not url:
         return (None, None)
 
-    # Bilibili 优先用 yt-dlp（B站封面在 info 里有）
+    # Bilibili 使用公共 API。2026-06 起 yt-dlp 的 WBI 播放接口可能返回 HTTP 412，
+    # 而视频详情 API 可稳定提供封面地址。
     if 'bilibili.com' in url.lower():
-        img, typ = _fetch_via_ytdlp(url)
-        if img:
-            return (img, 'video')
+        try:
+            from backend.downloader import get_bilibili_video_info
+            info = get_bilibili_video_info(url)
+            img = info.get('thumbnail') if info.get('success') else None
+            if img:
+                return (img, 'video')
+        except Exception as e:
+            print(f"[Cover] Bilibili API fetch failed: {e}")
+
+        img, typ = _fetch_via_og_image(url)
+        return (img, 'video') if img else (None, None)
 
     # 通用播客 URL：优先 yt-dlp，再 og:image
     img, typ = _fetch_via_ytdlp(url)

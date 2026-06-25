@@ -1,6 +1,7 @@
 # ================= 1. 密钥与配置文件 =================
 # ⚠️ 绝对不能上传！
-# Claude Code 本地配置（仅本机使用，不上传）
+# Agent 项目指南（仅本机使用，不上传）
+AGENTS.md
 CLAUDE.md
 # local-only agent / release playbook
 CLAUDE.local.md
