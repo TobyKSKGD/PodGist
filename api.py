@@ -45,7 +45,7 @@ if _cli_args.data_dir:
 if _cli_args.model_dir:
     os.environ['PODGIST_MODEL_DIR'] = _cli_args.model_dir
 
-app = FastAPI(title="PodGist API", version="0.2.2")
+app = FastAPI(title="PodGist API", version="0.2.3")
 
 @app.on_event("startup")
 async def startup_index():
