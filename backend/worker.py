@@ -20,15 +20,16 @@ sys.path.insert(0, current_dir)
 
 # 导入项目模块
 from backend import task_queue
-from backend.transcriber import transcribe_with_sensevoice, transcribe_with_dashscope_and_segments
+from backend.transcriber import transcribe_with_dashscope_and_segments
 from backend.llm_agent import get_podcast_summary_robust
-from backend.timeline_agent import generate_timeline_json
+from backend.timeline_agent import enrich_timeline_archive, enrich_timeline_node, generate_timeline_json, warmup_timeline_nodes
 from backend.downloader import route_and_download
 from backend.fetch_cover import fetch_cover, download_cover_image
 
 
 # Worker 线程名称
 WORKER_THREAD_NAME = "PodGist_Batch_Worker"
+ENRICHMENT_WORKER_THREAD_NAME = "PodGist_Timeline_Enrichment_Worker"
 
 # 工作目录（优先使用 PODGIST_DATA_DIR，否则回退到项目根目录）
 _USER_DATA_DIR = os.environ.get('PODGIST_DATA_DIR')
@@ -56,6 +57,11 @@ def is_worker_running():
         if t.name == WORKER_THREAD_NAME and t.is_alive():
             return True
     return False
+
+
+def is_enrichment_worker_running():
+    """检查后台实体资料富化线程是否正在运行。"""
+    return any(t.name == ENRICHMENT_WORKER_THREAD_NAME and t.is_alive() for t in threading.enumerate())
 
 
 def stop_worker():
@@ -228,6 +234,7 @@ def process_single_task(task, api_key):
 
     # 初始化音频文件路径（用于后续清理）
     audio_file_path = None
+    public_audio_url = None
 
     try:
         # 步骤 1: 获取音频文件
@@ -243,6 +250,7 @@ def process_single_task(task, api_key):
                 return False, None, f"下载失败: {result.get('error', '未知错误')}"
             audio_file_path = result["file_path"]
             title = result["title"]
+            public_audio_url = result.get("asr_public_url")
             task_queue.update_task_name(task_id, title)
             task_queue.update_progress_status(task_id, "音频获取成功")
             # 继续转录...
@@ -257,6 +265,7 @@ def process_single_task(task, api_key):
                 return False, None, f"下载失败: {result.get('error', '未知错误')}"
             audio_file_path = result["file_path"]
             title = result["title"]
+            public_audio_url = result.get("asr_public_url")
         else:
             return False, None, f"不支持的任务类型: {task_type}"
 
@@ -268,7 +277,20 @@ def process_single_task(task, api_key):
         print(f"[Worker] 转录中: {title}")
         task_queue.update_progress_status(task_id, "正在调用 DashScope ASR 转录...")
 
-        podcast_text, transcript_segments = transcribe_with_dashscope_and_segments(audio_file_path, api_key)
+        asr_metrics = {}
+        podcast_text, transcript_segments = transcribe_with_dashscope_and_segments(
+            audio_file_path,
+            api_key,
+            public_audio_url=public_audio_url,
+            metrics=asr_metrics,
+            stage_callback=lambda status: task_queue.update_progress_status(task_id, status),
+        )
+        if asr_metrics:
+            timing_text = ", ".join(
+                f"{name}={seconds:.1f}{'MB' if name.endswith('_mb') else 's'}" for name, seconds in asr_metrics.items()
+                if isinstance(seconds, (int, float))
+            )
+            print(f"[Worker] ASR 阶段耗时: {timing_text}")
 
         task_queue.update_progress_status(task_id, "DashScope ASR 转录完成")
 
@@ -344,8 +366,16 @@ def process_single_task(task, api_key):
         # 步骤 5: 根据 mode 调用大模型
         print(f"[Worker] 生成内容中 (mode={mode}): {title}")
         if mode == "timeline":
-            task_queue.update_progress_status(task_id, "正在生成时间轴...")
-            timeline_data = generate_timeline_json(api_key, podcast_text, transcript_segments, title=safe_title, archive_path=archive_path)
+            task_queue.update_progress_status(task_id, "正在生成时间轴节点...")
+            timeline_data = generate_timeline_json(
+                api_key,
+                podcast_text,
+                transcript_segments,
+                title=safe_title,
+                progress_callback=lambda done, total: task_queue.update_progress_status(
+                    task_id, f"正在生成时间轴节点（{done}/{total}）..."
+                ),
+            )
             ai_title = timeline_data.get("title", safe_title)
         else:
             task_queue.update_progress_status(task_id, "正在调用通义千问提炼高光...")
@@ -380,6 +410,22 @@ def process_single_task(task, api_key):
             node_count = len(timeline_data.get("nodes", []))
             with open(summary_path, "w", encoding="utf-8") as f:
                 f.write(f"# {ai_title}\n\n[时间轴模式] 共 {node_count} 个节点\n")
+            # 首屏最多为两张远程图片等待十秒；其余资料由独立、可恢复的后台任务补齐。
+            node_ids = [node.get("id", "") for node in timeline_data.get("nodes", []) if node.get("id")]
+            warmed_node_ids = []
+            try:
+                warmed_node_ids = warmup_timeline_nodes(
+                    archive_name,
+                    archive_path,
+                    node_ids[:2],
+                    cache_entity_images=_should_cache_entity_images(),
+                )
+            except Exception as exc:
+                # 首屏资料失败不能拖累时间轴主任务；节点任务会在后台继续重试。
+                print(f"[Enrichment] 首屏保障跳过 ({archive_name}): {exc}")
+            task_queue.create_node_enrichment_jobs(archive_name, node_ids)
+            for node_id in warmed_node_ids:
+                task_queue.complete_node_enrichment_job(archive_name, node_id)
         else:
             # 保存 summary.md
             summary_path = os.path.join(archive_path, "summary.md")
@@ -567,6 +613,91 @@ def retry_failed_tasks(api_key):
         gc.collect()
 
     return success_count
+
+
+def _should_cache_entity_images():
+    """读取当前设置；默认仅保存远程图片链接，不写入归档媒体目录。"""
+    config_path = os.path.join(_USER_DATA_DIR or current_dir, "config.json")
+    try:
+        import json
+        with open(config_path, "r", encoding="utf-8") as f:
+            return bool(json.load(f).get("cache_entity_images", False))
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def enrichment_worker_loop():
+    """低优先级、持久化的时间轴资料富化循环。"""
+    reset_count = task_queue.reset_processing_enrichment_jobs()
+    reset_count += task_queue.reset_processing_node_enrichment_jobs()
+    if reset_count:
+        print(f"[Enrichment] 已恢复 {reset_count} 个未完成富化任务")
+
+    while not should_stop():
+        if is_paused():
+            time.sleep(2)
+            continue
+
+        node_job = task_queue.claim_next_node_enrichment_job()
+        if node_job:
+            archive_id = node_job["archive_id"]
+            node_id = node_job["node_id"]
+            archive_path = os.path.join(ARCHIVE_DIR, archive_id)
+            if not os.path.abspath(archive_path).startswith(os.path.abspath(ARCHIVE_DIR)):
+                task_queue.fail_node_enrichment_job(archive_id, node_id, "无效归档路径")
+                continue
+            try:
+                print(f"[Enrichment] 开始节点富化: {archive_id}/{node_id}")
+                enrich_timeline_node(
+                    archive_id,
+                    archive_path,
+                    node_id,
+                    cache_entity_images=_should_cache_entity_images(),
+                )
+                task_queue.complete_node_enrichment_job(archive_id, node_id)
+            except Exception as exc:
+                task_queue.fail_node_enrichment_job(archive_id, node_id, str(exc))
+                print(f"[Enrichment] 节点失败 ({archive_id}/{node_id}): {exc}")
+            continue
+
+        # 兼容已在新版发布前创建的整期富化任务。
+        job = task_queue.claim_next_enrichment_job()
+        if not job:
+            time.sleep(3)
+            continue
+
+        archive_id = job["archive_id"]
+        archive_path = os.path.join(ARCHIVE_DIR, archive_id)
+        if not os.path.abspath(archive_path).startswith(os.path.abspath(ARCHIVE_DIR)):
+            task_queue.fail_enrichment_job(archive_id, "无效归档路径")
+            continue
+
+        try:
+            print(f"[Enrichment] 开始补充归档资料: {archive_id}")
+            enrich_timeline_archive(
+                archive_id,
+                archive_path,
+                cache_entity_images=_should_cache_entity_images(),
+            )
+            task_queue.complete_enrichment_job(archive_id)
+            print(f"[Enrichment] 完成: {archive_id}")
+        except Exception as exc:
+            task_queue.fail_enrichment_job(archive_id, str(exc))
+            print(f"[Enrichment] 失败 ({archive_id}): {exc}")
+
+
+def start_enrichment_worker():
+    """启动独立富化线程，不与主转录/时间轴队列竞争。"""
+    if is_enrichment_worker_running():
+        return False
+    thread = threading.Thread(
+        target=enrichment_worker_loop,
+        name=ENRICHMENT_WORKER_THREAD_NAME,
+        daemon=True,
+    )
+    thread.start()
+    print(f"[Enrichment] 已启动线程: {ENRICHMENT_WORKER_THREAD_NAME}")
+    return True
 
 
 def start_worker(force_restart=False):

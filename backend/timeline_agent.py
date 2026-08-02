@@ -15,12 +15,24 @@ import time
 import os
 import urllib.parse
 import requests
-from typing import Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Callable, Optional
 
 from dashscope import Generation
 from http import HTTPStatus
 
 TIMELINE_MODEL = 'qwen-plus'
+
+
+def _timeline_llm_concurrency() -> int:
+    """读取可选并发配置；无效值回退到保守的默认值。"""
+    try:
+        return max(1, min(3, int(os.environ.get('PODGIST_TIMELINE_LLM_CONCURRENCY', '2'))))
+    except (TypeError, ValueError):
+        return 2
+
+
+TIMELINE_LLM_CONCURRENCY = _timeline_llm_concurrency()
 
 # ---------------------------------------------------------------------------
 # LLM 调用
@@ -678,8 +690,12 @@ def _generate_content_for_span(
   - kind: 该实体类型，取值 tool|company|product|game|film|article|person|location|webpage
   - keywords: 用于搜索该实体官网/维基的关键词（英文，适合 API 搜索）
   注意：只列出你确定在转录中明确提到的实体，不要捏造。最多 4 项。
+- skip_node: 是否应从时间轴中省略该片段。仅节目名称、主持人/嘉宾自我介绍、录制地点、欢迎语、例行开场、口播或赞助信息时必须为 true。
 
-注意：只基于提供的转录片段输出，不要自由发挥时间或事实。"""
+注意：节目名称、节目/播客品牌、主持人姓名、录制地点和例行开场信息的语音识别极不可靠，
+除非它们是本段被深入讨论的主题，否则绝不能作为节点标题、摘要重点、实体、事实或参考候选输出。
+若 skip_node 为 true，请返回空 entities、facts、reference_candidates，且不要把这些开场信息改写成内容节点。
+只基于提供的转录片段输出，不要自由发挥时间或事实。"""
 
     user_prompt = f"""【转录片段 {span_index + 1}/{total_spans}】
 时间范围：{span_time} ~ {_format_time(span_end)}（共 {span_end - span_start:.0f} 秒）
@@ -867,24 +883,8 @@ def _extract_og_image(ref_url: str, entity_name: str, archive_path: str, entity_
         safe = re.sub(r'[^\w\-]', '_', entity_name)[:30]
 
         # 1. 获取页面 HTML，提取 og:image URL
-        text = _http_get(ref_url, timeout=8)
-        if not text:
-            return None
-
-        og_match = re.search(
-            r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
-            text, re.I
-        )
-        if not og_match:
-            og_match = re.search(
-                r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
-                text, re.I
-            )
-        if not og_match:
-            return None
-
-        img_url = og_match.group(1).strip()
-        if not img_url or not img_url.startswith("http"):
+        img_url = _extract_og_image_url(ref_url)
+        if not img_url:
             return None
 
         # 2. 推断扩展名（从 URL 猜测，真实类型由 Pillow 检测）
@@ -962,6 +962,28 @@ def _extract_og_image(ref_url: str, entity_name: str, archive_path: str, entity_
         return None
 
 
+def _extract_og_image_url(ref_url: str) -> Optional[str]:
+    """仅提取远程 og:image 链接，不下载图片字节。"""
+    if not ref_url or not ref_url.startswith("http"):
+        return None
+    text = _http_get(ref_url, timeout=8)
+    if not text:
+        return None
+    og_match = re.search(
+        r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
+        text, re.I,
+    )
+    if not og_match:
+        og_match = re.search(
+            r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
+            text, re.I,
+        )
+    if not og_match:
+        return None
+    image_url = og_match.group(1).strip()
+    return image_url if image_url.startswith("http") else None
+
+
 # ---------------------------------------------------------------------------
 # 主入口
 # ---------------------------------------------------------------------------
@@ -972,6 +994,7 @@ def generate_timeline_json(
     transcript_segments: list,
     title: str = "未命名节目",
     archive_path: Optional[str] = None,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> dict:
     """
     时间轴模式主入口（程序切段，模型写内容）。
@@ -979,10 +1002,11 @@ def generate_timeline_json(
     1. 程序侧按话题边界切分 segment spans（含实体首次出现检测）
     2. 对每个 span 调用模型输出 title/summary/entities/facts + reference_candidates
     3. 程序确定 start/end/time/seg_start_idx/seg_end_idx
-    4. 程序侧解析 reference_candidates 生成 references（URL 查证）
+    4. 将外部资料候选保留给后台富化任务处理
     5. 合并 + 合法性校验 + 写盘
     """
     print(f"[Timeline] 程序切段模式开始 (segments={len(transcript_segments)})")
+    generation_started_at = time.perf_counter()
 
     audio_duration = 0
     if transcript_segments:
@@ -995,51 +1019,40 @@ def generate_timeline_json(
     if not spans:
         return {"mode": "timeline", "version": 2, "title": title, "nodes": []}
 
+    # 保持每个 span 的模型、提示词和输出字段不变，只以受控并发缩短墙钟时间。
+    contents: list[dict] = [{} for _ in spans]
+    completed = 0
+    with ThreadPoolExecutor(max_workers=TIMELINE_LLM_CONCURRENCY, thread_name_prefix="PodGist_Timeline") as executor:
+        futures = {}
+        for i, span in enumerate(spans):
+            print(f"[Timeline] 提交 span {i + 1}/{len(spans)} ...")
+            span_text = _get_span_text(transcript_segments, span["seg_start_idx"], span["seg_end_idx"])
+            future = executor.submit(
+                _generate_content_for_span,
+                api_key, span_text, span["start"], span["end"], span["time"], i, len(spans), audio_duration,
+            )
+            futures[future] = i
+
+        for future in as_completed(futures):
+            index = futures[future]
+            try:
+                contents[index] = future.result()
+            except Exception as exc:
+                print(f"[Timeline] span {index + 1} 未生成: {exc}")
+            completed += 1
+            if progress_callback:
+                progress_callback(completed, len(spans))
+
     nodes = []
     for i, span in enumerate(spans):
-        print(f"[Timeline] 生成 span {i + 1}/{len(spans)} ...")
-        span_text = _get_span_text(
-            transcript_segments,
-            span["seg_start_idx"],
-            span["seg_end_idx"]
-        )
-        content = _generate_content_for_span(
-            api_key, span_text,
-            span["start"], span["end"], span["time"],
-            i, len(spans), audio_duration
-        )
-
+        content = contents[i]
+        # 仅有片头元数据的 span 不构成可检索、可回听的内容节点。
+        if content.get("skip_node") is True:
+            continue
         entities = _normalize_entities(content.get("entities", []))
-        # 为每个 entity 解析参考链接（per-entity 模式）
-        for idx, ent in enumerate(entities):
-            ref = _resolve_entity_reference(ent.get("name", ""), ent.get("type", "other"))
-            if ref:
-                ent["refUrl"] = ref.get("url", "")
-                ent["refTitle"] = ref.get("title", "")
-                ent["sourceTier"] = ref.get("sourceTier", "community")
-            else:
-                ent["refUrl"] = ""
-                ent["refTitle"] = ""
-                ent["sourceTier"] = ""
-
-            # 提取 og:image（高可信来源才提取，不阻塞主流程）
-            if ref and archive_path:
-                try:
-                    media = _extract_og_image(
-                        ref.get("url", ""),
-                        ent.get("name", ""),
-                        archive_path,
-                        idx,
-                    )
-                    ent["media"] = media if media else {}
-                except Exception:
-                    ent["media"] = {}
-            else:
-                ent["media"] = {}
-
-        # 节点级引用（新闻/报告/文档等，非实体解释型）
-        ref_candidates = _normalize_ref_candidates(content.get("reference_candidates", []))
-        references = _resolve_node_references(ref_candidates) if ref_candidates else []
+        # 外部参考资料和图片属于可失败的增强信息，交由持久化后台任务处理。
+        for ent in entities:
+            ent["media"] = {}
 
         node = {
             "id": f"node_{i + 1:03d}",
@@ -1055,7 +1068,8 @@ def generate_timeline_json(
             "entities": entities,
             "facts": _normalize_facts(content.get("facts", [])),
             "quote_or_joke_explainer": content.get("quote_or_joke_explainer", ""),
-            "references": references,
+            "references": [],
+            "reference_candidates": _normalize_ref_candidates(content.get("reference_candidates", [])),
             "media": [],
         }
         nodes.append(node)
@@ -1063,5 +1077,202 @@ def generate_timeline_json(
     timeline_raw = {"mode": "timeline", "version": 2, "title": title, "nodes": nodes}
     normalized = _normalize_timeline(timeline_raw, audio_duration)
 
-    print(f"[Timeline] 生成完成，共 {len(normalized.get('nodes', []))} 个节点")
+    elapsed = time.perf_counter() - generation_started_at
+    print(
+        f"[Timeline] 核心生成完成，共 {len(normalized.get('nodes', []))} 个节点，"
+        f"耗时 {elapsed:.1f}s（并发={TIMELINE_LLM_CONCURRENCY}）"
+    )
     return normalized
+
+
+def enrich_timeline_archive(archive_id: str, archive_path: str, cache_entity_images: bool = False) -> None:
+    """在核心时间轴完成后补充实体链接和图片，不影响主任务可用性。"""
+    from backend import task_queue
+
+    timeline_path = os.path.join(archive_path, "timeline.json")
+    if not os.path.isfile(timeline_path):
+        raise FileNotFoundError("未找到 timeline.json")
+    with open(timeline_path, "r", encoding="utf-8") as f:
+        timeline = json.load(f)
+
+    def persist_timeline() -> None:
+        """原子写盘，让已完成的实体资料无需等待整期富化结束即可展示。"""
+        temp_path = f"{timeline_path}.tmp"
+        with open(temp_path, "w", encoding="utf-8") as f:
+            json.dump(timeline, f, ensure_ascii=False, indent=2)
+        os.replace(temp_path, timeline_path)
+
+    resolved: dict[str, dict] = {}
+    entity_index = 0
+    changed = False
+    for node in timeline.get("nodes", []):
+        for entity in node.get("entities", []):
+            name = (entity.get("name") or "").strip()
+            entity_type = (entity.get("type") or "other").strip().lower()
+            if not name:
+                continue
+            entity_key = f"{entity_type}:{name.casefold()}"
+            if entity_key not in resolved:
+                cached = task_queue.get_entity_enrichment_cache(entity_key)
+                if cached:
+                    resolved[entity_key] = cached
+                else:
+                    ref = _resolve_entity_reference(name, entity_type)
+                    result = {
+                        "ref_url": ref.get("url", "") if ref else "",
+                        "ref_title": ref.get("title", "") if ref else "",
+                        "source_tier": ref.get("sourceTier", "") if ref else "",
+                        "remote_image_url": _extract_og_image_url(ref.get("url", "")) if ref else "",
+                    }
+                    task_queue.upsert_entity_enrichment_cache(
+                        entity_key,
+                        result["ref_url"], result["ref_title"], result["source_tier"], result["remote_image_url"],
+                    )
+                    resolved[entity_key] = result
+
+            result = resolved[entity_key]
+            entity["refUrl"] = result.get("ref_url", "") or ""
+            entity["refTitle"] = result.get("ref_title", "") or ""
+            entity["sourceTier"] = result.get("source_tier", "") or ""
+            remote_url = result.get("remote_image_url", "") or ""
+            media = {"remote_url": remote_url, "source_url": entity["refUrl"]} if remote_url else {}
+
+            if cache_entity_images and entity["refUrl"]:
+                local_media = _extract_og_image(entity["refUrl"], name, archive_path, entity_index)
+                if local_media:
+                    media = {**local_media, "remote_url": remote_url}
+            entity["media"] = media
+            entity_index += 1
+            changed = True
+            persist_timeline()
+
+        candidates = _normalize_ref_candidates(node.get("reference_candidates", []))
+        if candidates:
+            node["references"] = _resolve_node_references(candidates)
+            changed = True
+        node.pop("reference_candidates", None)
+        if changed:
+            persist_timeline()
+
+    if changed:
+        print(f"[Enrichment] 已写入归档资料: {archive_id}")
+
+
+def enrich_timeline_node(
+    archive_id: str,
+    archive_path: str,
+    node_id: str,
+    cache_entity_images: bool = False,
+    max_new_remote_images: Optional[int] = None,
+    deadline_at: Optional[float] = None,
+) -> tuple[bool, int]:
+    """只富化一个节点，供优先级队列在播放/跳转时快速响应。"""
+    from backend import task_queue
+
+    timeline_path = os.path.join(archive_path, "timeline.json")
+    if not os.path.isfile(timeline_path):
+        raise FileNotFoundError("未找到 timeline.json")
+    with open(timeline_path, "r", encoding="utf-8") as f:
+        timeline = json.load(f)
+
+    node = next((item for item in timeline.get("nodes", []) if item.get("id") == node_id), None)
+    if not node:
+        raise ValueError(f"未找到时间轴节点: {node_id}")
+
+    # 节点内的图片序号加上节点序号，避免本地缓存文件名跨节点冲突。
+    node_match = re.search(r"(\d+)$", node_id)
+    node_index = int(node_match.group(1)) if node_match else 0
+    completed = True
+    new_remote_images = 0
+    for entity_index, entity in enumerate(node.get("entities", [])):
+        name = (entity.get("name") or "").strip()
+        entity_type = (entity.get("type") or "other").strip().lower()
+        if not name:
+            continue
+
+        # 已经处理过（即使没有找到资料）则不重复访问外部网页。
+        if "refUrl" in entity:
+            continue
+        if deadline_at is not None and time.monotonic() >= deadline_at:
+            completed = False
+            break
+        if max_new_remote_images is not None and new_remote_images >= max_new_remote_images:
+            completed = False
+            break
+
+        entity_key = f"{entity_type}:{name.casefold()}"
+        cached = task_queue.get_entity_enrichment_cache(entity_key)
+        if cached:
+            result = cached
+        else:
+            ref = _resolve_entity_reference(name, entity_type)
+            result = {
+                "ref_url": ref.get("url", "") if ref else "",
+                "ref_title": ref.get("title", "") if ref else "",
+                "source_tier": ref.get("sourceTier", "") if ref else "",
+                "remote_image_url": _extract_og_image_url(ref.get("url", "")) if ref else "",
+            }
+            task_queue.upsert_entity_enrichment_cache(
+                entity_key,
+                result["ref_url"], result["ref_title"], result["source_tier"], result["remote_image_url"],
+            )
+
+        entity["refUrl"] = result.get("ref_url", "") or ""
+        entity["refTitle"] = result.get("ref_title", "") or ""
+        entity["sourceTier"] = result.get("source_tier", "") or ""
+        remote_url = result.get("remote_image_url", "") or ""
+        media = {"remote_url": remote_url, "source_url": entity["refUrl"]} if remote_url else {}
+        if remote_url:
+            new_remote_images += 1
+        if cache_entity_images and entity["refUrl"]:
+            local_media = _extract_og_image(entity["refUrl"], name, archive_path, node_index * 100 + entity_index)
+            if local_media:
+                media = {**local_media, "remote_url": remote_url}
+        entity["media"] = media
+
+    if completed:
+        candidates = _normalize_ref_candidates(node.get("reference_candidates", []))
+        if candidates:
+            node["references"] = _resolve_node_references(candidates)
+        node.pop("reference_candidates", None)
+
+    temp_path = f"{timeline_path}.tmp"
+    with open(temp_path, "w", encoding="utf-8") as f:
+        json.dump(timeline, f, ensure_ascii=False, indent=2)
+    os.replace(temp_path, timeline_path)
+    state = "完成" if completed else "部分完成"
+    print(f"[Enrichment] 节点{state}: {archive_id}/{node_id}（新增图片={new_remote_images}）")
+    return completed, new_remote_images
+
+
+def warmup_timeline_nodes(
+    archive_id: str,
+    archive_path: str,
+    node_ids: list[str],
+    cache_entity_images: bool = False,
+    max_remote_images: int = 2,
+    time_budget_seconds: float = 10.0,
+) -> list[str]:
+    """主任务结束前保障首屏：最多等待固定时间并优先得到若干图片。"""
+    deadline_at = time.monotonic() + time_budget_seconds
+    completed_node_ids = []
+    collected_images = 0
+    for node_id in node_ids:
+        if collected_images >= max_remote_images or time.monotonic() >= deadline_at:
+            break
+        completed, added_images = enrich_timeline_node(
+            archive_id,
+            archive_path,
+            node_id,
+            cache_entity_images=cache_entity_images,
+            max_new_remote_images=max_remote_images - collected_images,
+            deadline_at=deadline_at,
+        )
+        collected_images += added_images
+        if completed:
+            completed_node_ids.append(node_id)
+    print(
+        f"[Enrichment] 首屏保障完成：节点={len(completed_node_ids)}，"
+        f"图片={collected_images}/{max_remote_images}，预算={time_budget_seconds:.0f}s"
+    )
+    return completed_node_ids

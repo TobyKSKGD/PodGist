@@ -156,7 +156,7 @@ export default function TaskQueue({
         showToast('info', '队列已暂停');
       }
       fetchStats();
-    } catch (error) {
+    } catch {
       showToast('error', '操作失败');
     }
   };
@@ -168,8 +168,11 @@ export default function TaskQueue({
       showToast('success', res.data.message);
       fetchTasks();
       fetchStats();
-    } catch (error: any) {
-      showToast('error', error.response?.data?.detail || '重试失败');
+    } catch (error: unknown) {
+      const detail = axios.isAxiosError<{ detail?: string }>(error)
+        ? error.response?.data?.detail
+        : undefined;
+      showToast('error', detail || '重试失败');
     } finally {
       setLoading(false);
     }
@@ -181,7 +184,7 @@ export default function TaskQueue({
       showToast('success', res.data.message);
       fetchTasks();
       fetchStats();
-    } catch (error) {
+    } catch {
       showToast('error', '清空失败');
     }
   };
@@ -192,7 +195,7 @@ export default function TaskQueue({
       showToast('success', '任务已删除');
       fetchTasks();
       fetchStats();
-    } catch (error) {
+    } catch {
       showToast('error', '删除失败');
     }
   };
@@ -204,8 +207,11 @@ export default function TaskQueue({
       fetchTasks();
       fetchStats();
       onRefreshArchives?.();
-    } catch (error: any) {
-      showToast('error', error.response?.data?.detail || '重试失败');
+    } catch (error: unknown) {
+      const detail = axios.isAxiosError<{ detail?: string }>(error)
+        ? error.response?.data?.detail
+        : undefined;
+      showToast('error', detail || '重试失败');
     }
   };
 

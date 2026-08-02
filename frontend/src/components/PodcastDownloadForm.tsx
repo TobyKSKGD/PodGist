@@ -83,16 +83,24 @@ export default function PodcastDownloadForm({ settings, downloadType, mode = 'su
       } else {
         setStatus(taskRes.data.message || '添加任务失败');
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error(error);
-      const errorDetail = error.response?.data?.detail;
+      const errorDetail = axios.isAxiosError<{ detail?: unknown }>(error)
+        ? error.response?.data?.detail
+        : undefined;
       let errorMessage = '处理失败';
       if (typeof errorDetail === 'string') {
         errorMessage = errorDetail;
       } else if (Array.isArray(errorDetail)) {
         // Pydantic 验证错误数组，提取所有 msg
-        errorMessage = errorDetail.map((e: any) => e.msg || JSON.stringify(e)).join('; ');
-      } else if (error.message) {
+        errorMessage = errorDetail.map((item: unknown) => {
+          if (typeof item === 'object' && item !== null && 'msg' in item) {
+            const message = (item as { msg?: unknown }).msg;
+            return typeof message === 'string' ? message : JSON.stringify(item);
+          }
+          return JSON.stringify(item);
+        }).join('; ');
+      } else if (error instanceof Error && error.message) {
         errorMessage = error.message;
       }
       setStatus(errorMessage);

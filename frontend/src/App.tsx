@@ -1,20 +1,30 @@
-import { useState, useEffect, useRef } from 'react';
+import { Suspense, lazy, useState, useEffect, useRef, useCallback } from 'react';
 import { Routes, Route, useLocation, useNavigate, useParams } from 'react-router-dom';
-import LibraryPage from './pages/LibraryPage';
-import ImportPage from './pages/ImportPage';
-import EpisodePage from './pages/EpisodePage';
 import axios from 'axios';
 import { IconSettings, IconPlus, IconLayoutList, IconListCheck, IconChevronLeft, IconChevronRight, IconBell, IconX, IconCircleCheck, IconBrain } from '@tabler/icons-react';
-import SettingsModal from './components/SettingsModal';
-import ResultView from './components/ResultView';
-import TaskQueue from './components/TaskQueue';
 import Logo from './components/Logo';
 import { ToastProvider, useToast } from './components/Toast';
 import ConfirmDialog from './components/ConfirmDialog';
-import ChatView from './components/ChatView';
+
+// 页面级功能只在用户真正进入时下载，避免首次打开应用加载播放器、对话和任务队列的全部代码。
+const LibraryPage = lazy(() => import('./pages/LibraryPage'));
+const ImportPage = lazy(() => import('./pages/ImportPage'));
+const EpisodePage = lazy(() => import('./pages/EpisodePage'));
+const SettingsModal = lazy(() => import('./components/SettingsModal'));
+const ResultView = lazy(() => import('./components/ResultView'));
+const TaskQueue = lazy(() => import('./components/TaskQueue'));
+const ChatView = lazy(() => import('./components/ChatView'));
 
 // 配置 axios 基础路径，指向你的 FastAPI 后端
 const api = axios.create({ baseURL: 'http://localhost:8000' });
+
+function PageLoading() {
+  return (
+    <div className="flex flex-1 items-center justify-center bg-white">
+      <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-200 border-t-[#00ADA6]" />
+    </div>
+  );
+}
 
 // ===== 路由子组件 =====
 // 直接访问 /result/:id 时，从 URL 读取 archiveId，避免依赖 AppContent 状态初始渲染延迟
@@ -23,19 +33,11 @@ function ResultViewWrapper({ onBack, onJumpToChat }: {
   onJumpToChat: (sessionId: string) => void;
 }) {
   const { id } = useParams<{ id: string }>();
-  const [archiveIdFromUrl, setArchiveIdFromUrl] = useState<string | null>(null);
-
-  // 直接访问 /result/:id 时，用 URL 参数初始化状态
-  useEffect(() => {
-    if (id) {
-      setArchiveIdFromUrl(id);
-    }
-  }, [id]);
 
   if (!id) return null;
   return (
     <ResultView
-      archiveId={archiveIdFromUrl || id}
+      archiveId={id}
       onBack={onBack}
       onJumpToChat={onJumpToChat}
     />
@@ -68,16 +70,18 @@ function AppContent() {
 
   // URL → state：每次 pathname 变化时同步 currentView
   useEffect(() => {
+    let nextView: 'upload' | 'result' | 'queue' | 'chat';
     if (pathname === '/queue') {
-      setCurrentView('queue');
+      nextView = 'queue';
     } else if (pathname === '/chat') {
-      setCurrentView('chat');
+      nextView = 'chat';
     } else if (pathname.startsWith('/result/') || pathname.startsWith('/episode/')) {
-      setCurrentView('result');
+      nextView = 'result';
     } else {
-      setCurrentView('upload');
+      nextView = 'upload';
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // 路由通知在本次提交后同步，避免 effect 内同步触发级联渲染。
+    queueMicrotask(() => setCurrentView(nextView));
   }, [pathname]);
 
   // 通知系统 - 从 localStorage 加载已通知的任务 ID
@@ -98,13 +102,15 @@ function AppContent() {
 
   const notifiedTaskIds = useRef<Set<string>>(loadNotifiedTaskIds());
 
-  const saveNotifiedTaskIds = (ids: Set<string>) => {
+  const saveNotifiedTaskIds = useCallback((ids: Set<string>) => {
     try {
       localStorage.setItem('podgist_notified_tasks', JSON.stringify([...ids]));
-    } catch {}
-  };
+    } catch {
+      // localStorage 不可用时不影响通知功能。
+    }
+  }, []);
 
-  const addNotification = (taskName: string, archiveId: string, taskId: string) => {
+  const addNotification = useCallback((taskName: string, archiveId: string, taskId: string) => {
     // 避免重复通知同一任务
     if (notifiedTaskIds.current.has(taskId)) return;
     notifiedTaskIds.current.add(taskId);
@@ -113,7 +119,7 @@ function AppContent() {
     setNotifications(prev => [{ id, taskName, archiveId, taskId }, ...prev]);
     // 显示顶部 toast 提示，并刷新侧边栏归档列表
     showToast('success', `任务已完成：${taskName}`);
-  };
+  }, [saveNotifiedTaskIds, showToast]);
 
   // 暴露给子组件的全局刷新函数
   const refreshGlobalSettings = async () => {
@@ -132,21 +138,19 @@ function AppContent() {
     }
   };
 
-  const removeNotification = (id: string, _taskId: string) => {
+  const removeNotification = (id: string) => {
     setNotifications(prev => prev.filter(n => n.id !== id));
   };
 
-  const handleViewNotification = (archiveId: string, id: string, taskId: string) => {
+  const handleViewNotification = (archiveId: string, id: string) => {
     setSelectedArchiveId(archiveId);
     setCurrentView('result');
     navigate(`/episode/${archiveId}`, { replace: true });
-    removeNotification(id, taskId);
+    removeNotification(id);
   };
 
   // ========== 步骤一：全局启动拦截与心跳检测 ==========
   useEffect(() => {
-    let checkInterval: ReturnType<typeof setInterval>;
-
     const bootSequence = async () => {
       try {
         await axios.get('http://localhost:8000/');
@@ -155,13 +159,13 @@ function AppContent() {
         clearInterval(checkInterval);
         // 后端就绪后，一次性获取全局数据
         await refreshGlobalSettings();
-      } catch (error) {
+      } catch {
         // 后端还在启动中，保持沉默
       }
     };
 
-    checkInterval = setInterval(bootSequence, 800);
-    bootSequence();
+    const checkInterval = setInterval(bootSequence, 800);
+    void bootSequence();
 
     return () => clearInterval(checkInterval);
   }, []);
@@ -210,7 +214,7 @@ function AppContent() {
     checkCompletedTasks();
     const interval = setInterval(checkCompletedTasks, 15000);
     return () => clearInterval(interval);
-  }, []);
+  }, [addNotification]);
 
   // 确认删除归档
   const confirmDeleteArchive = async () => {
@@ -410,43 +414,35 @@ function AppContent() {
 
       {/* ================= 右侧主工作区 ================= */}
       <div className="flex-1 flex flex-col min-h-0 max-w-full overflow-hidden">
-        <Routes>
-          <Route path="/" element={<LibraryPage />} />
-          <Route path="/import" element={<ImportPage />} />
-          <Route path="/episode/:id" element={<EpisodePage />} />
-          {/* /result/:id — 旧版结果页（兼容） */}
-          <Route path="/result/:id" element={
-            <ResultViewWrapper
-              onBack={handleBackToIconUpload}
-              onJumpToChat={(sessionId) => {
-                setSelectedArchiveId(null);
-                setCurrentView('chat');
-                sessionStorage.setItem('jump_to_session', sessionId);
+        <Suspense fallback={<PageLoading />}>
+          <Routes>
+            <Route path="/" element={<LibraryPage />} />
+            <Route path="/import" element={<ImportPage />} />
+            <Route path="/episode/:id" element={<EpisodePage />} />
+            {/* /result/:id — 旧版结果页（兼容） */}
+            <Route path="/result/:id" element={
+              <ResultViewWrapper
+                onBack={handleBackToIconUpload}
+                onJumpToChat={(sessionId) => {
+                  setSelectedArchiveId(null);
+                  setCurrentView('chat');
+                  sessionStorage.setItem('jump_to_session', sessionId);
+                }}
+              />
+            } />
+            <Route path="/queue" element={<TaskQueue
+              onTaskComplete={addNotification}
+              onViewArchive={(archiveId) => {
+                setSelectedArchiveId(archiveId);
+                setCurrentView('result');
               }}
-            />
-          } />
-          <Route path="/result/:id" element={
-            <ResultViewWrapper
-              onBack={handleBackToIconUpload}
-              onJumpToChat={(sessionId) => {
-                setSelectedArchiveId(null);
-                setCurrentView('chat');
-                sessionStorage.setItem('jump_to_session', sessionId);
-              }}
-            />
-          } />
-          <Route path="/queue" element={<TaskQueue
-            onTaskComplete={addNotification}
-            onViewArchive={(archiveId) => {
+            />} />
+            <Route path="/chat" element={<ChatView onJumpToArchive={(archiveId) => {
               setSelectedArchiveId(archiveId);
               setCurrentView('result');
-            }}
-          />} />
-          <Route path="/chat" element={<ChatView onJumpToArchive={(archiveId) => {
-            setSelectedArchiveId(archiveId);
-            setCurrentView('result');
-          }} />} />
-        </Routes>
+            }} />} />
+          </Routes>
+        </Suspense>
       </div>
 
       {/* 全局通知铃铛（仅在非任务队列/非智能对话视图显示） */}
@@ -496,14 +492,14 @@ function AppContent() {
                         </div>
                         <div className="flex items-center gap-1 shrink-0">
                           <button
-                            onClick={() => removeNotification(n.id, n.taskId)}
+                            onClick={() => removeNotification(n.id)}
                             className="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-slate-600 transition-colors"
                             title="关闭"
                           >
                             <IconX size={14} />
                           </button>
                           <button
-                            onClick={() => handleViewNotification(n.archiveId, n.id, n.taskId)}
+                            onClick={() => handleViewNotification(n.archiveId, n.id)}
                             className="opacity-0 group-hover:opacity-100 px-2 py-1 bg-[#00ADA6] text-white text-xs rounded hover:bg-[#009A94] transition-all"
                           >
                             查看
@@ -519,7 +515,11 @@ function AppContent() {
         </div>
       )}
 
-      <SettingsModal isOpen={isIconSettingsOpen} onClose={() => setIsIconSettingsOpen(false)} showToast={showToast} onSaveSuccess={refreshGlobalSettings} />
+      {isIconSettingsOpen && (
+        <Suspense fallback={null}>
+          <SettingsModal isOpen onClose={() => setIsIconSettingsOpen(false)} showToast={showToast} onSaveSuccess={refreshGlobalSettings} />
+        </Suspense>
+      )}
 
       {/* 删除归档确认对话框 */}
       <ConfirmDialog

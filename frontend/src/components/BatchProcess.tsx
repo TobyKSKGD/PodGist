@@ -97,7 +97,7 @@ export default function BatchProcess({ settings, mode = 'summary' }: BatchProces
       } else {
         showToast('error', '添加失败');
       }
-    } catch (error) {
+    } catch {
       showToast('error', '批量添加失败');
     } finally {
       setIsProcessing(false);
