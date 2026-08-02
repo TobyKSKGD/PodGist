@@ -108,7 +108,13 @@ win:
   forceCodeSigning: false
   # 必须开启，electron-builder 才会把 app icon / metadata / execution level 写进主程序 EXE
   signAndEditExecutable: true
-  publish: null
+  # 免费分发阶段仅 Windows 启用程序内更新；macOS 通过 Release 手动替换应用。
+  publish:
+    provider: github
+    owner: TobyKSKGD
+    repo: PodGist
+    releaseType: release
+  electronUpdaterCompatibility: ">= 2.16"
   target:
     - target: nsis
       arch:

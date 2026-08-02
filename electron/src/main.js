@@ -2,12 +2,14 @@ const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const BackendStarter = require('./backendStarter');
+const { UpdateManager, RELEASE_URL } = require('./updateManager');
 
 // 禁用 GPU 加速，防止 macOS 空闲时杀掉 GPU 进程导致崩溃
 app.disableHardwareAcceleration();
 
 let mainWindow;
 let backendStarter;
+let updateManager;
 
 const LOG_DIR = 'logs';
 const STARTUP_LOG = 'startup.log';
@@ -320,6 +322,17 @@ async function init() {
     // 先创建窗口，立即显示 UI
     createWindow();
 
+    // 更新检查必须在主进程中执行。此处仅初始化，不在启动时自动下载。
+    updateManager = new UpdateManager({
+      app,
+      log: (message) => appendStartupLog(message),
+      sendStatus: (status) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('update-status', status);
+        }
+      },
+    });
+
     // 再启动后端（不阻塞窗口显示）
     backendStarter = new BackendStarter();
     // 注册致命错误回调：后端连续崩溃时通知主进程
@@ -401,3 +414,16 @@ ipcMain.handle('get-user-data-path', () => app.getPath('userData'));
 ipcMain.handle('get-backend-url', () => 'http://localhost:8000');
 ipcMain.handle('get-app-version', () => app.getVersion());
 ipcMain.handle('get-platform', () => process.platform);
+ipcMain.handle('get-update-status', () => updateManager?.getStatus() || ({
+  state: app.isPackaged ? 'idle' : 'unsupported',
+  currentVersion: app.getVersion(),
+  availableVersion: '',
+  releaseNotes: '',
+  progress: 0,
+  message: '更新服务正在初始化',
+  releaseUrl: RELEASE_URL,
+}));
+ipcMain.handle('check-for-updates', () => updateManager?.checkForUpdates());
+ipcMain.handle('download-update', () => updateManager?.downloadUpdate());
+ipcMain.handle('install-update', () => updateManager?.installUpdate());
+ipcMain.handle('open-release-page', () => shell.openExternal(updateManager?.getStatus().releaseUrl || RELEASE_URL));

@@ -393,8 +393,17 @@ jobs:
       # ===== Electron 构建 =====
       - name: Build Electron (Windows)
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          npm run build:win
+          if ("${{ needs.create-release.outputs.tag }}") {
+            # Windows 自动更新需要把 latest.yml、blockmap 和安装包上传到正式 Release。
+            npm run check:backend
+            npm run prebuild
+            .\node_modules\.bin\electron-builder.cmd --config electron-builder.yml --win --publish always
+          } else {
+            npm run build:win
+          }
         working-directory: electron
 
       # ===== 查找 unpacked 目录（用于验包） =====
@@ -683,3 +692,11 @@ jobs:
         run: |
           echo "=== Verifying release $TAG assets ==="
           gh release view "$TAG" --json assets --jq '.assets[] | "\(.name) (\(.size | tonumber / 1024 / 1024 | floor) MB)"'
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.create-release.outputs.tag }}
+        run: |
+          # Draft Release 对更新客户端不可见；仅在全部构建、验包和上传成功后发布。
+          gh release edit "$TAG" --draft=false
