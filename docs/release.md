@@ -111,6 +111,17 @@ git push origin v0.1.1
 - **不再使用**：`v*-windows` 这种 tag 格式
 - 同一个 tag 产生同一个 release 页面，包含 mac + win 两个安装包
 
+## 内置自动更新发布要求
+
+PodGist 客户端通过 GitHub Releases 检查更新。免费分发阶段仅 Windows 使用程序内自动安装：
+
+- Windows：NSIS 安装包、`latest.yml` 与对应 blockmap；
+- macOS：DMG；客户端仅检查最新 Release 并引导用户手动替换 Applications 中的应用。
+
+Windows 更新文件由 `electron-builder --publish always` 自动生成并上传。不要手动混用不同构建产生的 `latest.yml`、安装包或 blockmap，否则客户端的 SHA-512 校验会拒绝更新。
+
+更新客户端无法读取 Draft Release；workflow 会在所有构建、验包和资源上传成功后才发布 Release。未来若 macOS 配置 Developer ID 签名与 notarization，可恢复 macOS ZIP 自动更新载荷。
+
 ---
 
 ## 后续不要再引入第二套后端源码
