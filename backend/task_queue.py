@@ -58,6 +58,47 @@ def init_db():
         )
     """)
 
+    # 时间轴富化任务与主任务分离：外部资料、实体图片失败或变慢时，
+    # 不应阻塞用户拿到已经生成的核心时间轴。
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS timeline_enrichment_jobs (
+            archive_id TEXT PRIMARY KEY,
+            status TEXT NOT NULL DEFAULT 'PENDING',
+            attempts INTEGER NOT NULL DEFAULT 0,
+            error_msg TEXT,
+            create_time TEXT NOT NULL,
+            update_time TEXT NOT NULL
+        )
+    """)
+
+    # 节点级队列支持流媒体式优先级：当前播放/跳转节点优先，其余内容后台补齐。
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS timeline_node_enrichment_jobs (
+            archive_id TEXT NOT NULL,
+            node_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'PENDING',
+            priority INTEGER NOT NULL DEFAULT 1000,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            error_msg TEXT,
+            create_time TEXT NOT NULL,
+            update_time TEXT NOT NULL,
+            PRIMARY KEY (archive_id, node_id)
+        )
+    """)
+
+    # 实体资料跨归档缓存。这里只缓存远程链接，不缓存本地文件名：
+    # 本地图片属于各自归档，不能跨归档复用路径。
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS entity_enrichment_cache (
+            entity_key TEXT PRIMARY KEY,
+            ref_url TEXT,
+            ref_title TEXT,
+            source_tier TEXT,
+            remote_image_url TEXT,
+            updated_at TEXT NOT NULL
+        )
+    """)
+
     # 检查 name 字段是否存在，不存在则添加
     try:
         cursor.execute("SELECT name FROM tasks LIMIT 1")
@@ -421,6 +462,235 @@ def get_queue_stats():
     conn.close()
 
     return stats
+
+
+def create_enrichment_job(archive_id):
+    """创建或重新排队一个归档的非阻塞实体富化任务。"""
+    now = datetime.now().isoformat()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO timeline_enrichment_jobs
+            (archive_id, status, attempts, error_msg, create_time, update_time)
+        VALUES (?, 'PENDING', 0, NULL, ?, ?)
+        ON CONFLICT(archive_id) DO UPDATE SET
+            status = 'PENDING', error_msg = NULL, update_time = excluded.update_time
+    """, (archive_id, now, now))
+    conn.commit()
+    conn.close()
+
+
+def claim_next_enrichment_job():
+    """原子地领取一个待处理富化任务；当前仅由单个富化线程调用。"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM timeline_enrichment_jobs WHERE status = 'PENDING' ORDER BY create_time ASC LIMIT 1")
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return None
+
+    now = datetime.now().isoformat()
+    cursor.execute("""
+        UPDATE timeline_enrichment_jobs
+        SET status = 'PROCESSING', attempts = attempts + 1, update_time = ?
+        WHERE archive_id = ?
+    """, (now, row['archive_id']))
+    conn.commit()
+    job = dict(row)
+    job['status'] = 'PROCESSING'
+    job['attempts'] = (job.get('attempts') or 0) + 1
+    conn.close()
+    return job
+
+
+def get_enrichment_job(archive_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM timeline_enrichment_jobs WHERE archive_id = ?", (archive_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def complete_enrichment_job(archive_id):
+    _update_enrichment_job(archive_id, 'COMPLETED')
+
+
+def fail_enrichment_job(archive_id, error_msg):
+    _update_enrichment_job(archive_id, 'FAILED', error_msg)
+
+
+def _update_enrichment_job(archive_id, status, error_msg=None):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE timeline_enrichment_jobs
+        SET status = ?, error_msg = ?, update_time = ?
+        WHERE archive_id = ?
+    """, (status, error_msg, datetime.now().isoformat(), archive_id))
+    conn.commit()
+    conn.close()
+
+
+def reset_processing_enrichment_jobs():
+    """应用中断后，让未完成的富化任务能在下次启动时恢复。"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE timeline_enrichment_jobs SET status = 'PENDING' WHERE status = 'PROCESSING'")
+    affected = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return affected
+
+
+def get_entity_enrichment_cache(entity_key):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM entity_enrichment_cache WHERE entity_key = ?", (entity_key,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def upsert_entity_enrichment_cache(entity_key, ref_url, ref_title, source_tier, remote_image_url):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO entity_enrichment_cache
+            (entity_key, ref_url, ref_title, source_tier, remote_image_url, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(entity_key) DO UPDATE SET
+            ref_url = excluded.ref_url,
+            ref_title = excluded.ref_title,
+            source_tier = excluded.source_tier,
+            remote_image_url = excluded.remote_image_url,
+            updated_at = excluded.updated_at
+    """, (entity_key, ref_url, ref_title, source_tier, remote_image_url, datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+
+
+def create_node_enrichment_jobs(archive_id, node_ids):
+    """为新时间轴创建节点级富化任务，首节点及其后两项优先。"""
+    now = datetime.now().isoformat()
+    rows = []
+    for index, node_id in enumerate(node_ids):
+        priority = 10 + index if index < 3 else 1000 + index
+        rows.append((archive_id, node_id, priority, now, now))
+    if not rows:
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.executemany("""
+        INSERT INTO timeline_node_enrichment_jobs
+            (archive_id, node_id, status, priority, attempts, error_msg, create_time, update_time)
+        VALUES (?, ?, 'PENDING', ?, 0, NULL, ?, ?)
+        ON CONFLICT(archive_id, node_id) DO NOTHING
+    """, rows)
+    conn.commit()
+    conn.close()
+
+
+def prioritize_node_enrichment(archive_id, node_ids):
+    """提升当前节点及其相邻节点；已完成节点无需重复请求。"""
+    if not node_ids:
+        return
+    now = datetime.now().isoformat()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    for offset, node_id in enumerate(node_ids):
+        # 第一个元素是当前节点；其余是相邻预加载节点。
+        priority = offset
+        cursor.execute("""
+            UPDATE timeline_node_enrichment_jobs
+            SET priority = ?, status = 'PENDING', error_msg = NULL, update_time = ?
+            WHERE archive_id = ? AND node_id = ? AND status IN ('PENDING', 'FAILED')
+        """, (priority, now, archive_id, node_id))
+    conn.commit()
+    conn.close()
+
+
+def claim_next_node_enrichment_job():
+    """领取当前优先级最高的节点富化任务。"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT * FROM timeline_node_enrichment_jobs
+        WHERE status = 'PENDING'
+        ORDER BY priority ASC, create_time ASC
+        LIMIT 1
+    """)
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return None
+
+    now = datetime.now().isoformat()
+    cursor.execute("""
+        UPDATE timeline_node_enrichment_jobs
+        SET status = 'PROCESSING', attempts = attempts + 1, update_time = ?
+        WHERE archive_id = ? AND node_id = ?
+    """, (now, row['archive_id'], row['node_id']))
+    conn.commit()
+    job = dict(row)
+    job['status'] = 'PROCESSING'
+    job['attempts'] = (job.get('attempts') or 0) + 1
+    conn.close()
+    return job
+
+
+def complete_node_enrichment_job(archive_id, node_id):
+    _update_node_enrichment_job(archive_id, node_id, 'COMPLETED')
+
+
+def fail_node_enrichment_job(archive_id, node_id, error_msg):
+    _update_node_enrichment_job(archive_id, node_id, 'FAILED', error_msg)
+
+
+def _update_node_enrichment_job(archive_id, node_id, status, error_msg=None):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE timeline_node_enrichment_jobs
+        SET status = ?, error_msg = ?, update_time = ?
+        WHERE archive_id = ? AND node_id = ?
+    """, (status, error_msg, datetime.now().isoformat(), archive_id, node_id))
+    conn.commit()
+    conn.close()
+
+
+def reset_processing_node_enrichment_jobs():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE timeline_node_enrichment_jobs SET status = 'PENDING' WHERE status = 'PROCESSING'")
+    affected = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return affected
+
+
+def get_archive_enrichment_status(archive_id):
+    """返回节点级汇总状态，兼容旧版整期富化任务。"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT status, COUNT(*) AS count
+        FROM timeline_node_enrichment_jobs
+        WHERE archive_id = ?
+        GROUP BY status
+    """, (archive_id,))
+    counts = {row['status']: row['count'] for row in cursor.fetchall()}
+    conn.close()
+    if counts:
+        if counts.get('PROCESSING') or counts.get('PENDING'):
+            return 'PROCESSING'
+        if counts.get('FAILED') and not counts.get('COMPLETED'):
+            return 'FAILED'
+        return 'COMPLETED'
+    legacy = get_enrichment_job(archive_id)
+    return legacy.get('status') if legacy else None
 
 
 # 初始化数据库

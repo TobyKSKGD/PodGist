@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { IconTag, IconPlus, IconX, IconCheck } from '@tabler/icons-react';
 import axios from 'axios';
 
@@ -19,12 +19,30 @@ export default function TagManager({ archiveId }: TagManagerProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
 
+  const loadTags = useCallback(async () => {
+    try {
+      const res = await api.get('/api/chat/tags');
+      if (res.data.status === 'success') setAllTags(res.data.data);
+    } catch {
+      // 标签列表失败时保留当前内容。
+    }
+  }, []);
+
+  const loadArchiveTags = useCallback(async () => {
+    try {
+      const res = await api.get(`/api/chat/archives/${archiveId}/tags`);
+      if (res.data.status === 'success') setArchiveTags(res.data.data);
+    } catch {
+      // 单个归档标签失败时不阻断页面。
+    }
+  }, [archiveId]);
+
   useEffect(() => {
     if (isOpen) {
-      loadTags();
-      loadArchiveTags();
+      void loadTags();
+      void loadArchiveTags();
     }
-  }, [isOpen, archiveId]);
+  }, [isOpen, loadTags, loadArchiveTags]);
 
   // 点击外部关闭
   useEffect(() => {
@@ -40,20 +58,6 @@ export default function TagManager({ archiveId }: TagManagerProps) {
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  async function loadTags() {
-    try {
-      const res = await api.get('/api/chat/tags');
-      if (res.data.status === 'success') setAllTags(res.data.data);
-    } catch {}
-  }
-
-  async function loadArchiveTags() {
-    try {
-      const res = await api.get(`/api/chat/archives/${archiveId}/tags`);
-      if (res.data.status === 'success') setArchiveTags(res.data.data);
-    } catch {}
-  }
-
   async function createTag() {
     if (!newTagName.trim()) return;
     setIsCreating(true);
@@ -61,8 +65,11 @@ export default function TagManager({ archiveId }: TagManagerProps) {
       await api.post('/api/chat/tags', { name: newTagName.trim() });
       setNewTagName('');
       await loadTags();
-    } catch {}
-    setIsCreating(false);
+    } catch {
+      // 创建失败时保留用户输入，便于修改后重试。
+    } finally {
+      setIsCreating(false);
+    }
   }
 
   async function deleteTag(tagId: string) {
@@ -70,7 +77,9 @@ export default function TagManager({ archiveId }: TagManagerProps) {
       await api.delete(`/api/chat/tags/${tagId}`);
       await loadTags();
       await loadArchiveTags();
-    } catch {}
+    } catch {
+      // 删除失败时保留当前标签状态。
+    }
   }
 
   async function toggleTag(tag: Tag) {
@@ -82,7 +91,9 @@ export default function TagManager({ archiveId }: TagManagerProps) {
     try {
       await api.post(`/api/chat/archives/${archiveId}/tags`, { tag_ids: newTagIds });
       await loadArchiveTags();
-    } catch {}
+    } catch {
+      // 更新失败时保留当前选择状态。
+    }
   }
 
   const activeTagIds = new Set(archiveTags.map(t => t.id));

@@ -273,7 +273,7 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
           const result = await reader.read();
           value = result.value;
           done = result.done;
-        } catch (readErr) {
+        } catch {
           done = true;
         }
 
@@ -306,7 +306,9 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
               if (nlIdx !== -1) {
                 try {
                   receivedRefs = JSON.parse(dataStr.slice(0, nlIdx));
-                } catch {}
+                } catch {
+                  // 兼容服务端没有附带引用信息的历史响应。
+                }
                 fullContent = dataStr.slice(nlIdx + 1);
               } else if (dataStr) {
                 fullContent = dataStr;

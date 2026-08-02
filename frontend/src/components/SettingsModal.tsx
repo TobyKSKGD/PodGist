@@ -21,6 +21,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
   const [diagnosticsError, setDiagnosticsError] = useState('');
   const [dashscopeApiKey, setDashscopeApiKey] = useState('');
+  const [cacheEntityImages, setCacheEntityImages] = useState(false);
 
   // 加载设置
   useEffect(() => {
@@ -35,6 +36,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
       if (response.data.status === 'success') {
         const data = response.data.data;
         setDashscopeApiKey(data.dashscope_api_key || '');
+        setCacheEntityImages(!!data.cache_entity_images);
       }
     } catch (error) {
       console.error('加载设置失败:', error);
@@ -66,6 +68,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
     try {
       const formData = new FormData();
       formData.append('dashscope_api_key', dashscopeApiKey);
+      formData.append('cache_entity_images', String(cacheEntityImages));
       const response = await axios.post('http://localhost:8000/api/settings', formData);
       if (response.data.status === 'success') {
         showToast('success', '设置已保存并应用');
@@ -147,6 +150,19 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
                 />
                 <p className="text-xs text-slate-400">云端语音识别 + 大模型摘要分析，只需这一个密钥。</p>
               </div>
+
+              <label className="flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={cacheEntityImages}
+                  onChange={(event) => setCacheEntityImages(event.target.checked)}
+                  className="mt-0.5 h-4 w-4 accent-[#00ADA6]"
+                />
+                <span>
+                  <span className="block text-sm font-medium text-slate-700">将时间轴实体图片保存到本地</span>
+                  <span className="mt-1 block text-xs leading-relaxed text-slate-400">默认仅保存远程链接。图片加载失败会自动隐藏，不影响时间轴生成和使用。</span>
+                </span>
+              </label>
 
               <button
                 onClick={saveSettings}

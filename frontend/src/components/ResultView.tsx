@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { IconFileDescription, IconClock, IconChevronLeft, IconDownload, IconCopy, IconCheck, IconSearch, IconLoader2, IconMessageCircle } from '@tabler/icons-react';
 import TagManager from './TagManager';
 import axios from 'axios';
@@ -35,12 +35,7 @@ export default function ResultView({ archiveId, onBack, onJumpToChat }: ResultVi
   // Backlinks
   const [backlinks, setBacklinks] = useState<{id: string; title: string; updated_at: string}[]>([]);
 
-  useEffect(() => {
-    fetchArchiveContent();
-    fetchBacklinks();
-  }, [archiveId]);
-
-  const fetchArchiveContent = async () => {
+  const fetchArchiveContent = useCallback(async () => {
     try {
       setLoading(true);
       const res = await api.get(`/api/archives/${archiveId}`);
@@ -53,14 +48,21 @@ export default function ResultView({ archiveId, onBack, onJumpToChat }: ResultVi
     } finally {
       setLoading(false);
     }
-  };
+  }, [archiveId]);
 
-  const fetchBacklinks = async () => {
+  const fetchBacklinks = useCallback(async () => {
     try {
       const res = await api.get(`/api/chat/archives/${archiveId}/references`);
       if (res.data.status === 'success') setBacklinks(res.data.data);
-    } catch {}
-  };
+    } catch {
+      // 反向链接加载失败不影响归档正文阅读。
+    }
+  }, [archiveId]);
+
+  useEffect(() => {
+    void fetchArchiveContent();
+    void fetchBacklinks();
+  }, [fetchArchiveContent, fetchBacklinks]);
 
   const handleIconCopy = async () => {
     if (!content) return;
@@ -105,11 +107,14 @@ export default function ResultView({ archiveId, onBack, onJumpToChat }: ResultVi
       if (res.data.status === 'success') {
         setIconSearchResult(res.data.result);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('搜索失败:', err);
-      const errorDetail = err.response?.data?.detail;
+      const errorDetail = axios.isAxiosError<{ detail?: unknown }>(err)
+        ? err.response?.data?.detail
+        : undefined;
       const errorMessage = typeof errorDetail === 'string' ? errorDetail : JSON.stringify(errorDetail);
-      setIconSearchResult(`搜索失败: ${errorMessage || err.message}`);
+      const fallbackMessage = err instanceof Error ? err.message : '未知错误';
+      setIconSearchResult(`搜索失败: ${errorMessage || fallbackMessage}`);
     } finally {
       setIsIconSearching(false);
     }

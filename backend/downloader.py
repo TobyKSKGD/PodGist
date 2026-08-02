@@ -274,7 +274,7 @@ def download_bilibili_audio_direct(url, save_dir, cookies_path=None):
         }
 
     source_path = os.path.join(save_dir, f'{title}{source_ext}')
-    mp3_path = os.path.join(save_dir, f'{title}.mp3')
+    remuxed_path = os.path.join(save_dir, f'{title}.m4a')
     print(f'[Downloader] Bilibili API 直连下载: {title}')
     download_error = _download_stream_to_file(session, media_urls, source_path)
     if download_error:
@@ -283,17 +283,27 @@ def download_bilibili_audio_direct(url, save_dir, cookies_path=None):
             'error': f'Bilibili 音轨下载失败: {download_error}', 'platform': 'bilibili',
         }
 
+    # DASH 音轨通常已经是 AAC；无损重封装为 m4a 比重新编码为高码率 MP3 更快，
+    # 且不会损失音质。仅在平台返回的音轨无法重封装时回退到旧的转码方式。
     ffmpeg_path = get_ffmpeg_path()
     try:
         result = subprocess.run(
-            [ffmpeg_path, '-i', source_path, '-vn', '-codec:a', 'libmp3lame', '-q:a', '2', mp3_path, '-y'],
+            [ffmpeg_path, '-i', source_path, '-vn', '-c:a', 'copy', remuxed_path, '-y'],
             capture_output=True,
             text=True,
             timeout=180,
         )
         if result.returncode != 0:
-            detail = (result.stderr or '')[-500:]
-            raise RuntimeError(detail or f'FFmpeg 退出码 {result.returncode}')
+            print('[Downloader] Bilibili 音轨无损重封装失败，回退为兼容转码')
+            fallback = subprocess.run(
+                [ffmpeg_path, '-i', source_path, '-vn', '-c:a', 'aac', '-b:a', '128k', remuxed_path, '-y'],
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            if fallback.returncode != 0:
+                detail = (fallback.stderr or result.stderr or '')[-500:]
+                raise RuntimeError(detail or f'FFmpeg 退出码 {fallback.returncode}')
     except (OSError, subprocess.TimeoutExpired, RuntimeError) as e:
         return {
             'success': False, 'file_path': None, 'title': title,
@@ -306,14 +316,14 @@ def download_bilibili_audio_direct(url, save_dir, cookies_path=None):
         except OSError:
             pass
 
-    if not os.path.exists(mp3_path) or os.path.getsize(mp3_path) == 0:
+    if not os.path.exists(remuxed_path) or os.path.getsize(remuxed_path) == 0:
         return {
             'success': False, 'file_path': None, 'title': title,
             'error': 'Bilibili 音频转换后文件为空', 'platform': 'bilibili',
         }
-    print(f'[Downloader] Bilibili 音频下载完成: {mp3_path}')
+    print(f'[Downloader] Bilibili 音频下载完成: {remuxed_path}')
     return {
-        'success': True, 'file_path': mp3_path, 'title': title,
+        'success': True, 'file_path': remuxed_path, 'title': title,
         'error': None, 'platform': 'bilibili',
     }
 
@@ -365,12 +375,6 @@ def download_audio_with_ytdlp(url, save_dir, title=None, prefer_m4a=False,
     # yt-dlp 输出模板用 sanitized title（yt-dlp 会再次 sanitize，与我们独立计算的结果可能有差异）
     output_template = os.path.join(save_dir, title + '.%(ext)s')
 
-    postprocessors = []
-    if prefer_m4a:
-        postprocessors.append({'key': 'FFmpegExtractAudio', 'preferredcodec': 'm4a', 'preferredquality': '192'})
-    else:
-        postprocessors.append({'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '192'})
-
     ydl_opts = {
         'format': 'bestaudio/best',
         'outtmpl': output_template,
@@ -378,7 +382,8 @@ def download_audio_with_ytdlp(url, save_dir, title=None, prefer_m4a=False,
         'no_warnings': False,
         'socket_timeout': 30,
         'retries': 3,
-        'postprocessors': postprocessors,
+        # DashScope 支持 m4a、opus、webm、mp3 等常见音频格式；保留平台原始
+        # 音轨可以消除整段重编码，并减少无谓的本地等待。
     }
     if ffmpeg_dir:
         ydl_opts['ffmpeg_location'] = ffmpeg_dir
@@ -445,25 +450,6 @@ def download_audio_with_ytdlp(url, save_dir, title=None, prefer_m4a=False,
 
     file_path = newest_file
     print('[Downloader] 下载完成: ' + file_path)
-
-    # 如果需要转码（prefer_m4a=False 但得到的是 m4a）
-    _, ext = os.path.splitext(file_path)
-    if not prefer_m4a and ext.lower() != '.mp3':
-        mp3_path = os.path.join(save_dir, title + '.mp3')
-        try:
-            result2 = subprocess.run([get_ffmpeg_path(), '-i', file_path, '-codec:a', 'libmp3lame', '-q:a', '2', mp3_path, '-y'], capture_output=True, text=True, timeout=60)
-            if result2.returncode == 0:
-                os.remove(file_path)
-                file_path = mp3_path
-                print('[Downloader] 转码完成: ' + title)
-            else:
-                print('[Downloader] FFmpeg 转码失败: ' + result2.stderr[:200])
-                return {'success': False, 'file_path': None, 'title': title, 'error': '音频格式转换失败', 'platform': None}
-        except subprocess.TimeoutExpired:
-            return {'success': False, 'file_path': None, 'title': title, 'error': '音频格式转换超时', 'platform': None}
-        except Exception as e:
-            print('[Downloader] 转码出错: ' + str(e))
-            return {'success': False, 'file_path': None, 'title': title, 'error': '音频格式转换出错: ' + str(e), 'platform': None}
 
     return {'success': True, 'file_path': file_path, 'title': title, 'error': None, 'platform': None}
 
@@ -656,23 +642,13 @@ def download_xiaoyuzhou_audio(url, save_dir='temp_audio'):
                 if chunk:
                     f.write(chunk)
 
-        print('[Downloader] 下载完成: ' + title + '，转码中...')
-
-        if ext in ['.m4a', '.aac'] and os.path.exists(file_path):
-            try:
-                mp3_path = os.path.join(save_dir, title + '.mp3')
-                result = subprocess.run([get_ffmpeg_path(), '-i', file_path, '-codec:a', 'libmp3lame', '-q:a', '2', mp3_path, '-y'], capture_output=True, text=True, timeout=60)
-                if result.returncode == 0:
-                    os.remove(file_path)
-                    file_path = mp3_path
-                    print('[Downloader] 转码完成: ' + title)
-                else:
-                    print('[Downloader] FFmpeg 转码失败: ' + result.stderr[:200])
-            except Exception as e:
-                print('[Downloader] 格式转换失败，保持原格式: ' + str(e))
+        print('[Downloader] 下载完成，保留原始音频格式供转录与归档使用: ' + title)
 
         if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
-            return {'success': True, 'file_path': file_path, 'title': title, 'error': None, 'platform': 'xiaoyuzhou'}
+            return {
+                'success': True, 'file_path': file_path, 'title': title, 'error': None,
+                'platform': 'xiaoyuzhou', 'asr_public_url': audio_url,
+            }
         else:
             return {'success': False, 'file_path': None, 'title': title, 'error': '音频文件保存失败', 'platform': 'xiaoyuzhou'}
 

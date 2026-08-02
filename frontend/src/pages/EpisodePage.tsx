@@ -22,6 +22,7 @@ import {
 import { resolveApiAssetUrl, resolveMediaUrl } from '../utils/apiAsset';
 
 const api = axios.create({ baseURL: 'http://localhost:8000' });
+const PROGRESS_KEY = 'podgist_play_progress';
 
 // ===== 类型 =====
 
@@ -65,7 +66,7 @@ interface TimelineNode {
     refUrl?: string;
     refTitle?: string;
     sourceTier?: string;
-    media?: { filename?: string; source_url?: string };
+    media?: { filename?: string; source_url?: string; remote_url?: string };
   }>;
   facts: Array<{ label: string; value: string }>;
   quote_or_joke_explainer: string;
@@ -93,6 +94,7 @@ interface ArchiveDetail {
   mode?: string;
   metadata?: Record<string, unknown>;
   timelineData?: TimelineData;
+  enrichmentStatus?: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | null;
 }
 
 type TimelineTab = 'chapters' | 'highlights' | 'terms' | 'segments';
@@ -166,6 +168,7 @@ export default function EpisodePage() {
   // 列表滚动容器的 ref
   const listScrollRef = useRef<HTMLDivElement>(null);
   const nodeListRef = useRef<HTMLDivElement>(null);
+  const lastPrioritizedNodeId = useRef<string | null>(null);
 
   // 最后一次滚动处理的时间戳（用于防抖）
   const lastScrollTime = useRef(0);
@@ -173,7 +176,7 @@ export default function EpisodePage() {
   // 获取 archive 详情
   useEffect(() => {
     if (!id) return;
-    setLoading(true);
+    queueMicrotask(() => setLoading(true));
     api.get<{ status: string; data: ArchiveDetail }>(`/api/archives/${id}`)
       .then(res => {
         if (res.data.status === 'success') {
@@ -206,6 +209,27 @@ export default function EpisodePage() {
       .finally(() => setLoading(false));
   }, [id]);
 
+  // 外部实体资料在后台补充完成后，仅刷新时间轴数据；不重置播放状态或用户选择。
+  useEffect(() => {
+    if (!id || !archive?.timelineData) return;
+    if (archive.enrichmentStatus !== 'PENDING' && archive.enrichmentStatus !== 'PROCESSING') return;
+
+    const interval = window.setInterval(() => {
+      api.get<{ status: string; data: ArchiveDetail }>(`/api/archives/${id}`)
+        .then(res => {
+          if (res.data.status !== 'success') return;
+          setArchive(previous => previous ? {
+            ...previous,
+            timelineData: res.data.data.timelineData,
+            enrichmentStatus: res.data.data.enrichmentStatus,
+          } : previous);
+        })
+        .catch(() => { /* 后台富化失败不影响当前节目使用 */ });
+    }, 4000);
+
+    return () => window.clearInterval(interval);
+  }, [id, archive?.enrichmentStatus, archive?.timelineData]);
+
   // ===== 从 localStorage 恢复播放进度（仅一次，首次 audio 加载完成后）=====
   const progressRestoredRef = useRef(false);
   useEffect(() => {
@@ -220,18 +244,18 @@ export default function EpisodePage() {
       if (saved && saved.lastPositionSeconds > 0 && saved.lastPositionSeconds < saved.duration - 5) {
         audioRef.current.currentTime = saved.lastPositionSeconds;
         audioRef.current.pause();
-        setIsPlaying(false);
-        setCurrentTime(saved.lastPositionSeconds);
+        queueMicrotask(() => {
+          setIsPlaying(false);
+          setCurrentTime(saved.lastPositionSeconds);
+        });
       }
-    } catch { /* ignore */ }
-  }, [archive, duration]);
+    } catch { /* 忽略损坏或过期的本地播放进度 */ }
+  }, [archive, duration, id]);
 
   // ===== 播放进度本地存储 =====
 
-  const PROGRESS_KEY = 'podgist_play_progress';
-
   const lastSaveRef = useRef(0);
-  const saveProgress = (seconds: number, dur: number) => {
+  const saveProgress = useCallback((seconds: number, dur: number) => {
     if (!id || !dur || dur <= 0) return;
     const now = Date.now();
     if (now - lastSaveRef.current < 10000) return;
@@ -241,8 +265,8 @@ export default function EpisodePage() {
       const all: Record<string, { archiveId: string; lastPositionSeconds: number; duration: number; updatedAt: number }> = raw ? JSON.parse(raw) : {};
       all[id] = { archiveId: id, lastPositionSeconds: seconds, duration: dur, updatedAt: now };
       localStorage.setItem(PROGRESS_KEY, JSON.stringify(all));
-    } catch { /* ignore */ }
-  };
+    } catch { /* localStorage 不可用时不影响播放 */ }
+  }, [id]);
 
   // ===== 音频事件 =====
 
@@ -256,7 +280,7 @@ export default function EpisodePage() {
     const t = audioRef.current.currentTime;
     setCurrentTime(t);
     saveProgress(t, audioRef.current.duration || 0);
-  }, []);
+  }, [saveProgress]);
 
   const handleLoadedMetadata = () => {
     if (!audioRef.current) return;
@@ -264,31 +288,31 @@ export default function EpisodePage() {
     setDuration(dur);
   };
 
-  const togglePlay = () => {
+  const togglePlay = useCallback(() => {
     if (!audioRef.current || !archive?.audioUrl) return;
     if (audioRef.current.paused) {
       audioRef.current.play();
     } else {
       audioRef.current.pause();
     }
-  };
+  }, [archive?.audioUrl]);
 
-  const seekTo = (seconds: number) => {
+  const seekTo = useCallback((seconds: number) => {
     if (!audioRef.current) return;
     const clamped = Math.max(0, Math.min(seconds, duration));
     audioRef.current.currentTime = clamped;
     // 注意：不在这里调用 setCurrentTime，由 onTimeUpdate 自然同步
-  };
+  }, [duration]);
 
   // 读取音频真实当前位置，避免闭包捕获旧 state 值
-  const skipForward30 = () => {
+  const skipForward30 = useCallback(() => {
     if (!audioRef.current) return;
     seekTo(audioRef.current.currentTime + 30);
-  };
-  const skipBackward15 = () => {
+  }, [seekTo]);
+  const skipBackward15 = useCallback(() => {
     if (!audioRef.current) return;
     seekTo(audioRef.current.currentTime - 15);
-  };
+  }, [seekTo]);
 
   // ===== 时间轴自动高亮（summary 模式）=====
 
@@ -298,23 +322,23 @@ export default function EpisodePage() {
     if (activeTab === 'segments') {
       const seg = findActiveItem(archive.transcriptSegments, currentTime);
       if (seg && seg.id !== autoHighlightItem?.id) {
-        setAutoHighlightItem(seg);
+        queueMicrotask(() => setAutoHighlightItem(seg));
       }
     } else if (activeTab === 'highlights') {
       const hl = findActiveItem(archive.timeline.highlights, currentTime);
       if (hl && hl.id !== autoHighlightItem?.id) {
-        setAutoHighlightItem(hl);
+        queueMicrotask(() => setAutoHighlightItem(hl));
       }
     }
-  }, [currentTime, archive]);
+  }, [activeTab, archive, autoHighlightItem?.id, currentTime]);
 
   useEffect(() => {
     if (!archive) return;
     if (activeTab !== 'chapters' && activeTab !== 'terms') return;
     if (selectedItem) {
-      setAutoHighlightItem(selectedItem);
+      queueMicrotask(() => setAutoHighlightItem(selectedItem));
     }
-  }, [activeTab, archive]);
+  }, [activeTab, archive, selectedItem]);
 
   // ===== 时间轴自动高亮（timeline 模式）=====
 
@@ -323,9 +347,32 @@ export default function EpisodePage() {
     const node = findActiveNode(archive.timelineData.nodes, currentTime);
     if (!node) return;
 
-    setCurrentNode(prev => (prev?.id === node.id ? prev : node));
-    setSelectedNode(prev => (prev && prev.id !== node.id ? null : prev));
+    queueMicrotask(() => {
+      setCurrentNode(prev => (prev?.id === node.id ? prev : node));
+      setSelectedNode(prev => (prev && prev.id !== node.id ? null : prev));
+    });
   }, [currentTime, archive]);
+
+  // 流媒体式资料富化：当前节点优先，后端同时预加载相邻节点。
+  // 只在切换节点或用户手动跳转时触发，不随每秒播放进度重复请求。
+  useEffect(() => {
+    if (!id || !archive?.timelineData?.nodes?.length) return;
+    if (archive.enrichmentStatus === 'COMPLETED') return;
+    const focusedNode = selectedNode ?? currentNode ?? archive.timelineData.nodes[0];
+    if (!focusedNode || focusedNode.id === lastPrioritizedNodeId.current) return;
+
+    const timeout = window.setTimeout(() => {
+      api.post(`/api/archives/${encodeURIComponent(id)}/enrichment/priority`, {
+        node_id: focusedNode.id,
+      })
+        .then(() => {
+          lastPrioritizedNodeId.current = focusedNode.id;
+        })
+        .catch(() => { /* 富化网络异常不影响播放和时间轴阅读 */ });
+    }, 350);
+
+    return () => window.clearTimeout(timeout);
+  }, [id, archive?.enrichmentStatus, archive?.timelineData, currentNode, selectedNode]);
 
   useEffect(() => {
     const activeNode = selectedNode ?? currentNode;
@@ -374,7 +421,7 @@ export default function EpisodePage() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [currentTime, duration]);
+  }, [skipBackward15, skipForward30, togglePlay]);
 
   // ===== 双向联动逻辑（summary 模式）=====
 
@@ -605,7 +652,7 @@ export default function EpisodePage() {
                     sl: string;
                     hasRef: boolean;
                     hasMedia: boolean;
-                    mediaFilename: string;
+                    mediaUrl: string;
                     refUrl: string;
                     refTitle: string;
                     tier: string;
@@ -620,8 +667,12 @@ export default function EpisodePage() {
                       const sl = sourceTierBadge[entity.sourceTier ?? ''] ?? '';
                       const tier = entity.sourceTier ?? '';
                       const hasRef = !!(entity.refUrl && !entity.refUrl.includes('github.com'));
-                      const hasMedia = !!(entity.media?.filename);
                       const mediaFilename = entity.media?.filename ?? '';
+                      const remoteMediaUrl = entity.media?.remote_url ?? '';
+                      const mediaUrl = mediaFilename
+                        ? resolveMediaUrl(archive!.id, mediaFilename)
+                        : resolveApiAssetUrl(remoteMediaUrl);
+                      const hasMedia = !!mediaUrl;
                       return {
                         key: `${activeNode.id}-${displayName}-${i}`,
                         displayName,
@@ -631,7 +682,7 @@ export default function EpisodePage() {
                         sl,
                         hasRef,
                         hasMedia,
-                        mediaFilename,
+                        mediaUrl,
                         refUrl: entity.refUrl ?? '',
                         refTitle: entity.refTitle ?? '',
                         tier,
@@ -655,8 +706,9 @@ export default function EpisodePage() {
                               <div className="flex gap-0">
                                 <div className="shrink-0 entity-card-media">
                                   <img
-                                    src={resolveMediaUrl(archive!.id, de.mediaFilename)}
+                                    src={de.mediaUrl}
                                     alt={de.displayName}
+                                    referrerPolicy="no-referrer"
                                     className="w-24 h-24 object-cover"
                                     onError={(e) => {
                                       ((e.target as HTMLImageElement).closest('.entity-card-media') as HTMLElement | null)!.style.display = 'none';

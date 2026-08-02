@@ -12,12 +12,12 @@ import platform
 import mimetypes
 from datetime import datetime
 from backend.diagnostics import run_all_diagnostics
-from backend.transcriber import transcribe_with_sensevoice, transcribe_with_dashscope_and_segments, get_available_devices
+from backend.transcriber import transcribe_with_dashscope_and_segments, get_available_devices
 from backend.llm_agent import get_podcast_summary_robust, search_in_podcast
-from backend.timeline_agent import generate_timeline_json
+from backend.timeline_agent import generate_timeline_json, warmup_timeline_nodes
 from backend.downloader import route_and_download, detect_platform, AudioDownloader
-from backend.task_queue import add_task, get_task, get_all_tasks, get_queue_stats, update_task_status, delete_task, clear_completed
-from backend.worker import start_worker, is_worker_running, pause_worker, resume_worker, is_paused, stop_worker, retry_failed_tasks
+from backend.task_queue import add_task, complete_node_enrichment_job, create_node_enrichment_jobs, get_archive_enrichment_status, get_task, get_all_tasks, get_queue_stats, prioritize_node_enrichment, update_task_status, delete_task, clear_completed
+from backend.worker import start_enrichment_worker, start_worker, is_worker_running, pause_worker, resume_worker, is_paused, stop_worker, retry_failed_tasks
 from backend.rag_db import (
     create_tag, get_all_tags, delete_tag, set_archive_tags, get_archive_tags,
     create_chat_session, get_chat_sessions, get_chat_session, update_chat_session_title, delete_chat_session,
@@ -52,6 +52,7 @@ async def startup_index():
     """启动时自动索引所有已有归档到向量库（后台运行，避免阻塞启动）"""
     # 必须用 create_task 包装 to_thread，否则 FastAPI 无法正确调度这个后台任务
     asyncio.create_task(asyncio.to_thread(index_all_archives))
+    start_enrichment_worker()
 
 # 获取 api.py 所在目录作为项目根目录（默认）
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -101,7 +102,8 @@ def load_config():
         "engine": "SenseVoice",
         "whisper_model": "small",
         "device": "auto",
-        "max_timeline_items": 15
+        "max_timeline_items": 15,
+        "cache_entity_images": False,
     }
     try:
         if os.path.exists(CONFIG_FILE):
@@ -170,6 +172,26 @@ def save_archive_metadata(archive_path: str, title: str, mode: str, source_type:
     with open(metadata_path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, ensure_ascii=False, indent=2)
 
+
+def prepare_timeline_enrichment(archive_id: str, archive_path: str, timeline_data: dict):
+    """有限度地保障首屏，然后把剩余节点交给可恢复的后台队列。"""
+    node_ids = [node.get("id", "") for node in timeline_data.get("nodes", []) if node.get("id")]
+    warmed_node_ids = []
+    try:
+        warmed_node_ids = warmup_timeline_nodes(
+            archive_id,
+            archive_path,
+            node_ids[:2],
+            cache_entity_images=bool(load_config().get("cache_entity_images", False)),
+        )
+    except Exception as exc:
+        # 外部资料站点不可用不影响核心时间轴交付，后续仍会在后台重试。
+        print(f"[Enrichment] 首屏保障跳过 ({archive_id}): {exc}")
+
+    create_node_enrichment_jobs(archive_id, node_ids)
+    for node_id in warmed_node_ids:
+        complete_node_enrichment_job(archive_id, node_id)
+
 # 1. 健康检查接口
 @app.get("/")
 def read_root():
@@ -202,7 +224,14 @@ async def transcribe_local(
             raise HTTPException(status_code=400, detail="请提供 DashScope API Key")
 
         # 2. 转录（使用 DashScope 云端 ASR）
-        podcast_text, transcript_segments = transcribe_with_dashscope_and_segments(file_path, api_key)
+        asr_metrics = {}
+        podcast_text, transcript_segments = transcribe_with_dashscope_and_segments(
+            file_path,
+            api_key,
+            metrics=asr_metrics,
+        )
+        if asr_metrics:
+            print(f"[API] ASR 阶段耗时: {asr_metrics}")
 
         # 3. 根据 mode 生成内容
         safe_basename = os.path.splitext(os.path.basename(file.filename))[0]
@@ -259,6 +288,7 @@ async def transcribe_local(
             summary_path = os.path.join(archive_path, "summary.md")
             with open(summary_path, "w", encoding="utf-8") as f:
                 f.write(f"# {ai_title}\n\n[时间轴模式] 共 {len(timeline_data.get('nodes', []))} 个节点\n")
+            prepare_timeline_enrichment(archive_name, archive_path, timeline_data)
         else:
             summary_path = os.path.join(archive_path, "summary.md")
             with open(summary_path, "w", encoding="utf-8") as f:
@@ -347,7 +377,15 @@ async def transcribe_url(
 
     try:
         # 3. 转录（使用 DashScope 云端 ASR）
-        podcast_text = transcribe_with_sensevoice(file_path)
+        asr_metrics = {}
+        podcast_text, _ = transcribe_with_dashscope_and_segments(
+            file_path,
+            api_key,
+            public_audio_url=download_result.get("asr_public_url"),
+            metrics=asr_metrics,
+        )
+        if asr_metrics:
+            print(f"[API] ASR 阶段耗时: {asr_metrics}")
 
         # 5. 调用大模型生成摘要
         summary = get_podcast_summary_robust(api_key, podcast_text, max_timeline_items=max_timeline_items)
@@ -586,7 +624,7 @@ def migrate_archive_to_timeline(archive_id: str):
             raise HTTPException(status_code=400, detail="请先配置 DashScope API Key")
 
         # 生成 timeline
-        timeline_data = generate_timeline_json(api_key, podcast_text, transcript_segments, title=archive_id, archive_path=archive_path)
+        timeline_data = generate_timeline_json(api_key, podcast_text, transcript_segments, title=archive_id)
 
         # 读取原 metadata
         metadata_path = os.path.join(archive_path, "metadata.json")
@@ -636,6 +674,8 @@ def migrate_archive_to_timeline(archive_id: str):
         }
         with open(os.path.join(tl_archive_path, "metadata.json"), "w", encoding="utf-8") as f:
             json.dump(tl_meta, f, ensure_ascii=False, indent=2)
+
+        prepare_timeline_enrichment(tl_archive_name, tl_archive_path, timeline_data)
 
         # 向量索引
         try:
@@ -1110,8 +1150,47 @@ def get_archive_detail(archive_id: str):
                 "mode": metadata.get("mode", "summary") if metadata else "summary",
                 "metadata": metadata,
                 "timelineData": timeline_data,
+                "enrichmentStatus": get_archive_enrichment_status(archive_id),
             }
         }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/archives/{archive_id}/enrichment/priority")
+def prioritize_archive_enrichment(archive_id: str, request: dict):
+    """将用户正在查看的节点及其相邻节点提升为最高富化优先级。"""
+    try:
+        archive_path = os.path.join(ARCHIVE_DIR, archive_id)
+        if not os.path.abspath(archive_path).startswith(os.path.abspath(ARCHIVE_DIR)):
+            raise HTTPException(status_code=400, detail="无效的归档ID")
+
+        timeline_path = os.path.join(archive_path, "timeline.json")
+        if not os.path.isfile(timeline_path):
+            raise HTTPException(status_code=404, detail="归档没有时间轴数据")
+        node_id = str(request.get("node_id", "")).strip()
+        if not node_id:
+            raise HTTPException(status_code=400, detail="缺少时间轴节点ID")
+
+        with open(timeline_path, "r", encoding="utf-8") as f:
+            timeline_data = json.load(f)
+        node_ids = [node.get("id", "") for node in timeline_data.get("nodes", []) if node.get("id")]
+        if node_id not in node_ids:
+            raise HTTPException(status_code=404, detail="时间轴节点不存在")
+
+        # 确保旧归档也能在首次查看时升级到节点级队列。
+        create_node_enrichment_jobs(archive_id, node_ids)
+        index = node_ids.index(node_id)
+        priority_ids = [node_id]
+        for neighbor_index in (index - 1, index + 1, index + 2):
+            if 0 <= neighbor_index < len(node_ids):
+                priority_ids.append(node_ids[neighbor_index])
+        prioritize_node_enrichment(archive_id, priority_ids)
+        start_enrichment_worker()
+
+        return {"status": "success", "queued_node_ids": priority_ids}
     except HTTPException:
         raise
     except Exception as e:
@@ -1378,7 +1457,8 @@ def get_settings():
         "status": "success",
         "data": {
             "dashscope_api_key": api_key,
-            "max_timeline_items": config.get("max_timeline_items", 15)
+            "max_timeline_items": config.get("max_timeline_items", 15),
+            "cache_entity_images": config.get("cache_entity_images", False),
         }
     }
 
@@ -1387,7 +1467,8 @@ def get_settings():
 @app.post("/api/settings")
 def save_settings(
     dashscope_api_key: str = Form(""),
-    max_timeline_items: int = Form(15)
+    max_timeline_items: int = Form(15),
+    cache_entity_images: bool = Form(False)
 ):
     try:
         # 保存 API Key 到 .env 文件（使用 DASHSCOPE_API_KEY=xxx 格式）
@@ -1400,6 +1481,7 @@ def save_settings(
         # 保存配置到 config.json
         config = load_config()
         config["max_timeline_items"] = max_timeline_items
+        config["cache_entity_images"] = cache_entity_images
         save_config(config)
 
         return {"status": "success", "message": "设置已保存"}
@@ -1481,6 +1563,7 @@ async def create_task(
         # 确保 Worker 正在运行
         if not is_worker_running():
             start_worker()
+        start_enrichment_worker()
 
         task_id = add_task(
             source=source,
