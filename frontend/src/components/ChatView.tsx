@@ -66,6 +66,20 @@ function getArchiveDisplayName(
     || fallbackName;
 }
 
+function getExplicitArchiveName(rawArchiveName: string): string {
+  // 模型偶尔会在正文作品名之后才输出真正来源，例如：
+  // 《作品名》相关说明……「来源：《完整归档标题》[00:16]」。
+  // 宽松引用正则会从前一个书名号开始匹配；此时应采用最后一个明确的来源标题。
+  const explicitSourceMarker = /(?:参考)?来源\s*[:：]?\s*《/g;
+  const markers = [...rawArchiveName.matchAll(explicitSourceMarker)];
+  const lastMarker = markers.at(-1);
+  if (!lastMarker || lastMarker.index === undefined) return rawArchiveName.trim();
+
+  return rawArchiveName
+    .slice(lastMarker.index + lastMarker[0].length)
+    .trim();
+}
+
 /** 把纯文本内容按引用格式拆成片段，引用部分可点击 */
 function renderContentWithCitations(
   content: string,
@@ -77,7 +91,9 @@ function renderContentWithCitations(
   // 整个来源标记都会被消费，避免把「、」或列表符号遗留在正文中单独换行。
   // 标题本身可能包含书名号，例如《天下第一？《女神异闻录5皇家版》到底有没有被过誉？》。
   // 用紧邻时间戳的外层 `》` 作为标题终点，不能在内部第一个 `》` 提前截断。
-  const pattern = /(?:[「『]\s*)?(?:(?:参考)?来源\s*[:：]?\s*)?(?:[-•·]\s*)?《(.+?)》((?:\s*\[\d{1,2}:\d{2}(?::\d{2})?\])+)(?:\s*[」』])?(?:\s*[。.]?(?=\s|$))?/g;
+  // 正文中的引用必须带“来源：”；不带前缀的兜底来源只允许出现在独立行首。
+  // 这样不会把正文里的普通作品名误当成引用起点并一直吞到后面的时间戳。
+  const pattern = /(?:[「『[]\s*)?(?:(?:(?:参考)?来源\s*[:：]?\s*)(?:[-•·]\s*)?|(?:^|\n)\s*(?:[-•·]\s*)?)《(.+?)》((?:\s*\[\d{1,2}:\d{2}(?::\d{2})?\])+)(?:\s*[」』\]])?(?:\s*[。.]?(?=\s|$))?/gm;
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;
@@ -98,7 +114,7 @@ function renderContentWithCitations(
     if (match.index > lastIndex) {
       pushMarkdown(content.slice(lastIndex, match.index));
     }
-    const archiveName = match[1];
+    const archiveName = getExplicitArchiveName(match[1]);
     const timestamps = [...match[2].matchAll(/\[(\d{1,2}:\d{2}(?::\d{2})?)\]/g)].map(item => item[1]);
     const timestamp = timestamps[0] || '';
     const placeholderName = /^(?:\.{2,}|…+|⋯+)$/.test(archiveName.trim());
