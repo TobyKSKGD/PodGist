@@ -1,2 +1,7 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# PodGist 在 macOS 与 Windows 上共同开发。所有文本文件在仓库和工作区统一使用 LF，
+# 避免不同平台反复产生整文件换行差异；二进制文件仍由 Git 自动识别。
+* text=auto eol=lf
+
+# 仅 Windows 命令解释器直接执行的脚本保留 CRLF。
+*.bat text eol=crlf
+*.cmd text eol=crlf

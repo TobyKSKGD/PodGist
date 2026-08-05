@@ -23,6 +23,7 @@ function findArchiveId(
   archiveName: string,
   references: ChatReference[] | undefined,
   archives: { id: string; name: string }[],
+  timestamps: string[] = [],
 ): string | undefined {
   const normalize = (value: string) => value
     .replace(/\s/g, '')
@@ -40,15 +41,29 @@ function findArchiveId(
     .replaceAll(')', '')
     .toLowerCase();
   const normalizedName = normalize(archiveName);
+  const isPlaceholderName = /^(?:\.{2,}|…+|⋯+)$/.test(archiveName.trim());
   const matches = (candidate: string) => {
     const normalizedCandidate = normalize(candidate);
-    return normalizedCandidate === normalizedName
+    return !isPlaceholderName && (normalizedCandidate === normalizedName
       || normalizedName.includes(normalizedCandidate)
-      || normalizedCandidate.includes(normalizedName);
+      || normalizedCandidate.includes(normalizedName));
   };
 
   return references?.find((reference) => matches(reference.archive_name))?.archive_id
+    || references?.find((reference) => timestamps.includes(reference.timestamp))?.archive_id
     || archives.find((archive) => matches(archive.name))?.id;
+}
+
+function getArchiveDisplayName(
+  archiveId: string | undefined,
+  fallbackName: string,
+  references: ChatReference[] | undefined,
+  archives: { id: string; name: string }[],
+): string {
+  if (!archiveId) return fallbackName;
+  return references?.find((reference) => reference.archive_id === archiveId)?.archive_name
+    || archives.find((archive) => archive.id === archiveId)?.name
+    || fallbackName;
 }
 
 /** 把纯文本内容按引用格式拆成片段，引用部分可点击 */
@@ -60,19 +75,35 @@ function renderContentWithCitations(
 ): React.ReactNode[] {
   // 兼容模型生成的「来源：…」、来源：…，以及兜底回复里的“参考来源：\n- …”。
   // 整个来源标记都会被消费，避免把「、」或列表符号遗留在正文中单独换行。
-  const pattern = /(?:[「『]\s*)?(?:(?:参考)?来源\s*[:：]?\s*)?(?:[-•]\s*)?《([^》]+)》\s*\[([^\]]+)\]\s*(?:[」』])?/g;
+  const pattern = /(?:[「『]\s*)?(?:(?:参考)?来源\s*[:：]?\s*)?(?:[-•·]\s*)?《([^》]+)》((?:\s*\[\d{1,2}:\d{2}(?::\d{2})?\])+)(?:\s*[」』])?(?:\s*[。.]?(?=\s|$))?/g;
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;
   let key = 0;
+  let lastResolvedArchiveId: string | undefined;
+
+  const pushMarkdown = (raw: string) => {
+    // 模型常把引用末尾的句号、列表符或额外时间戳拆成单独一行；这些不属于正文。
+    const cleaned = raw
+      .replace(/^\s*(?:[-•·]\s*)?(?:[。.]\s*)+(?=\S|$)/, '')
+      .replace(/\n\s*(?:[-•·]\s*)?(?:[。.]\s*)+(?=\n|$)/g, '\n')
+      .replace(/^(?:\s*\[\d{1,2}:\d{2}(?::\d{2})?\])+\s*[。.]?\s*/g, '')
+      .replace(/\n{3,}/g, '\n\n');
+    if (cleaned.trim()) parts.push(<ReactMarkdown key={key++}>{cleaned}</ReactMarkdown>);
+  };
 
   while ((match = pattern.exec(content)) !== null) {
     if (match.index > lastIndex) {
-      parts.push(<ReactMarkdown key={key++}>{content.slice(lastIndex, match.index)}</ReactMarkdown>);
+      pushMarkdown(content.slice(lastIndex, match.index));
     }
     const archiveName = match[1];
-    const timestamp = match[2];
-    const targetId = findArchiveId(archiveName, references, archives);
+    const timestamps = [...match[2].matchAll(/\[(\d{1,2}:\d{2}(?::\d{2})?)\]/g)].map(item => item[1]);
+    const timestamp = timestamps[0] || '';
+    const placeholderName = /^(?:\.{2,}|…+|⋯+)$/.test(archiveName.trim());
+    const targetId = findArchiveId(archiveName, references, archives, timestamps)
+      || (placeholderName ? lastResolvedArchiveId : undefined);
+    if (targetId) lastResolvedArchiveId = targetId;
+    const displayName = getArchiveDisplayName(targetId, archiveName, references, archives);
     const onClick = () => {
       if (targetId && onJump) onJump({ archiveId: targetId, timestamp });
     };
@@ -83,10 +114,10 @@ function renderContentWithCitations(
           onClick={onClick}
           disabled={!targetId}
           className="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-md text-left text-xs italic text-slate-400 transition-colors hover:text-[#00ADA6] hover:underline disabled:cursor-default disabled:hover:no-underline"
-          title={targetId ? `打开《${archiveName}》的 ${timestamp} 时间轴` : archiveName}
+          title={targetId ? `打开《${displayName}》的 ${timestamp} 时间轴` : displayName}
         >
           <span className="shrink-0">来源 · 《</span>
-          <span className="min-w-0 truncate">{archiveName}</span>
+          <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{displayName}</span>
           <span className="shrink-0">》[{timestamp}]</span>
         </button>
       </div>
@@ -96,7 +127,7 @@ function renderContentWithCitations(
 
   // 剩余文本
   if (lastIndex < content.length) {
-    parts.push(<ReactMarkdown key={key++}>{content.slice(lastIndex)}</ReactMarkdown>);
+    pushMarkdown(content.slice(lastIndex));
   }
 
   return parts;

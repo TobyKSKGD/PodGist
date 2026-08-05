@@ -17,9 +17,10 @@ SYSTEM_PROMPT_TEMPLATE = """你是一个专业的私人知识库助理，结合�
 【回答规则】:
 1. 如果参考资料库中"暂无相关记录"，先告知用户"音频库中暂无相关记录"，然后用自己的知识正常回答。
 2. 如果参考资料库中有相关内容，优先引用音频库回答，并可适当补充自身知识。
-3. 引用观点或数据时，必须在对应句子末尾严格标注来源及时间戳，格式要求：「来源：《{{archive_name}}》[{{timestamp}}]」。
+3. 引用观点或数据时，必须在对应句子末尾严格标注来源及时间戳，格式要求：「来源：《{{archive_name}}》[{{timestamp}}]」。归档标题必须逐字使用参考资料中的完整标题，禁止用“……”或其他省略写法替代。
 4. 如果用户问题可以多个参考资料共同回答，合并引用。
-5. 回答应当结构清晰、语言自然，禁止直接罗列参考资料。"""
+5. 每个来源标记只能包含一个时间戳；同一观点涉及多个时间点时，分别写成完整的来源标记，禁止在一个来源后连续输出多个 [时间戳]。
+6. 回答应当结构清晰、语言自然，禁止直接罗列参考资料。来源标记结束后不要追加引号、句号、列表符号或单独的标点行。"""
 
 
 def build_retrieved_context(chunks: list[dict]) -> str:
@@ -98,16 +99,19 @@ def generate_chat_response(
         injected_retrieved_context=retrieved_context
     )
 
-    # Step 3: 提取引用信息（包含 archive_name 和 timestamp）
-    # 构建 {archive_id: {archive_name, timestamp}} 映射，取每个归档的第一个时间戳
-    archive_refs: dict[str, dict] = {}
+    # Step 3: 提取引用信息（包含 archive_name 和 timestamp）。
+    # 按“归档 + 时间戳”去重，不能只保留归档的第一个时间戳，否则同一归档的
+    # 后续来源无法在前端可靠地还原标题和跳转位置。
+    archive_refs: dict[tuple[str, str], dict] = {}
     for c in chunks:
         aid = c["archive_id"]
-        if aid not in archive_refs:
-            archive_refs[aid] = {
+        timestamp = c.get("timestamp", "")
+        ref_key = (aid, timestamp)
+        if ref_key not in archive_refs:
+            archive_refs[ref_key] = {
                 "archive_id": aid,
                 "archive_name": c.get("archive_name", aid),
-                "timestamp": c.get("timestamp", "")
+                "timestamp": timestamp
             }
     referenced_archives = list(archive_refs.values())
 

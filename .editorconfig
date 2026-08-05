@@ -1,0 +1,7 @@
+root = true
+
+# 与 .gitattributes 保持一致，让不同平台的编辑器保存时统一使用 LF。
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
