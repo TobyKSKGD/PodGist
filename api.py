@@ -104,6 +104,8 @@ def load_config():
         "device": "auto",
         "max_timeline_items": 15,
         "cache_entity_images": False,
+        "chat_source_seek_to_timestamp": False,
+        "chat_source_autoplay": False,
     }
     try:
         if os.path.exists(CONFIG_FILE):
@@ -1459,6 +1461,8 @@ def get_settings():
             "dashscope_api_key": api_key,
             "max_timeline_items": config.get("max_timeline_items", 15),
             "cache_entity_images": config.get("cache_entity_images", False),
+            "chat_source_seek_to_timestamp": config.get("chat_source_seek_to_timestamp", False),
+            "chat_source_autoplay": config.get("chat_source_autoplay", False),
         }
     }
 
@@ -1468,7 +1472,9 @@ def get_settings():
 def save_settings(
     dashscope_api_key: str = Form(""),
     max_timeline_items: int = Form(15),
-    cache_entity_images: bool = Form(False)
+    cache_entity_images: bool = Form(False),
+    chat_source_seek_to_timestamp: bool = Form(False),
+    chat_source_autoplay: bool = Form(False),
 ):
     try:
         # 保存 API Key 到 .env 文件（使用 DASHSCOPE_API_KEY=xxx 格式）
@@ -1482,6 +1488,9 @@ def save_settings(
         config = load_config()
         config["max_timeline_items"] = max_timeline_items
         config["cache_entity_images"] = cache_entity_images
+        config["chat_source_seek_to_timestamp"] = chat_source_seek_to_timestamp
+        # 自动播放没有单独意义，始终依附于“定位到引用时间”。
+        config["chat_source_autoplay"] = chat_source_seek_to_timestamp and chat_source_autoplay
         save_config(config)
 
         return {"status": "success", "message": "设置已保存"}

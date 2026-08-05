@@ -11,7 +11,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import axios from 'axios';
 import {
   IconChevronLeft, IconPlayerPlay, IconClock,
@@ -136,11 +136,21 @@ function formatTime(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
+/** 将引用中的 M:SS 或 H:MM:SS 转成秒数。 */
+function parseTimestamp(timestamp: string | null): number | null {
+  if (!timestamp || !/^\d{1,2}:\d{2}(?::\d{2})?$/.test(timestamp.trim())) return null;
+  const parts = timestamp.trim().split(':').map(Number);
+  if (parts.some((part) => Number.isNaN(part))) return null;
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  return parts[0] * 3600 + parts[1] * 60 + parts[2];
+}
+
 // ===== 主组件 =====
 
 export default function EpisodePage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
 
   // 数据
   const [archive, setArchive] = useState<ArchiveDetail | null>(null);
@@ -152,6 +162,11 @@ export default function EpisodePage() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const progressRestoredRef = useRef(false);
+  const sourceJumpRef = useRef<{ seconds: number; autoplay: boolean } | null>(null);
+  const sourceJumpHandledRef = useRef(false);
+  const sourceJumpHandledArchiveIdRef = useRef<string | undefined>(undefined);
+  const sourceJumpRouteRef = useRef('');
 
   // ===== summary 模式状态 =====
   const [activeTab, setActiveTab] = useState<TimelineTab>('chapters');
@@ -173,10 +188,33 @@ export default function EpisodePage() {
   // 最后一次滚动处理的时间戳（用于防抖）
   const lastScrollTime = useRef(0);
 
+  // 从智能对话来源进入时，URL 只携带一次跳转意图；执行后会被清掉，避免刷新页面时意外自动播放。
+  useEffect(() => {
+    const routeKey = `${id ?? ''}|${location.search}`;
+    if (sourceJumpRouteRef.current === routeKey) return;
+
+    const timestamp = parseTimestamp(new URLSearchParams(location.search).get('t'));
+    // 跳转执行完后会移除查询参数，此时保留已完成状态，不恢复旧播放进度覆盖定位结果。
+    if (timestamp === null && sourceJumpHandledArchiveIdRef.current === id) return;
+
+    sourceJumpRouteRef.current = routeKey;
+    sourceJumpHandledRef.current = false;
+    sourceJumpHandledArchiveIdRef.current = undefined;
+    progressRestoredRef.current = false;
+    sourceJumpRef.current = timestamp === null
+      ? null
+      : { seconds: timestamp, autoplay: new URLSearchParams(location.search).get('autoplay') === '1' };
+  }, [id, location.search]);
+
   // 获取 archive 详情
   useEffect(() => {
     if (!id) return;
-    queueMicrotask(() => setLoading(true));
+    queueMicrotask(() => {
+      setDuration(0);
+      setCurrentTime(0);
+      setIsPlaying(false);
+      setLoading(true);
+    });
     api.get<{ status: string; data: ArchiveDetail }>(`/api/archives/${id}`)
       .then(res => {
         if (res.data.status === 'success') {
@@ -230,8 +268,57 @@ export default function EpisodePage() {
     return () => window.clearInterval(interval);
   }, [id, archive?.enrichmentStatus, archive?.timelineData]);
 
+  // ===== 从智能对话来源跳转到对应时间轴 =====
+  useEffect(() => {
+    const sourceJump = sourceJumpRef.current;
+    if (!sourceJump || sourceJumpHandledRef.current || !archive || archive.id !== id) return;
+    // 有音频时，等 metadata 到达后再定位，确保不会被浏览器重置到 0 秒。
+    if (archive.audioUrl && (!audioRef.current || duration <= 0)) return;
+
+    sourceJumpHandledRef.current = true;
+    sourceJumpHandledArchiveIdRef.current = id;
+    progressRestoredRef.current = true;
+    const targetSeconds = duration > 0
+      ? Math.max(0, Math.min(sourceJump.seconds, duration))
+      : sourceJump.seconds;
+
+    const node = archive.timelineData?.nodes?.length
+      ? findActiveNode(archive.timelineData.nodes, targetSeconds)
+      : null;
+    const segment = node ? null : findActiveItem(archive.transcriptSegments, targetSeconds);
+
+    queueMicrotask(() => {
+      if (node) {
+        setCurrentNode(node);
+        setSelectedNode(node);
+      } else if (segment) {
+        setActiveTab('segments');
+        setSelectedItem(segment);
+        setAutoHighlightItem(segment);
+        window.setTimeout(() => {
+          listScrollRef.current
+            ?.querySelector<HTMLElement>(`[data-item-id="${CSS.escape(segment.id)}"]`)
+            ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }, 0);
+      }
+    });
+
+    if (audioRef.current && duration > 0) {
+      audioRef.current.currentTime = targetSeconds;
+      queueMicrotask(() => setCurrentTime(targetSeconds));
+      if (sourceJump.autoplay) {
+        audioRef.current.play().catch(() => {
+          // 系统策略可能禁止自动播放；定位结果仍然保留。
+          setIsPlaying(false);
+        });
+      }
+    }
+
+    // 防止刷新详情页时再次自动跳转或自动播放。
+    navigate(`/episode/${id}`, { replace: true });
+  }, [archive, duration, id, navigate]);
+
   // ===== 从 localStorage 恢复播放进度（仅一次，首次 audio 加载完成后）=====
-  const progressRestoredRef = useRef(false);
   useEffect(() => {
     if (!archive || !audioRef.current || progressRestoredRef.current) return;
     if (duration <= 0) return;

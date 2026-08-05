@@ -58,6 +58,10 @@ function AppContent() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isBackendReady, setIsBackendReady] = useState(false);
   const [, setHasApiKey] = useState(false);
+  const [chatSourceNavigation, setChatSourceNavigation] = useState({
+    seekToTimestamp: false,
+    autoPlay: false,
+  });
   const [deleteDialog, setDeleteDialog] = useState<{ open: boolean; archiveId: string; archiveName: string }>({
     open: false,
     archiveId: '',
@@ -132,6 +136,10 @@ function AppContent() {
           device: res.data.data.device || 'auto'
         });
         setHasApiKey(!!res.data.data.dashscope_api_key);
+        setChatSourceNavigation({
+          seekToTimestamp: !!res.data.data.chat_source_seek_to_timestamp,
+          autoPlay: !!res.data.data.chat_source_autoplay,
+        });
       }
     } catch (error) {
       console.error("[App] refreshGlobalSettings failed:", error);
@@ -437,9 +445,16 @@ function AppContent() {
                 setCurrentView('result');
               }}
             />} />
-            <Route path="/chat" element={<ChatView onJumpToArchive={(archiveId) => {
+            <Route path="/chat" element={<ChatView onJumpToArchive={({ archiveId, timestamp }) => {
               setSelectedArchiveId(archiveId);
               setCurrentView('result');
+              const params = new URLSearchParams();
+              if (chatSourceNavigation.seekToTimestamp && timestamp) {
+                params.set('t', timestamp);
+                if (chatSourceNavigation.autoPlay) params.set('autoplay', '1');
+              }
+              const query = params.toString();
+              navigate(`/episode/${archiveId}${query ? `?${query}` : ''}`);
             }} />} />
           </Routes>
         </Suspense>

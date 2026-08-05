@@ -8,42 +8,88 @@ import {
   IconBook, IconTag, IconBrain
 } from '@tabler/icons-react';
 
+interface ChatReference {
+  archive_id: string;
+  archive_name: string;
+  timestamp: string;
+}
+
+interface ChatSourceLink {
+  archiveId: string;
+  timestamp: string;
+}
+
+function findArchiveId(
+  archiveName: string,
+  references: ChatReference[] | undefined,
+  archives: { id: string; name: string }[],
+): string | undefined {
+  const normalize = (value: string) => value
+    .replace(/\s/g, '')
+    .replaceAll('《', '')
+    .replaceAll('》', '')
+    .replaceAll('「', '')
+    .replaceAll('」', '')
+    .replaceAll('【', '')
+    .replaceAll('】', '')
+    .replaceAll('[', '')
+    .replaceAll(']', '')
+    .replaceAll('（', '')
+    .replaceAll('）', '')
+    .replaceAll('(', '')
+    .replaceAll(')', '')
+    .toLowerCase();
+  const normalizedName = normalize(archiveName);
+  const matches = (candidate: string) => {
+    const normalizedCandidate = normalize(candidate);
+    return normalizedCandidate === normalizedName
+      || normalizedName.includes(normalizedCandidate)
+      || normalizedCandidate.includes(normalizedName);
+  };
+
+  return references?.find((reference) => matches(reference.archive_name))?.archive_id
+    || archives.find((archive) => matches(archive.name))?.id;
+}
+
 /** 把纯文本内容按引用格式拆成片段，引用部分可点击 */
 function renderContentWithCitations(
   content: string,
-  references: { archive_id: string; archive_name: string; timestamp: string }[] | undefined,
+  references: ChatReference[] | undefined,
   archives: { id: string; name: string }[],
-  onJump: ((id: string) => void) | undefined
+  onJump: ((source: ChatSourceLink) => void) | undefined
 ): React.ReactNode[] {
-  // 支持「」或直接《》格式的来源标注
-  const pattern = /(?:来源：)?《([^》]+)》\[([^\]]+)\]/g;
+  // 兼容模型生成的「来源：…」、来源：…，以及兜底回复里的“参考来源：\n- …”。
+  // 整个来源标记都会被消费，避免把「、」或列表符号遗留在正文中单独换行。
+  const pattern = /(?:[「『]\s*)?(?:(?:参考)?来源\s*[:：]?\s*)?(?:[-•]\s*)?《([^》]+)》\s*\[([^\]]+)\]\s*(?:[」』])?/g;
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;
   let key = 0;
 
   while ((match = pattern.exec(content)) !== null) {
-    // 冒号前的普通文本
     if (match.index > lastIndex) {
       parts.push(<ReactMarkdown key={key++}>{content.slice(lastIndex, match.index)}</ReactMarkdown>);
     }
     const archiveName = match[1];
     const timestamp = match[2];
-    // 优先从 references 匹配（最准确），找不到再用 archives 列表模糊匹配
-    const ref = references?.find(r => r.archive_name === archiveName || archiveName.includes(r.archive_name));
-    const fallback = archives.find(a => a.name === archiveName || archiveName.includes(a.name));
-    const targetId = ref?.archive_id || fallback?.id;
-    const onClick = () => { if (targetId && onJump) onJump(targetId); };
+    const targetId = findArchiveId(archiveName, references, archives);
+    const onClick = () => {
+      if (targetId && onJump) onJump({ archiveId: targetId, timestamp });
+    };
     parts.push(
-      <button
-        key={key++}
-        onClick={onClick}
-        disabled={!targetId}
-        className="italic text-slate-400 hover:text-[#00ADA6] underline-offset-2 hover:underline cursor-pointer disabled:cursor-default"
-        title={targetId ? `查看 ${archiveName} 的详细总结` : archiveName}
-      >
-        来源：《{archiveName}》[{timestamp}]
-      </button>
+      <div key={key++} className="my-2 flex max-w-full">
+        <button
+          type="button"
+          onClick={onClick}
+          disabled={!targetId}
+          className="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-md text-left text-xs italic text-slate-400 transition-colors hover:text-[#00ADA6] hover:underline disabled:cursor-default disabled:hover:no-underline"
+          title={targetId ? `打开《${archiveName}》的 ${timestamp} 时间轴` : archiveName}
+        >
+          <span className="shrink-0">来源 · 《</span>
+          <span className="min-w-0 truncate">{archiveName}</span>
+          <span className="shrink-0">》[{timestamp}]</span>
+        </button>
+      </div>
     );
     lastIndex = match.index + match[0].length;
   }
@@ -65,7 +111,7 @@ interface Message {
   role: string;
   content: string;
   created_at: string;
-  references?: { archive_id: string; archive_name: string; timestamp: string }[];
+  references?: ChatReference[];
 }
 
 interface ScopeOption {
@@ -75,7 +121,7 @@ interface ScopeOption {
 }
 
 interface ChatViewProps {
-  onJumpToArchive?: (archiveId: string) => void;
+  onJumpToArchive?: (source: ChatSourceLink) => void;
 }
 
 export default function ChatView({ onJumpToArchive }: ChatViewProps) {
@@ -251,7 +297,7 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
       const decoder = new TextDecoder();
       let buffer = '';
       let fullContent = '';
-      let receivedRefs: { archive_id: string; archive_name: string; timestamp: string }[] = [];
+      let receivedRefs: ChatReference[] = [];
 
       setMessages(prev => [...prev, {
         id: `assistant-streaming`,
@@ -595,24 +641,6 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
                   {msg.created_at && (
                     <div className="text-xs text-slate-300 mt-1 px-1">
                       {formatTime(msg.created_at)}
-                    </div>
-                  )}
-                  {/* 引用来源 chips（仅助手消息） */}
-                  {msg.role === 'assistant' && msg.references && msg.references.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 mt-2">
-                      <span className="text-xs text-slate-400 self-center">参考：</span>
-                      {msg.references.map((ref, i) => (
-                        <button
-                          key={i}
-                          onClick={() => onJumpToArchive?.(ref.archive_id)}
-                          className="flex items-center gap-1 px-2 py-0.5 bg-white border border-slate-200 rounded-full text-xs text-slate-500 hover:border-[#00ADA6] hover:text-[#00ADA6] transition-colors"
-                          title={`跳转到 ${ref.archive_name}`}
-                        >
-                          <IconBook size={10} />
-                          <span>{ref.archive_name}</span>
-                          {ref.timestamp && <span className="text-slate-400">[{ref.timestamp}]</span>}
-                        </button>
-                      ))}
                     </div>
                   )}
                 </div>

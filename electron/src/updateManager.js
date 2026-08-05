@@ -156,7 +156,9 @@ class UpdateManager {
           releaseNotes: typeof release.body === 'string' ? release.body : '',
           progress: 0,
           message: `发现新版本 v${version}，请下载后替换 Applications 中的 PodGist`,
-          releaseUrl: release.html_url || RELEASE_URL,
+          // macOS 需要用户手动替换应用，但不必再让用户从 Release 页面寻找 DMG。
+          // GitHub API 的 browser_download_url 会直接触发对应安装包的下载。
+          releaseUrl: this._getMacDownloadUrl(release, version),
         });
       } else {
         this._setStatus({
@@ -207,6 +209,19 @@ class UpdateManager {
       request.on('timeout', () => request.destroy(new Error('检查更新请求超时')));
       request.on('error', reject);
     });
+  }
+
+  _getMacDownloadUrl(release, version) {
+    const expectedName = `PodGist-${version}-mac-arm64.dmg`;
+    const assets = Array.isArray(release.assets) ? release.assets : [];
+    const asset = assets.find((item) => item?.name === expectedName)
+      || assets.find((item) => typeof item?.name === 'string' && item.name.endsWith('-mac-arm64.dmg'));
+    const downloadUrl = asset?.browser_download_url;
+
+    if (typeof downloadUrl === 'string' && /^https:\/\/github\.com\//i.test(downloadUrl)) {
+      return downloadUrl;
+    }
+    return release.html_url || RELEASE_URL;
   }
 
   _normaliseVersion(version) {

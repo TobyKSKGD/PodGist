@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { IconX, IconKey, IconActivity, IconCircleCheck, IconCircleX, IconLoader2, IconHelp, IconRefresh, IconDownload, IconExternalLink, IconArrowUp } from '@tabler/icons-react';
+import ReactMarkdown from 'react-markdown';
+import { IconX, IconKey, IconActivity, IconCircleCheck, IconCircleX, IconLoader2, IconHelp, IconRefresh, IconDownload, IconExternalLink, IconArrowUp, IconBrain } from '@tabler/icons-react';
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   showToast: (type: 'success' | 'error' | 'info', message: string) => void;
-  onSaveSuccess?: () => void;
+  onSaveSuccess?: () => void | Promise<void>;
 }
 
 interface DiagnosticItem {
@@ -27,6 +28,56 @@ interface UpdateStatus {
 
 const RELEASE_URL = 'https://github.com/TobyKSKGD/PodGist/releases';
 
+/**
+ * macOS 从 GitHub API 获得 Markdown，Windows 的 electron-updater 则可能返回
+ * HTML 格式的 releaseNotes。先将受信任 Release 中的常见 HTML 结构转换为
+ * Markdown，再统一交给 ReactMarkdown 渲染，避免直接注入远程 HTML。
+ */
+function normaliseReleaseNotes(notes: string): string {
+  if (!/<[a-z][\s\S]*>/i.test(notes) || typeof DOMParser === 'undefined') {
+    return notes;
+  }
+
+  const document = new DOMParser().parseFromString(notes, 'text/html');
+  const inlineText = (node: Node): string => {
+    if (node.nodeType === Node.TEXT_NODE) return node.textContent || '';
+    if (!(node instanceof HTMLElement)) return '';
+
+    const content = Array.from(node.childNodes).map(inlineText).join('');
+    if (node.tagName === 'BR') return '\n';
+    if (node.tagName === 'STRONG' || node.tagName === 'B') return `**${content}**`;
+    if (node.tagName === 'EM' || node.tagName === 'I') return `*${content}*`;
+    if (node.tagName === 'CODE') return `\`${content}\``;
+    if (node.tagName === 'A') {
+      const href = node.getAttribute('href') || '';
+      return /^https?:\/\//i.test(href) ? `[${content}](${href})` : content;
+    }
+    return content;
+  };
+
+  return Array.from(document.body.childNodes).map((node) => {
+    if (!(node instanceof HTMLElement)) return inlineText(node);
+    const content = inlineText(node).trim();
+    if (!content) return '';
+    if (node.tagName === 'H1') return `# ${content}`;
+    if (node.tagName === 'H2') return `## ${content}`;
+    if (node.tagName === 'H3') return `### ${content}`;
+    if (node.tagName === 'UL') {
+      return Array.from(node.children)
+        .filter((item) => item.tagName === 'LI')
+        .map((item) => `- ${inlineText(item).trim()}`)
+        .join('\n');
+    }
+    if (node.tagName === 'OL') {
+      return Array.from(node.children)
+        .filter((item) => item.tagName === 'LI')
+        .map((item, index) => `${index + 1}. ${inlineText(item).trim()}`)
+        .join('\n');
+    }
+    return content;
+  }).filter(Boolean).join('\n\n');
+}
+
 const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToast, onSaveSuccess }) => {
   const [activeMenu, setActiveMenu] = useState('core');
   const [diagnostics, setDiagnostics] = useState<DiagnosticItem[]>([]);
@@ -34,6 +85,8 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
   const [diagnosticsError, setDiagnosticsError] = useState('');
   const [dashscopeApiKey, setDashscopeApiKey] = useState('');
   const [cacheEntityImages, setCacheEntityImages] = useState(false);
+  const [chatSourceSeekToTimestamp, setChatSourceSeekToTimestamp] = useState(false);
+  const [chatSourceAutoplay, setChatSourceAutoplay] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({
     state: 'idle',
     currentVersion: '读取中…',
@@ -89,6 +142,8 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
         const data = response.data.data;
         setDashscopeApiKey(data.dashscope_api_key || '');
         setCacheEntityImages(!!data.cache_entity_images);
+        setChatSourceSeekToTimestamp(!!data.chat_source_seek_to_timestamp);
+        setChatSourceAutoplay(!!data.chat_source_autoplay);
       }
     } catch (error) {
       console.error('加载设置失败:', error);
@@ -121,10 +176,12 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
       const formData = new FormData();
       formData.append('dashscope_api_key', dashscopeApiKey);
       formData.append('cache_entity_images', String(cacheEntityImages));
+      formData.append('chat_source_seek_to_timestamp', String(chatSourceSeekToTimestamp));
+      formData.append('chat_source_autoplay', String(chatSourceSeekToTimestamp && chatSourceAutoplay));
       const response = await axios.post('http://localhost:8000/api/settings', formData);
       if (response.data.status === 'success') {
+        await onSaveSuccess?.();
         showToast('success', '设置已保存并应用');
-        onSaveSuccess?.();
         setTimeout(() => onClose(), 500);
       } else {
         showToast('error', '保存失败: ' + response.data.message);
@@ -222,6 +279,12 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
               className={`flex items-center gap-3 px-3 py-3 rounded-lg text-sm font-medium transition-colors ${activeMenu === 'diagnostics' ? 'bg-slate-200 text-slate-900' : 'text-slate-600 hover:bg-slate-100'}`}
             >
               <IconActivity size={18} className={activeMenu === 'diagnostics' ? 'text-[#00ADA6]' : ''} /> 系统诊断
+            </button>
+            <button
+              onClick={() => setActiveMenu('chat')}
+              className={`flex items-center gap-3 px-3 py-3 rounded-lg text-sm font-medium transition-colors ${activeMenu === 'chat' ? 'bg-slate-200 text-slate-900' : 'text-slate-600 hover:bg-slate-100'}`}
+            >
+              <IconBrain size={18} className={activeMenu === 'chat' ? 'text-[#00ADA6]' : ''} /> 智能对话
             </button>
             <button
               onClick={() => setActiveMenu('updates')}
@@ -339,6 +402,52 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
             </div>
           )}
 
+          {activeMenu === 'chat' && (
+            <div className="space-y-6">
+              <div>
+                <h3 className="text-lg font-semibold border-b border-slate-100 pb-4">智能对话</h3>
+                <p className="mt-3 text-sm leading-relaxed text-slate-500">点击回答中的来源时，可以选择是否同步播放器位置。默认只打开对应归档，不改变播放器状态。</p>
+              </div>
+
+              <label className="flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={chatSourceSeekToTimestamp}
+                  onChange={(event) => {
+                    setChatSourceSeekToTimestamp(event.target.checked);
+                    if (!event.target.checked) setChatSourceAutoplay(false);
+                  }}
+                  className="mt-0.5 h-4 w-4 accent-[#00ADA6]"
+                />
+                <span>
+                  <span className="block text-sm font-medium text-slate-700">打开来源时定位到引用时间</span>
+                  <span className="mt-1 block text-xs leading-relaxed text-slate-400">关闭时仍会打开对应归档，但播放器保持原有位置。</span>
+                </span>
+              </label>
+
+              <label className={`flex items-start gap-3 rounded-lg border p-4 transition-colors ${chatSourceSeekToTimestamp ? 'border-slate-200 bg-slate-50 cursor-pointer' : 'border-slate-100 bg-slate-50/60 cursor-not-allowed'}`}>
+                <input
+                  type="checkbox"
+                  checked={chatSourceAutoplay}
+                  disabled={!chatSourceSeekToTimestamp}
+                  onChange={(event) => setChatSourceAutoplay(event.target.checked)}
+                  className="mt-0.5 h-4 w-4 accent-[#00ADA6] disabled:cursor-not-allowed"
+                />
+                <span>
+                  <span className="block text-sm font-medium text-slate-700">定位后自动播放</span>
+                  <span className="mt-1 block text-xs leading-relaxed text-slate-400">仅在启用“定位到引用时间”后可用；浏览器或系统阻止自动播放时，仍会保留定位结果。</span>
+                </span>
+              </label>
+
+              <button
+                onClick={saveSettings}
+                className="bg-[#00ADA6] hover:bg-[#009A94] text-white px-6 py-2.5 rounded-lg font-medium transition-colors shadow-sm"
+              >
+                保存并应用
+              </button>
+            </div>
+          )}
+
           {activeMenu === 'updates' && (
             <div className="space-y-6">
               <div className="border-b border-slate-100 pb-4">
@@ -367,7 +476,21 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
                   {updateStatus.releaseNotes && (
                     <div className="rounded-lg border border-slate-200 bg-white p-3">
                       <p className="mb-1 text-xs font-semibold tracking-wide text-slate-400">更新说明</p>
-                      <p className="max-h-28 overflow-y-auto whitespace-pre-wrap text-xs leading-relaxed text-slate-500">{updateStatus.releaseNotes}</p>
+                      <div className="max-h-28 overflow-y-auto text-xs leading-relaxed text-slate-500">
+                        <ReactMarkdown
+                          components={{
+                            h1: ({ children }) => <h4 className="mb-2 text-sm font-semibold text-slate-700">{children}</h4>,
+                            h2: ({ children }) => <h4 className="mb-2 mt-3 text-sm font-semibold text-slate-700">{children}</h4>,
+                            h3: ({ children }) => <h5 className="mb-1.5 mt-2 text-xs font-semibold text-slate-600">{children}</h5>,
+                            p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                            ul: ({ children }) => <ul className="mb-2 list-disc space-y-1 pl-4 last:mb-0">{children}</ul>,
+                            ol: ({ children }) => <ol className="mb-2 list-decimal space-y-1 pl-4 last:mb-0">{children}</ol>,
+                            a: ({ children, href }) => <a href={href} target="_blank" rel="noopener noreferrer" className="text-[#00ADA6] hover:underline">{children}</a>,
+                          }}
+                        >
+                          {normaliseReleaseNotes(updateStatus.releaseNotes)}
+                        </ReactMarkdown>
+                      </div>
                     </div>
                   )}
 
