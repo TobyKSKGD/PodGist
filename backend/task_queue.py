@@ -95,9 +95,18 @@ def init_db():
             ref_title TEXT,
             source_tier TEXT,
             remote_image_url TEXT,
+            image_source_url TEXT,
+            image_source_region TEXT,
             updated_at TEXT NOT NULL
         )
     """)
+
+    # 给既有缓存补充图片来源元数据；不删除或重写任何用户已有任务数据。
+    cache_columns = {row[1] for row in cursor.execute("PRAGMA table_info(entity_enrichment_cache)")}
+    if "image_source_url" not in cache_columns:
+        cursor.execute("ALTER TABLE entity_enrichment_cache ADD COLUMN image_source_url TEXT")
+    if "image_source_region" not in cache_columns:
+        cursor.execute("ALTER TABLE entity_enrichment_cache ADD COLUMN image_source_region TEXT")
 
     # 检查 name 字段是否存在，不存在则添加
     try:
@@ -553,20 +562,33 @@ def get_entity_enrichment_cache(entity_key):
     return dict(row) if row else None
 
 
-def upsert_entity_enrichment_cache(entity_key, ref_url, ref_title, source_tier, remote_image_url):
+def upsert_entity_enrichment_cache(
+    entity_key,
+    ref_url,
+    ref_title,
+    source_tier,
+    remote_image_url,
+    image_source_url="",
+    image_source_region="",
+):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO entity_enrichment_cache
-            (entity_key, ref_url, ref_title, source_tier, remote_image_url, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+            (entity_key, ref_url, ref_title, source_tier, remote_image_url, image_source_url, image_source_region, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(entity_key) DO UPDATE SET
             ref_url = excluded.ref_url,
             ref_title = excluded.ref_title,
             source_tier = excluded.source_tier,
             remote_image_url = excluded.remote_image_url,
+            image_source_url = excluded.image_source_url,
+            image_source_region = excluded.image_source_region,
             updated_at = excluded.updated_at
-    """, (entity_key, ref_url, ref_title, source_tier, remote_image_url, datetime.now().isoformat()))
+    """, (
+        entity_key, ref_url, ref_title, source_tier, remote_image_url,
+        image_source_url, image_source_region, datetime.now().isoformat(),
+    ))
     conn.commit()
     conn.close()
 

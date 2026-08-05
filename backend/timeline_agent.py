@@ -101,6 +101,32 @@ SOURCE_LABELS = {
     "community": "社区",
 }
 
+# 图片来源与资料来源分开处理：资料仍以可信度为主，图片则优先选取中国大陆
+# 网络可访问性更好的页面。升级该版本会使用新的实体缓存键，避免继续复用旧的
+# Wikipedia 图片 URL。
+ENTITY_IMAGE_RESOLVER_VERSION = "mainland-v1"
+DOMESTIC_IMAGE_PAGE_TIMEOUT_SECONDS = 3
+FALLBACK_IMAGE_PAGE_TIMEOUT_SECONDS = 5
+_MAINLAND_FRIENDLY_IMAGE_DOMAINS = (
+    "baike.baidu.com", "baidu.com", "bdimg.com", "bcebos.com",
+    "douban.com", "doubanio.com", "bilibili.com", "hdslb.com",
+    "qq.com", "qpic.cn", "163.com", "music.126.net",
+    "xiaoyuzhoufm.com", "xmcdn.com", "ximalaya.com",
+)
+
+
+def _entity_enrichment_cache_key(entity_name: str, entity_kind: str) -> str:
+    """图片策略升级时用版本隔离缓存，旧实体会在下次富化时重新解析。"""
+    return f"{ENTITY_IMAGE_RESOLVER_VERSION}:{entity_kind}:{entity_name.casefold()}"
+
+
+def _is_mainland_friendly_url(url: str) -> bool:
+    try:
+        host = urllib.parse.urlparse(url).netloc.lower().split(":", 1)[0]
+    except ValueError:
+        return False
+    return any(host == domain or host.endswith(f".{domain}") for domain in _MAINLAND_FRIENDLY_IMAGE_DOMAINS)
+
 
 def _http_get(url: str, timeout: int = 5) -> Optional[str]:
     """轻量 GET，失败返回 None（统一使用 requests）"""
@@ -306,6 +332,8 @@ _OFFICIAL_PATTERNS: list[tuple[str, str, str, str]] = [
     # (关键词, 显示名, 官网URL, 实体kind)
     ("youtube", "YouTube", "https://www.youtube.com", "company"),
     ("bilibili", "Bilibili", "https://www.bilibili.com", "company"),
+    ("哔哩哔哩", "Bilibili", "https://www.bilibili.com", "company"),
+    ("b站", "Bilibili", "https://www.bilibili.com", "company"),
     ("tencent", "Tencent", "https://www.tencent.com", "company"),
     ("bytedance", "ByteDance", "https://www.bytedance.com", "company"),
     ("alibaba", "Alibaba", "https://www.alibaba.com", "company"),
@@ -416,16 +444,44 @@ def _resolve_douban(query: str) -> Optional[dict]:
     return None
 
 
+def _resolve_douban_book(query: str) -> Optional[dict]:
+    """豆瓣读书检索，补足影视搜索无法覆盖的书籍与非虚构作品。"""
+    search_url = (
+        "https://book.douban.com/subject_search?search_text="
+        f"{urllib.parse.quote(query)}"
+    )
+    text = _http_get(search_url)
+    if not text:
+        return None
+    try:
+        match = re.search(r'https?://book\.douban\.com/subject/(\d+)/', text)
+        if not match:
+            return None
+        url = f"https://book.douban.com/subject/{match.group(1)}/"
+        return {
+            "title": query[:60],
+            "url": url,
+            "sourceTier": "media",
+            "confidence": 0.78,
+            "note": "AI 生成，请自行判断",
+        }
+    except (AttributeError, IndexError, TypeError, ValueError) as exc:
+        print(f"[Reference] 豆瓣读书解析失败: {type(exc).__name__}: {exc}")
+        return None
+
+
 def _resolve_entity_reference(entity_name: str, entity_kind: str) -> Optional[dict]:
     """
     为单个实体解析参考链接（per-entity 版本）。
     返回带 sourceTier 的结果字典，或 None。
 
     来源优先级（按 kind 分）：
-      company/product → 官方域名 → 百度百科 → Wikipedia
-      tool/repo → GitHub → 官方域名 → Wikipedia
-      game/film/media → Steam/豆瓣 → Wikipedia
-      other → Wikipedia → 百度百科
+      company/product/other → 官方域名 → 高匹配度百度百科 → Wikipedia
+      tool/repo → 官方域名 → Wikipedia
+      game/film/media → Steam/豆瓣 → Wikipedia → 百度百科
+
+    对可确认的国内百科结果快速返回，避免即使已经命中仍串行请求中英文
+    Wikipedia。这既缩短后台富化，也让后续图片优先落在大陆可达的页面上。
     """
     # 去噪声词
     clean = re.sub(r'[\[\]【】()（)《》<>""'']', '', entity_name).strip()
@@ -438,51 +494,46 @@ def _resolve_entity_reference(entity_name: str, entity_kind: str) -> Optional[di
         '', clean
     )
 
-    results: list[dict] = []
     kind = entity_kind.lower()
-    is_tool = kind in {"tool", "repo", "product"}
+    is_tool = kind in {"tool", "repo"}
     is_game_film = kind in {"game", "film", "media"}
 
     # 1. 官方域名（最高优先级）
     official = _try_official_url(clean)
     if official:
-        results.append(official)
+        return official
 
     # 2. 按类型分支
     if is_tool:
         # 工具/项目：官方域名（已查） → Wikipedia（GitHub 已暂时禁用）
         wiki = _resolve_wikipedia(clean, clean_for_search)
-        if wiki:
-            results.append(wiki)
+        return wiki if wiki and wiki.get("confidence", 0) >= 0.7 else None
     elif is_game_film:
-        # 游戏/影视：Steam → 豆瓣 → Wikipedia
+        # 游戏/影视：Steam → 豆瓣 → Wikipedia。Steam/豆瓣命中后无需继续探测。
         steam = _resolve_game_store(clean)
-        if steam:
-            results.append(steam)
+        if steam and steam.get("confidence", 0) >= 0.7:
+            return steam
         douban = _resolve_douban(clean)
-        if douban:
-            results.append(douban)
+        if douban and douban.get("confidence", 0) >= 0.7:
+            return douban
+        douban_book = _resolve_douban_book(clean)
+        if douban_book and douban_book.get("confidence", 0) >= 0.7:
+            return douban_book
         wiki = _resolve_wikipedia(clean, clean_for_search)
-        if wiki:
-            results.append(wiki)
+        if wiki and wiki.get("confidence", 0) >= 0.7:
+            return wiki
         # 百度百科作为游戏/影视的补充
         baidu = _resolve_baidu_baike(clean)
-        if baidu:
-            results.append(baidu)
+        return baidu if baidu and baidu.get("confidence", 0) >= 0.7 else None
     else:
-        # 公司/品牌/其他：百度百科 → Wikipedia（GitHub 已暂时禁用）
+        # 公司/品牌/产品/其他：高匹配度百度百科优先，Wiki 只作为回退。
         baidu = _resolve_baidu_baike(clean)
-        if baidu:
-            results.append(baidu)
+        if baidu and baidu.get("confidence", 0) >= 0.8:
+            return baidu
         wiki = _resolve_wikipedia(clean, clean_for_search)
-        if wiki:
-            results.append(wiki)
-
-    # 选最优
-    best = _best_result(results)
-    if best and best.get("confidence", 0) >= 0.7:
-        return best
-    return None
+        if wiki and wiki.get("confidence", 0) >= 0.7:
+            return wiki
+        return baidu if baidu and baidu.get("confidence", 0) >= 0.7 else None
 
 
 def _resolve_node_references(ref_candidates: list) -> list:
@@ -864,7 +915,101 @@ def _normalize_ref_candidates(raw: list) -> list:
 # Entity 媒体缩略图提取
 # ---------------------------------------------------------------------------
 
-def _extract_og_image(ref_url: str, entity_name: str, archive_path: str, entity_idx: int) -> Optional[dict]:
+def _append_image_page_candidate(candidates: list[dict], candidate: Optional[dict]) -> None:
+    """按 URL 去重地加入候选图片页面。"""
+    if not candidate or not candidate.get("url"):
+        return
+    url = candidate["url"]
+    if any(item["url"] == url for item in candidates):
+        return
+    candidates.append(candidate)
+
+
+def _resolve_entity_image(entity_name: str, entity_kind: str, reference: Optional[dict]) -> dict:
+    """解析实体图片，优先大陆可达页面，资料引用与图片来源可以不同。"""
+    candidates: list[dict] = []
+    kind = entity_kind.lower()
+    reference_url = reference.get("url", "") if reference else ""
+    reference_host = urllib.parse.urlparse(reference_url).netloc.lower()
+
+    # 已选参考页如果来自国内，优先使用，通常只需一次页面请求即可得到图片。
+    if reference and _is_mainland_friendly_url(reference_url):
+        _append_image_page_candidate(candidates, reference)
+
+    # 影视和游戏优先豆瓣（其中包含稳定的图书检索页）。它只负责图片候选，
+    # 不会覆盖已经确定的资料引用。
+    if kind in {"game", "film", "media"} and "douban.com" not in reference_host:
+        _append_image_page_candidate(candidates, _resolve_douban(entity_name))
+        _append_image_page_candidate(candidates, _resolve_douban_book(entity_name))
+
+    # 已确定的参考页永远是最终回退，保证国内候选没有图片时功能不退化。
+    _append_image_page_candidate(candidates, reference)
+
+    started_at = time.monotonic()
+    for candidate in candidates:
+        page_url = candidate.get("url", "")
+        timeout = (
+            DOMESTIC_IMAGE_PAGE_TIMEOUT_SECONDS
+            if _is_mainland_friendly_url(page_url)
+            else FALLBACK_IMAGE_PAGE_TIMEOUT_SECONDS
+        )
+        image_url = _extract_og_image_url(page_url, timeout=timeout)
+        if image_url:
+            elapsed = time.monotonic() - started_at
+            region = "mainland" if _is_mainland_friendly_url(page_url) else "fallback"
+            print(
+                f"[Image Resolver] {entity_name} → {region} source "
+                f"({elapsed:.1f}s, page={urllib.parse.urlparse(page_url).netloc})"
+            )
+            return {
+                "remote_image_url": image_url,
+                "image_source_url": page_url,
+                "image_source_region": region,
+            }
+
+    # 国内页面没有开放 og:image 时，维持原先的 Wiki 图片回退能力。将搜索放在
+    # 上述候选实际失败之后，避免已命中大陆图片仍等待中英文 Wiki 请求。
+    if "wikipedia.org" not in reference_host:
+        wiki = _resolve_wikipedia(entity_name, entity_name)
+        if wiki:
+            page_url = wiki.get("url", "")
+            image_url = _extract_og_image_url(page_url, timeout=FALLBACK_IMAGE_PAGE_TIMEOUT_SECONDS)
+            if image_url:
+                elapsed = time.monotonic() - started_at
+                print(
+                    f"[Image Resolver] {entity_name} → fallback source "
+                    f"({elapsed:.1f}s, page={urllib.parse.urlparse(page_url).netloc})"
+                )
+                return {
+                    "remote_image_url": image_url,
+                    "image_source_url": page_url,
+                    "image_source_region": "fallback",
+                }
+
+    elapsed = time.monotonic() - started_at
+    print(f"[Image Resolver] {entity_name} → no image ({elapsed:.1f}s, candidates={len(candidates)})")
+    return {"remote_image_url": "", "image_source_url": "", "image_source_region": ""}
+
+
+def _resolve_entity_enrichment(entity_name: str, entity_kind: str) -> dict:
+    """一次性得到资料引用和适合展示的图片 URL。"""
+    ref = _resolve_entity_reference(entity_name, entity_kind)
+    image = _resolve_entity_image(entity_name, entity_kind, ref)
+    return {
+        "ref_url": ref.get("url", "") if ref else "",
+        "ref_title": ref.get("title", "") if ref else "",
+        "source_tier": ref.get("sourceTier", "") if ref else "",
+        **image,
+    }
+
+
+def _extract_og_image(
+    ref_url: str,
+    entity_name: str,
+    archive_path: str,
+    entity_idx: int,
+    remote_image_url: str = "",
+) -> Optional[dict]:
     """
     从 ref_url 页面提取 og:image，下载到 archive_path/media/ 目录。
     返回本地文件名（相对于 archive）或 None。
@@ -883,7 +1028,7 @@ def _extract_og_image(ref_url: str, entity_name: str, archive_path: str, entity_
         safe = re.sub(r'[^\w\-]', '_', entity_name)[:30]
 
         # 1. 获取页面 HTML，提取 og:image URL
-        img_url = _extract_og_image_url(ref_url)
+        img_url = remote_image_url or _extract_og_image_url(ref_url)
         if not img_url:
             return None
 
@@ -962,11 +1107,11 @@ def _extract_og_image(ref_url: str, entity_name: str, archive_path: str, entity_
         return None
 
 
-def _extract_og_image_url(ref_url: str) -> Optional[str]:
+def _extract_og_image_url(ref_url: str, timeout: int = 8) -> Optional[str]:
     """仅提取远程 og:image 链接，不下载图片字节。"""
     if not ref_url or not ref_url.startswith("http"):
         return None
-    text = _http_get(ref_url, timeout=8)
+    text = _http_get(ref_url, timeout=timeout)
     if not text:
         return None
     og_match = re.search(
@@ -980,7 +1125,9 @@ def _extract_og_image_url(ref_url: str) -> Optional[str]:
         )
     if not og_match:
         return None
-    image_url = og_match.group(1).strip()
+    image_url = og_match.group(1).strip().replace("&amp;", "&")
+    if image_url.startswith("//"):
+        image_url = f"https:{image_url}"
     return image_url if image_url.startswith("http") else None
 
 
@@ -1111,22 +1258,16 @@ def enrich_timeline_archive(archive_id: str, archive_path: str, cache_entity_ima
             entity_type = (entity.get("type") or "other").strip().lower()
             if not name:
                 continue
-            entity_key = f"{entity_type}:{name.casefold()}"
+            entity_key = _entity_enrichment_cache_key(name, entity_type)
             if entity_key not in resolved:
                 cached = task_queue.get_entity_enrichment_cache(entity_key)
                 if cached:
                     resolved[entity_key] = cached
                 else:
-                    ref = _resolve_entity_reference(name, entity_type)
-                    result = {
-                        "ref_url": ref.get("url", "") if ref else "",
-                        "ref_title": ref.get("title", "") if ref else "",
-                        "source_tier": ref.get("sourceTier", "") if ref else "",
-                        "remote_image_url": _extract_og_image_url(ref.get("url", "")) if ref else "",
-                    }
+                    result = _resolve_entity_enrichment(name, entity_type)
                     task_queue.upsert_entity_enrichment_cache(
-                        entity_key,
-                        result["ref_url"], result["ref_title"], result["source_tier"], result["remote_image_url"],
+                        entity_key, result["ref_url"], result["ref_title"], result["source_tier"], result["remote_image_url"],
+                        result["image_source_url"], result["image_source_region"],
                     )
                     resolved[entity_key] = result
 
@@ -1135,13 +1276,21 @@ def enrich_timeline_archive(archive_id: str, archive_path: str, cache_entity_ima
             entity["refTitle"] = result.get("ref_title", "") or ""
             entity["sourceTier"] = result.get("source_tier", "") or ""
             remote_url = result.get("remote_image_url", "") or ""
-            media = {"remote_url": remote_url, "source_url": entity["refUrl"]} if remote_url else {}
+            media = {
+                "remote_url": remote_url,
+                "source_url": entity["refUrl"],
+                "image_source_url": result.get("image_source_url", "") or "",
+                "image_source_region": result.get("image_source_region", "") or "",
+            } if remote_url else {}
 
             if cache_entity_images and entity["refUrl"]:
-                local_media = _extract_og_image(entity["refUrl"], name, archive_path, entity_index)
+                local_media = _extract_og_image(
+                    entity["refUrl"], name, archive_path, entity_index, remote_image_url=remote_url,
+                )
                 if local_media:
                     media = {**local_media, "remote_url": remote_url}
             entity["media"] = media
+            entity["enrichmentVersion"] = ENTITY_IMAGE_RESOLVER_VERSION
             entity_index += 1
             changed = True
             persist_timeline()
@@ -1190,8 +1339,8 @@ def enrich_timeline_node(
         if not name:
             continue
 
-        # 已经处理过（即使没有找到资料）则不重复访问外部网页。
-        if "refUrl" in entity:
+        # 已按当前图片策略处理过（即使没有找到资料）则不重复访问外部网页。
+        if entity.get("enrichmentVersion") == ENTITY_IMAGE_RESOLVER_VERSION and "refUrl" in entity:
             continue
         if deadline_at is not None and time.monotonic() >= deadline_at:
             completed = False
@@ -1200,35 +1349,37 @@ def enrich_timeline_node(
             completed = False
             break
 
-        entity_key = f"{entity_type}:{name.casefold()}"
+        entity_key = _entity_enrichment_cache_key(name, entity_type)
         cached = task_queue.get_entity_enrichment_cache(entity_key)
         if cached:
             result = cached
         else:
-            ref = _resolve_entity_reference(name, entity_type)
-            result = {
-                "ref_url": ref.get("url", "") if ref else "",
-                "ref_title": ref.get("title", "") if ref else "",
-                "source_tier": ref.get("sourceTier", "") if ref else "",
-                "remote_image_url": _extract_og_image_url(ref.get("url", "")) if ref else "",
-            }
+            result = _resolve_entity_enrichment(name, entity_type)
             task_queue.upsert_entity_enrichment_cache(
-                entity_key,
-                result["ref_url"], result["ref_title"], result["source_tier"], result["remote_image_url"],
+                entity_key, result["ref_url"], result["ref_title"], result["source_tier"], result["remote_image_url"],
+                result["image_source_url"], result["image_source_region"],
             )
 
         entity["refUrl"] = result.get("ref_url", "") or ""
         entity["refTitle"] = result.get("ref_title", "") or ""
         entity["sourceTier"] = result.get("source_tier", "") or ""
         remote_url = result.get("remote_image_url", "") or ""
-        media = {"remote_url": remote_url, "source_url": entity["refUrl"]} if remote_url else {}
+        media = {
+            "remote_url": remote_url,
+            "source_url": entity["refUrl"],
+            "image_source_url": result.get("image_source_url", "") or "",
+            "image_source_region": result.get("image_source_region", "") or "",
+        } if remote_url else {}
         if remote_url:
             new_remote_images += 1
         if cache_entity_images and entity["refUrl"]:
-            local_media = _extract_og_image(entity["refUrl"], name, archive_path, node_index * 100 + entity_index)
+            local_media = _extract_og_image(
+                entity["refUrl"], name, archive_path, node_index * 100 + entity_index, remote_image_url=remote_url,
+            )
             if local_media:
                 media = {**local_media, "remote_url": remote_url}
         entity["media"] = media
+        entity["enrichmentVersion"] = ENTITY_IMAGE_RESOLVER_VERSION
 
     if completed:
         candidates = _normalize_ref_candidates(node.get("reference_candidates", []))
