@@ -1,5 +1,5 @@
 """
-RAG 数据库模块 - SQLite 关系存储 + ChromaDB 向量存储
+RAG 数据库模块 - SQLite 关系存储 + 本地归档检索索引
 
 管理标签、会话、消息、引用，以及归档内容的向量化和语义检索。
 """
@@ -7,8 +7,8 @@ RAG 数据库模块 - SQLite 关系存储 + ChromaDB 向量存储
 import sqlite3
 import os
 import uuid
-import chromadb
-from chromadb.config import Settings as ChromaSettings
+import json
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -18,42 +18,25 @@ from typing import Optional
 _USER_DATA_DIR = os.environ.get('PODGIST_DATA_DIR', None)
 
 if _USER_DATA_DIR:
-    RAG_DB_DIR = os.path.join(_USER_DATA_DIR, "temp_audio")
+    _BASE_DIR = _USER_DATA_DIR
 else:
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    RAG_DB_DIR = os.path.join(BASE_DIR, "temp_audio")
+    _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+RAG_DB_DIR = os.path.join(_BASE_DIR, "temp_audio")
+ARCHIVE_DIR = os.path.join(_BASE_DIR, "archives")
 
 RAG_DB_PATH = os.path.join(RAG_DB_DIR, "podgist_rag.db")
-CHROMA_DB_PATH = os.path.join(RAG_DB_DIR, "chroma_db")
 
 os.makedirs(RAG_DB_DIR, exist_ok=True)
-
-# ================= ChromaDB 客户端 =================
-_chroma_client = None
-
-def get_chroma_client():
-    """获取 ChromaDB 客户端（单例）"""
-    global _chroma_client
-    if _chroma_client is None:
-        _chroma_client = chromadb.PersistentClient(
-            path=CHROMA_DB_PATH,
-            settings=ChromaSettings(anonymized_telemetry=False)
-        )
-    return _chroma_client
-
-def get_archive_chunks_collection():
-    """获取归档片段向量集合"""
-    client = get_chroma_client()
-    return client.get_or_create_collection(
-        name="archive_chunks",
-        metadata={"description": "归档音频的文本片段向量库"}
-    )
 
 # ================= SQLite 连接 =================
 def get_db_connection():
     """获取 SQLite 数据库连接"""
-    conn = sqlite3.connect(RAG_DB_PATH)
+    conn = sqlite3.connect(RAG_DB_PATH, timeout=15)
     conn.row_factory = sqlite3.Row
+    # RAG 索引会在启动后台任务中写入，而对话会同时读取；WAL 能避免两者互相阻塞。
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=15000")
     return conn
 
 # ================= 表初始化 =================
@@ -112,6 +95,33 @@ def init_db():
             cited_timestamp TEXT,
             created_at TEXT NOT NULL,
             FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
+        )
+    """)
+
+    # 可移植的本地检索索引。这里刻意不依赖 Chroma 的默认 ONNX 模型：该模型会在
+    # 首次查询时下载，PyInstaller 产物中既没有模型也没有稳定的下载缓存，正是桌面版
+    # 智能对话失效的根因。SQLite 是 Python 标准库的一部分，在 macOS/Windows 打包版
+    # 均可直接使用。
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS archive_chunks (
+            chunk_id TEXT PRIMARY KEY,
+            archive_id TEXT NOT NULL,
+            archive_name TEXT NOT NULL,
+            timestamp TEXT NOT NULL DEFAULT '',
+            source_kind TEXT NOT NULL,
+            content TEXT NOT NULL
+        )
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_archive_chunks_archive_id
+        ON archive_chunks(archive_id)
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS archive_index_state (
+            archive_id TEXT PRIMARY KEY,
+            raw_mtime_ns INTEGER NOT NULL DEFAULT 0,
+            timeline_mtime_ns INTEGER NOT NULL DEFAULT 0,
+            indexed_at TEXT NOT NULL
         )
     """)
 
@@ -375,45 +385,204 @@ def chunk_text(text: str, chunk_size: int = 800, overlap: int = 200) -> list[dic
 
     return chunks
 
+def _format_timestamp(seconds: object, fallback: str = "") -> str:
+    """将时间轴节点的秒数转成和转录一致的 MM:SS 格式。"""
+    if isinstance(seconds, (int, float)) and seconds >= 0:
+        total = int(seconds)
+        return f"{total // 60:02d}:{total % 60:02d}"
+    return fallback
+
+
+def _read_archive_metadata(archive_id: str) -> tuple[str, dict, int, int]:
+    """读取归档标题与时间轴；旧归档缺字段时保持可检索。"""
+    archive_path = os.path.join(ARCHIVE_DIR, archive_id)
+    metadata: dict = {}
+    timeline_data: dict = {}
+    raw_mtime_ns = 0
+    timeline_mtime_ns = 0
+
+    metadata_path = os.path.join(archive_path, "metadata.json")
+    if os.path.exists(metadata_path):
+        try:
+            with open(metadata_path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                metadata = loaded
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    timeline_path = os.path.join(archive_path, "timeline.json")
+    if os.path.exists(timeline_path):
+        try:
+            with open(timeline_path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                timeline_data = loaded
+            timeline_mtime_ns = os.stat(timeline_path).st_mtime_ns
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    raw_path = os.path.join(archive_path, "raw.txt")
+    if os.path.exists(raw_path):
+        raw_mtime_ns = os.stat(raw_path).st_mtime_ns
+
+    archive_name = str(metadata.get("title") or timeline_data.get("title") or archive_id)
+    return archive_name, timeline_data, raw_mtime_ns, timeline_mtime_ns
+
+
+def _timeline_chunks(timeline_data: dict) -> list[dict]:
+    """把时间轴节点变成可检索、可精确引用的资料块。"""
+    chunks: list[dict] = []
+    nodes = timeline_data.get("nodes", []) if isinstance(timeline_data, dict) else []
+    if not isinstance(nodes, list):
+        return chunks
+
+    for index, node in enumerate(nodes):
+        if not isinstance(node, dict):
+            continue
+        timestamp = _format_timestamp(node.get("start"), str(node.get("time") or ""))
+        parts = [
+            str(node.get("title") or ""),
+            str(node.get("summary") or ""),
+            str(node.get("why_it_matters") or ""),
+            str(node.get("quote_or_joke_explainer") or ""),
+        ]
+        for fact in node.get("facts", []) if isinstance(node.get("facts"), list) else []:
+            if isinstance(fact, dict):
+                parts.append(f"{fact.get('label', '')}：{fact.get('value', '')}")
+        for entity in node.get("entities", []) if isinstance(node.get("entities"), list) else []:
+            if isinstance(entity, dict):
+                parts.append(f"{entity.get('name', '')}：{entity.get('description', '')}")
+        content = "\n".join(part.strip() for part in parts if part and part.strip())
+        if content:
+            chunks.append({
+                "chunk_id": f"timeline_{index}",
+                "text": content,
+                "timestamp": timestamp,
+                "source_kind": "timeline",
+            })
+    return chunks
+
+
 def index_archive(archive_id: str, archive_name: str, raw_text: str):
-    """
-    将归档的原始转录文本分块并向量化，存入 ChromaDB。
-    同时记录每块对应的归档信息。
-    """
-    chunks = chunk_text(raw_text)
-    if not chunks:
+    """索引归档的逐字稿与时间轴，所有数据只落在用户本地 SQLite 中。"""
+    resolved_name, timeline_data, raw_mtime_ns, timeline_mtime_ns = _read_archive_metadata(archive_id)
+    # 调用方传入显式名称时仍尊重它；旧调用传 archive_id 时自动升级为归档标题。
+    display_name = resolved_name if archive_name == archive_id else archive_name
+    chunks = [
+        {
+            "chunk_id": f"raw_{chunk['chunk_index']}",
+            "text": chunk["text"],
+            "timestamp": chunk["timestamp"],
+            "source_kind": "transcript",
+        }
+        for chunk in chunk_text(raw_text)
+    ]
+    chunks.extend(_timeline_chunks(timeline_data))
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM archive_chunks WHERE archive_id = ?", (archive_id,))
+        if chunks:
+            cursor.executemany(
+                """
+                INSERT INTO archive_chunks
+                (chunk_id, archive_id, archive_name, timestamp, source_kind, content)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        f"{archive_id}:{chunk['chunk_id']}", archive_id, display_name,
+                        chunk["timestamp"], chunk["source_kind"], chunk["text"],
+                    )
+                    for chunk in chunks
+                ],
+            )
+        cursor.execute(
+            """
+            INSERT INTO archive_index_state
+            (archive_id, raw_mtime_ns, timeline_mtime_ns, indexed_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(archive_id) DO UPDATE SET
+                raw_mtime_ns = excluded.raw_mtime_ns,
+                timeline_mtime_ns = excluded.timeline_mtime_ns,
+                indexed_at = excluded.indexed_at
+            """,
+            (archive_id, raw_mtime_ns, timeline_mtime_ns, datetime.now().isoformat()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def ensure_archives_indexed():
+    """按文件修改时间补齐索引，保证桌面版第一次提问也能检索历史归档。"""
+    if not os.path.isdir(ARCHIVE_DIR):
         return
 
-    collection = get_archive_chunks_collection()
-
-    # 为每块生成 ID、embedding 和 metadata
-    ids = [f"{archive_id}_chunk_{c['chunk_index']}" for c in chunks]
-    documents = [c["text"] for c in chunks]
-    metadatas = [
-        {
-            "archive_id": archive_id,
-            "archive_name": archive_name,
-            "timestamp": c["timestamp"],
-            "chunk_index": c["chunk_index"]
+    conn = get_db_connection()
+    try:
+        states = {
+            row["archive_id"]: (row["raw_mtime_ns"], row["timeline_mtime_ns"])
+            for row in conn.execute("SELECT archive_id, raw_mtime_ns, timeline_mtime_ns FROM archive_index_state")
         }
-        for c in chunks
-    ]
+    finally:
+        conn.close()
 
-    # 写入 ChromaDB
-    collection.upsert(ids=ids, documents=documents, metadatas=metadatas)
+    for archive_id in os.listdir(ARCHIVE_DIR):
+        archive_path = os.path.join(ARCHIVE_DIR, archive_id)
+        raw_path = os.path.join(archive_path, "raw.txt")
+        if not os.path.isdir(archive_path) or not os.path.isfile(raw_path):
+            continue
+        _, _, raw_mtime_ns, timeline_mtime_ns = _read_archive_metadata(archive_id)
+        if states.get(archive_id) == (raw_mtime_ns, timeline_mtime_ns):
+            continue
+        with open(raw_path, "r", encoding="utf-8") as f:
+            index_archive(archive_id, archive_id, f.read())
+
 
 def delete_archive_vectors(archive_id: str):
-    """删除某归档的所有向量（当归档被删除时调用）"""
-    collection = get_archive_chunks_collection()
-    # ChromaDB 不直接支持按 metadata 删除，需要先查询再删除
+    """删除某归档的本地检索记录（保留旧函数名以兼容 API 调用）。"""
+    conn = get_db_connection()
     try:
-        results = collection.get(where={"archive_id": archive_id})
-        if results and results["ids"]:
-            collection.delete(ids=results["ids"])
-    except Exception:
-        pass
+        conn.execute("DELETE FROM archive_chunks WHERE archive_id = ?", (archive_id,))
+        conn.execute("DELETE FROM archive_index_state WHERE archive_id = ?", (archive_id,))
+        conn.commit()
+    finally:
+        conn.close()
 
-# ================= 向量检索 =================
+
+# ================= 本地检索 =================
+def _query_terms(query: str) -> set[str]:
+    """生成适合中英文混排内容的轻量关键词集合。"""
+    normalized = query.lower()
+    terms = set(re.findall(r"[a-z0-9][a-z0-9_+.-]*", normalized))
+    chinese = "".join(re.findall(r"[\u4e00-\u9fff]", normalized))
+    terms.update(chinese[index:index + 2] for index in range(max(0, len(chinese) - 1)))
+    terms.update(char for char in chinese if char not in "的了和是我你他她它在有与及或吗呢啊把被对从到")
+    return {term for term in terms if len(term) > 1 or "\u4e00" <= term <= "\u9fff"}
+
+
+def _score_chunk(content: str, terms: set[str], source_kind: str) -> float:
+    normalized = content.lower()
+    matched = 0
+    occurrences = 0
+    for term in terms:
+        count = normalized.count(term)
+        if count:
+            matched += 1
+            occurrences += min(count, 3)
+    if not matched:
+        return 0.0
+    score = matched * 5.0 + occurrences
+    # 时间轴是 PodGist 的主数据结构：它由模型按主题切分、带有节点起点，
+    # 因此在同等相关性下优先使用它回答，引用可以直接跳回准确位置。
+    if source_kind == "timeline":
+        score += 30.0
+    return score
+
+
 def retrieve_relevant_chunks(
     query: str,
     top_k: int = 5,
@@ -421,7 +590,7 @@ def retrieve_relevant_chunks(
     tag_ids: list[str] = None
 ) -> list[dict]:
     """
-    混合检索：给定查询，返回最相关的文本块。
+    在本地 SQLite 索引中检索逐字稿和时间轴节点。
 
     参数:
         query: 用户问题
@@ -431,71 +600,49 @@ def retrieve_relevant_chunks(
 
     返回: list[{"text": str, "archive_id": str, "archive_name": str, "timestamp": str, "distance": float}]
     """
-    collection = get_archive_chunks_collection()
-
     # 如果指定了 tag_ids，先查出对应的 archive_ids
     if tag_ids:
         archive_ids = set(archive_ids) if archive_ids else set()
         for tag_id in tag_ids:
             tagged_archives = get_archives_by_tag(tag_id)
             archive_ids.update(tagged_archives)
-        archive_ids = list(archive_ids) if archive_ids else None
+        if not archive_ids:
+            return []
 
-    # 构建查询条件
-    where_filter = None
+    terms = _query_terms(query)
+    if not terms:
+        return []
+
+    sql = "SELECT archive_id, archive_name, timestamp, source_kind, content FROM archive_chunks"
+    params: list[str] = []
     if archive_ids:
-        if len(archive_ids) == 1:
-            where_filter = {"archive_id": archive_ids[0]}
-        else:
-            where_filter = {"archive_id": {"$in": archive_ids}}
+        placeholders = ", ".join("?" for _ in archive_ids)
+        sql += f" WHERE archive_id IN ({placeholders})"
+        params.extend(archive_ids)
 
-    # 执行向量检索
-    results = collection.query(
-        query_texts=[query],
-        n_results=top_k,
-        where=where_filter,
-        include=["documents", "metadatas", "distances"]
-    )
+    conn = get_db_connection()
+    try:
+        rows = conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
 
-    # 格式化结果
-    chunks = []
-    if results and results["documents"] and results["documents"][0]:
-        for i, doc in enumerate(results["documents"][0]):
-            meta = results["metadatas"][0][i]
-            distance = results["distances"][0][i] if results["distances"] else 0.0
-            chunks.append({
-                "text": doc,
-                "archive_id": meta.get("archive_id", ""),
-                "archive_name": meta.get("archive_name", ""),
-                "timestamp": meta.get("timestamp", ""),
-                "distance": float(distance)
-            })
+    ranked = []
+    for row in rows:
+        score = _score_chunk(row["content"], terms, row["source_kind"])
+        if score:
+            ranked.append((score, row))
+    ranked.sort(key=lambda item: item[0], reverse=True)
 
-    return chunks
-
-# ================= Embedding 模型（惰性加载）=================
-_embedding_model = None
-
-def get_embedding_model():
-    """获取 Sentence Transformer 模型（单例，惰性加载）"""
-    global _embedding_model
-    if _embedding_model is None:
-        from sentence_transformers import SentenceTransformer
-
-        # 检查是否有本地模型
-        model_dir = os.environ.get('PODGIST_EMBEDDING_MODEL_DIR')
-        if model_dir and os.path.exists(model_dir):
-            print(f"[Embedding] 使用本地模型: {model_dir}")
-            _embedding_model = SentenceTransformer(model_dir)
-        else:
-            # 使用轻量模型，CPU 可用
-            _embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
-    return _embedding_model
-
-def compute_embeddings(texts: list[str]) -> list[list[float]]:
-    """计算文本列表的 embeddings"""
-    model = get_embedding_model()
-    return model.encode(texts, convert_to_numpy=True).tolist()
+    return [
+        {
+            "text": row["content"],
+            "archive_id": row["archive_id"],
+            "archive_name": row["archive_name"],
+            "timestamp": row["timestamp"],
+            "distance": float(-score),
+        }
+        for score, row in ranked[:top_k]
+    ]
 
 # 初始化数据库
 init_db()

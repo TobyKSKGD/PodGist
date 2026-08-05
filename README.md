@@ -73,7 +73,7 @@ PodGist 所有功能都围绕时间轴展开：
 - **本地文件**：拖拽 MP3、WAV、M4A 等音频文件
 - **播客链接**：粘贴小宇宙、喜马拉雅、Apple Podcasts、网易云等平台链接
 - **B站视频**：粘贴 Bilibili 视频链接
-- **智能对话**：向全部历史归档提问，基于 RAG 精准定位相关内容
+- **智能对话**：向全部历史归档提问，优先定位时间轴节点并标注归档与时间
 
 ### Windows 版本
 
@@ -107,7 +107,7 @@ PodGist 所有功能都围绕时间轴展开：
 - **本地文件**：拖拽 MP3、WAV、M4A 等音频文件
 - **播客链接**：粘贴小宇宙、喜马拉雅、Apple Podcasts、网易云等平台链接
 - **B站视频**：粘贴 Bilibili 视频链接
-- **智能对话**：向全部历史归档提问，基于 RAG 精准定位相关内容
+- **智能对话**：向全部历史归档提问，优先定位时间轴节点并标注归档与时间
 
 ---
 
@@ -120,7 +120,7 @@ PodGist 所有功能都围绕时间轴展开：
 - 通义千问 LLM 摘要生成
 - **精确时间轴逐字稿**
 - **高光时间轴提炼**
-- 智能对话与 RAG 语义搜索
+- 智能对话与本地归档检索（优先命中时间轴节点并标注来源）
 - 标签管理与归档整理
 - 批量处理
 
@@ -176,7 +176,7 @@ npm run dev
 
 - **DashScope ASR**：阿里云 qwen3-asr-flash / paraformer 云端转录，中文识别准确率领先
 - **通义千问（qwen-plus）**：LLM 摘要生成，质量稳定
-- **ChromaDB + Sentence Transformers**：本地向量数据库，RAG 语义搜索
+- **SQLite 本地检索索引**：逐字稿与时间轴节点按归档存储，优先返回带精确时间戳的时间轴资料；无需首次运行下载嵌入模型
 - **yt-dlp**：多平台音视频下载
 
 ### 后端模块
@@ -186,7 +186,7 @@ npm run dev
 | `api.py` | FastAPI 主服务，RESTful 接口 |
 | `backend/transcriber.py` | DashScope ASR 云端转录 |
 | `backend/llm_agent.py` | 通义千问 LLM 摘要生成 |
-| `backend/rag_db.py` | SQLite + ChromaDB（RAG 存储） |
+| `backend/rag_db.py` | SQLite 归档、会话与本地检索索引 |
 | `backend/rag_retriever.py` | RAG 检索与流式生成 |
 | `backend/downloader.py` | 多平台音频下载 |
 | `backend/worker.py` | 后台任务队列 |
@@ -261,8 +261,7 @@ PodGist 最初设计时，目标是利用本地算力（Whisper + 开源模型�
 - [FastAPI](https://fastapi.tiangolo.com/) - Web 框架
 - [DashScope SDK](https://help.aliyun.com/zh/dashscope/) - ASR + LLM
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp) - 音视频下载
-- [ChromaDB](https://www.trychroma.com/) - 向量数据库（RAG）
-- [Sentence Transformers](https://www.sbert.net/) - 文本向量化（RAG）
+- [SQLite](https://sqlite.org/) - 本地归档、对话与检索索引
 
 ---
 

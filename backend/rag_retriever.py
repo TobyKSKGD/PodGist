@@ -6,7 +6,7 @@ RAG 检索与生成模块
 
 from dashscope import Generation
 from http import HTTPStatus
-from backend.rag_db import retrieve_relevant_chunks, get_archive_tags
+from backend.rag_db import ensure_archives_indexed, retrieve_relevant_chunks
 import re
 
 SYSTEM_PROMPT_TEMPLATE = """你是一个专业的私人知识库助理，结合音频归档资料与自身知识回答用户问题。
@@ -38,6 +38,25 @@ def build_retrieved_context(chunks: list[dict]) -> str:
     return "\n\n".join(blocks)
 
 
+def _ensure_citations(content: str, chunks: list[dict]) -> str:
+    """即使模型漏掉标注，也给出实际参与回答的可追溯来源。"""
+    if not chunks or re.search(r"《[^》]+》\[[^\]]+\]", content):
+        return content
+
+    unique_refs = []
+    seen = set()
+    for chunk in chunks:
+        ref = (chunk.get("archive_name", "未知归档"), chunk.get("timestamp", ""))
+        if ref in seen:
+            continue
+        seen.add(ref)
+        timestamp = ref[1] or "未标注时间"
+        unique_refs.append(f"- 《{ref[0]}》[{timestamp}]")
+        if len(unique_refs) == 5:
+            break
+    return f"{content.rstrip()}\n\n参考来源：\n" + "\n".join(unique_refs)
+
+
 def generate_chat_response(
     api_key: str,
     query: str,
@@ -60,6 +79,10 @@ def generate_chat_response(
     Yields:
         dict: 事件类型和内容
     """
+
+    # 首次启动时，后台索引可能尚未跑完；这里按文件修改时间补齐，确保用户的
+    # 第一个问题就能命中已有归档，而不是得到一个空知识库。
+    ensure_archives_indexed()
 
     # Step 1: 检索相关片段
     chunks = retrieve_relevant_chunks(
@@ -107,19 +130,26 @@ def generate_chat_response(
 
         full_content = ""
         prev_content = ""
+        stream_error = None
         for chunk in stream_response:
-            if chunk.status_code == HTTPStatus.OK:
-                # incremental_output=True 时，content 是累积的增量
-                content = chunk.output.choices[0].message.content or ""
-                # 提取得新增的部分
-                token = content[len(prev_content):] if content.startswith(prev_content) else content
-                full_content += token
-                prev_content = content
-                yield {
-                    "type": "token",
-                    "content": token,
-                    "referenced_archives": referenced_archives
-                }
+            if chunk.status_code != HTTPStatus.OK:
+                stream_error = getattr(chunk, "message", "通义千问请求失败")
+                continue
+            # incremental_output=True 时，content 是累积的增量
+            content = chunk.output.choices[0].message.content or ""
+            # 提取得新增的部分
+            token = content[len(prev_content):] if content.startswith(prev_content) else content
+            full_content += token
+            prev_content = content
+            yield {
+                "type": "token",
+                "content": token,
+                "referenced_archives": referenced_archives
+            }
+
+        if stream_error and not full_content:
+            raise RuntimeError(f"通义千问请求失败: {stream_error}")
+        full_content = _ensure_citations(full_content, chunks)
 
         yield {
             "type": "done",
@@ -137,7 +167,8 @@ def generate_chat_response(
         if response.status_code == HTTPStatus.OK:
             full_content = response.output.choices[0].message.content or ""
         else:
-            full_content = f"请求失败: {response.message}"
+            raise RuntimeError(f"通义千问请求失败: {response.message}")
+        full_content = _ensure_citations(full_content, chunks)
         yield {
             "type": "done",
             "content": full_content,

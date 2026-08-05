@@ -313,6 +313,8 @@ export default function ChatView({ onJumpToArchive }: ChatViewProps) {
               } else if (dataStr) {
                 fullContent = dataStr;
               }
+            } else if (eventData['event'] === 'error') {
+              fullContent = eventData['data'] || '智能对话暂时无法生成回复，请稍后重试。';
             } else if (eventData['event'] === 'end') {
               isStreamEnded = true;
             }

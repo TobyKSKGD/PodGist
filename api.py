@@ -45,7 +45,7 @@ if _cli_args.data_dir:
 if _cli_args.model_dir:
     os.environ['PODGIST_MODEL_DIR'] = _cli_args.model_dir
 
-app = FastAPI(title="PodGist API", version="0.2.4")
+app = FastAPI(title="PodGist API", version="0.2.5")
 
 @app.on_event("startup")
 async def startup_index():
@@ -294,11 +294,11 @@ async def transcribe_local(
             with open(summary_path, "w", encoding="utf-8") as f:
                 f.write(f"# {ai_title}\n\n{chr(10).join(lines[1:]).strip() if lines else ''}")
 
-        # 7.5 自动索引到向量库
+        # 7.5 自动索引到本地检索库
         try:
             index_archive(archive_name, archive_name, podcast_text)
         except Exception as e:
-            print(f"[RAG] 向量索引失败（不影响归档）: {e}")
+            print(f"[RAG] 本地索引失败（不影响归档）: {e}")
 
         # 9. 清理临时音频文件
         os.remove(file_path)
@@ -453,11 +453,11 @@ async def transcribe_url(
         with open(raw_path, "w", encoding="utf-8") as f:
             f.write(podcast_text)
 
-        # 7.5 自动索引到向量库
+        # 7.5 自动索引到本地检索库
         try:
             index_archive(archive_name, archive_name, podcast_text)
         except Exception as e:
-            print(f"[RAG] 向量索引失败（不影响归档）: {e}")
+            print(f"[RAG] 本地索引失败（不影响归档）: {e}")
 
         # 8. 保存摘要
         summary_path = os.path.join(archive_path, "summary.md")
@@ -677,7 +677,7 @@ def migrate_archive_to_timeline(archive_id: str):
 
         prepare_timeline_enrichment(tl_archive_name, tl_archive_path, timeline_data)
 
-        # 向量索引
+        # 本地检索索引
         try:
             index_archive(tl_archive_name, tl_archive_name, podcast_text)
         except Exception:
@@ -1704,11 +1704,11 @@ def retry_task_llm(task_id: str):
         with open(raw_path, "w", encoding="utf-8") as f:
             f.write(podcast_text)
 
-        # 自动索引到向量库
+        # 自动索引到本地检索库
         try:
             index_archive(archive_name, archive_name, podcast_text)
         except Exception as e:
-            print(f"[RAG] 向量索引失败（不影响归档）: {e}")
+            print(f"[RAG] 本地索引失败（不影响归档）: {e}")
 
         # 保存 summary.md
         summary_path = os.path.join(archive_path, "summary.md")
@@ -1935,29 +1935,35 @@ async def chat_stream(session_id: str, request: dict):
             referenced_archives = []
             full_content = ""
 
-            for event in generate_chat_response(
-                api_key=api_key,
-                query=query,
-                archive_ids=archive_ids,
-                tag_ids=tag_ids,
-                top_k=20,
-                stream=True
-            ):
-                if event["type"] == "token":
-                    referenced_archives = event["referenced_archives"]
-                    full_content += event["content"]
-                    yield {
-                        "event": "token",
-                        "data": event["content"]
-                    }
-                elif event["type"] == "done":
-                    referenced_archives = event["referenced_archives"]
-                    full_content = event["content"]
-                    # JSON 放前面（JSON 不以 \n 开头，保证 split 只匹配分隔符）
-                    yield {
-                        "event": "done",
-                        "data": f"{json.dumps(referenced_archives, ensure_ascii=False)}\n{full_content}"
-                    }
+            try:
+                for event in generate_chat_response(
+                    api_key=api_key,
+                    query=query,
+                    archive_ids=archive_ids,
+                    tag_ids=tag_ids,
+                    top_k=20,
+                    stream=True
+                ):
+                    if event["type"] == "token":
+                        referenced_archives = event["referenced_archives"]
+                        full_content += event["content"]
+                        yield {
+                            "event": "token",
+                            "data": event["content"]
+                        }
+                    elif event["type"] == "done":
+                        referenced_archives = event["referenced_archives"]
+                        full_content = event["content"]
+                        # JSON 放前面（JSON 不以 \n 开头，保证 split 只匹配分隔符）
+                        yield {
+                            "event": "done",
+                            "data": f"{json.dumps(referenced_archives, ensure_ascii=False)}\n{full_content}"
+                        }
+            except Exception as exc:
+                # SSE 已经返回 200 后，不能再转成 HTTP 错误；显式事件让桌面前端显示
+                # 可理解的失败信息，同时日志保留非敏感上下文。
+                print(f"[RAG] 对话生成失败: {type(exc).__name__}: {exc}")
+                yield {"event": "error", "data": "智能对话暂时无法生成回复，请检查网络和 DashScope 配置后重试。"}
 
             # 保存助手消息
             if full_content:
@@ -1988,7 +1994,7 @@ async def chat_stream(session_id: str, request: dict):
 # 22. 归档索引（手动触发）
 @app.post("/api/chat/archives/{archive_id}/index")
 def index_archive_api(archive_id: str):
-    """手动将归档索引到向量库"""
+    """手动将归档索引到本地检索库"""
     try:
         archive_path = os.path.join(ARCHIVE_DIR, archive_id)
         if not os.path.exists(archive_path):
@@ -2011,7 +2017,7 @@ def index_archive_api(archive_id: str):
 # 23. 批量索引所有未索引的归档
 @app.post("/api/chat/index-all")
 def index_all_archives():
-    """将所有已有 raw.txt 的归档批量索引"""
+    """将所有已有 raw.txt 的归档批量索引到本地检索库"""
     try:
         if not os.path.exists(ARCHIVE_DIR):
             return {"status": "success", "indexed": 0, "skipped": 0}

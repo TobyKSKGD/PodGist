@@ -88,12 +88,6 @@ a = Analysis(
         "sniffio",
         "pydub",
 
-        # === RAG / 向量数据库 ===
-        *collect_submodules("chromadb"),
-        "grpc",
-        "grpc._cython.cygrpc",
-        *collect_submodules("opentelemetry"),
-
         # === 下载器 ===
         *collect_submodules("yt_dlp"),
 
