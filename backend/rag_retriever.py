@@ -41,7 +41,13 @@ def build_retrieved_context(chunks: list[dict]) -> str:
 
 def _ensure_citations(content: str, chunks: list[dict]) -> str:
     """即使模型漏掉标注，也给出实际参与回答的可追溯来源。"""
-    if not chunks or re.search(r"《[^》]+》\[[^\]]+\]", content):
+    # 归档标题本身可能带有嵌套书名号。以紧邻时间戳的外层 `》` 判断引用，
+    # 避免把已有的正文引用误判成“无引用”并在末尾重复追加参考来源列表。
+    if not chunks or re.search(
+        r"《.+?》\s*\[\d{1,2}:\d{2}(?::\d{2})?\]",
+        content,
+        re.DOTALL,
+    ):
         return content
 
     unique_refs = []
