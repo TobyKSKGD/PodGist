@@ -85,7 +85,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
   const [diagnosticsError, setDiagnosticsError] = useState('');
   const [dashscopeApiKey, setDashscopeApiKey] = useState('');
   const [cacheEntityImages, setCacheEntityImages] = useState(false);
-  const [chatSourceSeekToTimestamp, setChatSourceSeekToTimestamp] = useState(false);
+  const [chatSourceSeekToTimestamp, setChatSourceSeekToTimestamp] = useState(true);
   const [chatSourceAutoplay, setChatSourceAutoplay] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({
     state: 'idle',
@@ -406,7 +406,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, showToas
             <div className="space-y-6">
               <div>
                 <h3 className="text-lg font-semibold border-b border-slate-100 pb-4">智能对话</h3>
-                <p className="mt-3 text-sm leading-relaxed text-slate-500">点击回答中的来源时，可以选择是否同步播放器位置。默认只打开对应归档，不改变播放器状态。</p>
+                <p className="mt-3 text-sm leading-relaxed text-slate-500">点击回答中的来源时，默认会打开对应归档并定位到引用时间；你也可以关闭自动定位。</p>
               </div>
 
               <label className="flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 cursor-pointer">

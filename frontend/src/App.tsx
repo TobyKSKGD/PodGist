@@ -1,10 +1,11 @@
 import { Suspense, lazy, useState, useEffect, useRef, useCallback } from 'react';
 import { Routes, Route, useLocation, useNavigate, useParams } from 'react-router-dom';
 import axios from 'axios';
-import { IconSettings, IconPlus, IconLayoutList, IconListCheck, IconChevronLeft, IconChevronRight, IconBell, IconX, IconCircleCheck, IconBrain } from '@tabler/icons-react';
+import { IconSettings, IconPlus, IconLayoutList, IconListCheck, IconChevronLeft, IconChevronRight, IconBell, IconX, IconCircleCheck, IconBrain, IconWorldSearch } from '@tabler/icons-react';
 import Logo from './components/Logo';
 import { ToastProvider, useToast } from './components/Toast';
 import ConfirmDialog from './components/ConfirmDialog';
+import { archiveIdFromResultPath } from './utils/archivePath';
 
 // 页面级功能只在用户真正进入时下载，避免首次打开应用加载播放器、对话和任务队列的全部代码。
 const LibraryPage = lazy(() => import('./pages/LibraryPage'));
@@ -14,6 +15,7 @@ const SettingsModal = lazy(() => import('./components/SettingsModal'));
 const ResultView = lazy(() => import('./components/ResultView'));
 const TaskQueue = lazy(() => import('./components/TaskQueue'));
 const ChatView = lazy(() => import('./components/ChatView'));
+const DiscoveryPage = lazy(() => import('./pages/DiscoveryPage'));
 
 // 配置 axios 基础路径，指向你的 FastAPI 后端
 const api = axios.create({ baseURL: 'http://localhost:8000' });
@@ -59,7 +61,7 @@ function AppContent() {
   const [isBackendReady, setIsBackendReady] = useState(false);
   const [, setHasApiKey] = useState(false);
   const [chatSourceNavigation, setChatSourceNavigation] = useState({
-    seekToTimestamp: false,
+    seekToTimestamp: true,
     autoPlay: false,
   });
   const [deleteDialog, setDeleteDialog] = useState<{ open: boolean; archiveId: string; archiveName: string }>({
@@ -206,7 +208,7 @@ function AppContent() {
               task.result_path &&
               !notifiedTaskIds.current.has(task.id)
             ) {
-              const archiveId = task.result_path.split('/').pop();
+              const archiveId = archiveIdFromResultPath(task.result_path);
               if (archiveId) {
                 addNotification(task.name || '未命名任务', archiveId, task.id);
               }
@@ -332,6 +334,19 @@ function AppContent() {
                   <span className="font-medium">首页</span>
                 </button>
 
+                {/* 内容获取 */}
+                <button
+                  onClick={() => navigate('/discover', { replace: true })}
+                  className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-md transition-colors ${
+                    pathname === '/discover'
+                      ? 'bg-[#00ADA6]/10 text-[#00ADA6]'
+                      : 'text-slate-500 hover:bg-slate-100 hover:text-[#00ADA6]'
+                  }`}
+                >
+                  <IconWorldSearch size={18} className="shrink-0" />
+                  <span className="font-medium">内容获取</span>
+                </button>
+
                 {/* 任务队列 */}
                 <button
                   onClick={() => {
@@ -382,6 +397,13 @@ function AppContent() {
         {sidebarCollapsed && (
           <div className="flex flex-col items-center py-3 gap-1">
             <button
+              onClick={() => { navigate('/discover', { replace: true }); }}
+              className={`p-2.5 rounded-lg transition-colors ${pathname === '/discover' ? 'bg-[#00ADA6]/10 text-[#00ADA6]' : 'text-slate-400 hover:bg-slate-200 hover:text-[#00ADA6]'}`}
+              title="内容获取"
+            >
+              <IconWorldSearch size={18} />
+            </button>
+            <button
               onClick={() => { navigate('/import', { replace: true }); }}
               className="p-2.5 hover:bg-slate-200 rounded-lg transition-colors text-slate-500"
               title="导入内容"
@@ -426,6 +448,7 @@ function AppContent() {
           <Routes>
             <Route path="/" element={<LibraryPage />} />
             <Route path="/import" element={<ImportPage />} />
+            <Route path="/discover" element={<DiscoveryPage />} />
             <Route path="/episode/:id" element={<EpisodePage />} />
             {/* /result/:id — 旧版结果页（兼容） */}
             <Route path="/result/:id" element={

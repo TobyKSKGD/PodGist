@@ -24,6 +24,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Optional
 
 from backend import get_ffmpeg_path, get_ffprobe_path
+from backend.subprocess_utils import hidden_subprocess_kwargs
 
 # DashScope ASR 模型
 # qwen3-asr-flash：短音频同步模型（MultiModalConversation.call）
@@ -97,7 +98,13 @@ def get_audio_duration(file_path: str) -> float:
             '-of', 'default=noprint_wrappers=1:nokey=1',
             file_path
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            **hidden_subprocess_kwargs(),
+        )
         if result.returncode == 0 and result.stdout.strip():
             return float(result.stdout.strip())
     except Exception as e:
@@ -183,6 +190,7 @@ def _prepare_asr_transport_audio(audio_file_path: str, metrics: Optional[dict] =
             capture_output=True,
             text=True,
             timeout=180,
+            **hidden_subprocess_kwargs(),
         )
         if result.returncode != 0 or not os.path.isfile(transport_path):
             detail = (result.stderr or "")[-300:]
@@ -240,6 +248,7 @@ def _split_asr_audio_chunks(audio_file_path: str, duration_seconds: float, metri
                 capture_output=True,
                 text=True,
                 timeout=180,
+                **hidden_subprocess_kwargs(),
             )
             if result.returncode != 0 or not os.path.isfile(chunk_path):
                 detail = (result.stderr or "")[-300:]

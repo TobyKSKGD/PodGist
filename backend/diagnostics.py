@@ -11,6 +11,7 @@
 import os
 import subprocess
 from backend import get_ffmpeg_path
+from backend.subprocess_utils import hidden_subprocess_kwargs
 
 
 def test_dashscope_key(api_key):
@@ -128,7 +129,8 @@ def test_ffmpeg():
             [get_ffmpeg_path(), "-version"],
             capture_output=True,
             text=True,
-            timeout=5
+            timeout=5,
+            **hidden_subprocess_kwargs(),
         )
         if result.returncode == 0:
             lines = [l for l in result.stdout.split('\n') if l.strip()]

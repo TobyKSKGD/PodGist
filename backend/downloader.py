@@ -7,6 +7,8 @@ import re
 import requests
 import threading
 import sys
+import uuid
+from backend.subprocess_utils import hidden_subprocess_kwargs
 from http.cookiejar import MozillaCookieJar
 from urllib.parse import parse_qs, urlparse
 
@@ -292,6 +294,7 @@ def download_bilibili_audio_direct(url, save_dir, cookies_path=None):
             capture_output=True,
             text=True,
             timeout=180,
+            **hidden_subprocess_kwargs(),
         )
         if result.returncode != 0:
             print('[Downloader] Bilibili 音轨无损重封装失败，回退为兼容转码')
@@ -300,6 +303,7 @@ def download_bilibili_audio_direct(url, save_dir, cookies_path=None):
                 capture_output=True,
                 text=True,
                 timeout=180,
+                **hidden_subprocess_kwargs(),
             )
             if fallback.returncode != 0:
                 detail = (fallback.stderr or result.stderr or '')[-500:]
@@ -514,6 +518,58 @@ def detect_platform(url):
         return 'applepodcasts'
     else:
         return 'unknown'
+
+
+def download_direct_audio(url, save_dir='temp_audio', title=None):
+    """下载公开 RSS enclosure 音频；只供已经过内容发现接口确认的单集使用。"""
+    from backend.podcast_discovery import is_safe_public_url
+    if not is_safe_public_url(url):
+        return {
+            'success': False, 'file_path': None, 'title': title,
+            'error': '音频地址不是可访问的公开网络地址', 'platform': 'rss',
+        }
+    os.makedirs(save_dir, exist_ok=True)
+    headers = {
+        'User-Agent': 'PodGist/0.2.7',
+        'Accept': 'audio/*,application/octet-stream;q=0.8,*/*;q=0.2',
+    }
+    try:
+        with requests.get(url, headers=headers, stream=True, timeout=(10, 300), allow_redirects=True) as response:
+            response.raise_for_status()
+            if not is_safe_public_url(response.url):
+                raise RuntimeError('音频地址重定向到了非公开网络')
+            content_type = response.headers.get('Content-Type', '').split(';', 1)[0].lower()
+            ext = os.path.splitext(urlparse(response.url).path)[1].lower()
+            known_extensions = ('.mp3', '.m4a', '.wav', '.aac', '.ogg', '.opus', '.flac', '.mp4')
+            if content_type and not (
+                content_type.startswith('audio/')
+                or content_type in ('application/octet-stream', 'video/mp4')
+                or ext in known_extensions
+            ):
+                raise RuntimeError(f'服务器返回的不是音频内容 ({content_type})')
+            if ext not in known_extensions:
+                ext = {
+                    'audio/mpeg': '.mp3', 'audio/mp4': '.m4a', 'audio/x-m4a': '.m4a',
+                    'audio/wav': '.wav', 'audio/aac': '.aac', 'audio/ogg': '.ogg',
+                    'audio/flac': '.flac',
+                }.get(content_type, '.mp3')
+            safe_title = _sanitize_title(title or 'podcast_episode')
+            destination = os.path.join(save_dir, f'{safe_title}_{uuid.uuid4().hex[:8]}{ext}')
+            with open(destination, 'wb') as output:
+                for chunk in response.iter_content(chunk_size=1024 * 256):
+                    if chunk:
+                        output.write(chunk)
+        if not os.path.exists(destination) or os.path.getsize(destination) == 0:
+            raise RuntimeError('服务器返回了空音频')
+        return {
+            'success': True, 'file_path': destination, 'title': safe_title,
+            'error': None, 'platform': 'rss', 'asr_public_url': url,
+        }
+    except Exception as exc:
+        return {
+            'success': False, 'file_path': None, 'title': title,
+            'error': f'公开音频下载失败: {exc}', 'platform': 'rss',
+        }
 
 
 def parse_netease_url(raw_text):

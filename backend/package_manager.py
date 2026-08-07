@@ -9,6 +9,7 @@ import subprocess
 import sys
 import os
 from typing import Dict, List, Literal
+from backend.subprocess_utils import hidden_subprocess_kwargs
 
 # ================= 依赖包元数据（仅剩基础依赖）=================
 
@@ -34,6 +35,7 @@ def run_pip_command(args: List[str]) -> tuple:
             capture_output=True,
             text=True,
             timeout=300,
+            **hidden_subprocess_kwargs(),
         )
         return result.returncode == 0, result.stdout + result.stderr
     except subprocess.TimeoutExpired:

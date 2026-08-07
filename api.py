@@ -26,6 +26,7 @@ from backend.rag_db import (
 )
 from backend.rag_retriever import generate_chat_response
 from backend.fetch_cover import fetch_cover, download_cover_image
+from backend.podcast_discovery import is_safe_public_url, search_podcast_episodes
 from sse_starlette.sse import EventSourceResponse
 import asyncio
 
@@ -104,7 +105,7 @@ def load_config():
         "device": "auto",
         "max_timeline_items": 15,
         "cache_entity_images": False,
-        "chat_source_seek_to_timestamp": False,
+        "chat_source_seek_to_timestamp": True,
         "chat_source_autoplay": False,
     }
     try:
@@ -1461,7 +1462,7 @@ def get_settings():
             "dashscope_api_key": api_key,
             "max_timeline_items": config.get("max_timeline_items", 15),
             "cache_entity_images": config.get("cache_entity_images", False),
-            "chat_source_seek_to_timestamp": config.get("chat_source_seek_to_timestamp", False),
+            "chat_source_seek_to_timestamp": config.get("chat_source_seek_to_timestamp", True),
             "chat_source_autoplay": config.get("chat_source_autoplay", False),
         }
     }
@@ -1473,7 +1474,7 @@ def save_settings(
     dashscope_api_key: str = Form(""),
     max_timeline_items: int = Form(15),
     cache_entity_images: bool = Form(False),
-    chat_source_seek_to_timestamp: bool = Form(False),
+    chat_source_seek_to_timestamp: bool = Form(True),
     chat_source_autoplay: bool = Form(False),
 ):
     try:
@@ -1499,6 +1500,38 @@ def save_settings(
 
 
 # ================= 任务队列 API =================
+
+@app.get("/api/discovery/search")
+async def discover_podcasts(q: str, limit: int = 24):
+    """聚合搜索可直接加入 PodGist 任务队列的播客单集。"""
+    query = q.strip()
+    if len(query) < 2:
+        raise HTTPException(status_code=400, detail="请输入至少两个字符")
+    result = await asyncio.to_thread(search_podcast_episodes, query, min(max(limit, 1), 50))
+    return {"status": "success", **result}
+
+
+@app.post("/api/discovery/enqueue")
+async def enqueue_discovered_episode(request: dict):
+    """将内容发现结果使用公开音频直链送入现有任务队列。"""
+    audio_url = str(request.get("audio_url") or "").strip()
+    title = str(request.get("title") or "").strip()
+    mode = str(request.get("mode") or "timeline")
+    if not is_safe_public_url(audio_url):
+        raise HTTPException(status_code=400, detail="无效的音频地址")
+    if mode not in ("summary", "timeline"):
+        raise HTTPException(status_code=400, detail="无效的处理模式")
+    if not is_worker_running():
+        start_worker()
+    start_enrichment_worker()
+    task_id = add_task(
+        source=audio_url,
+        task_type="rss",
+        max_timeline_items=int(request.get("max_timeline_items") or 15),
+        name=title or None,
+        mode=mode,
+    )
+    return {"status": "success", "task_id": task_id, "message": "已加入任务队列"}
 
 # 8. 获取队列统计
 @app.get("/api/tasks/stats")

@@ -23,7 +23,7 @@ from backend import task_queue
 from backend.transcriber import transcribe_with_dashscope_and_segments
 from backend.llm_agent import get_podcast_summary_robust
 from backend.timeline_agent import enrich_timeline_archive, enrich_timeline_node, generate_timeline_json, warmup_timeline_nodes
-from backend.downloader import route_and_download
+from backend.downloader import route_and_download, download_direct_audio
 from backend.fetch_cover import fetch_cover, download_cover_image
 
 
@@ -227,6 +227,7 @@ def process_single_task(task, api_key):
         "netease": "podcast_url",
         "ximalaya": "podcast_url",
         "applepodcasts": "podcast_url",
+        "rss": "podcast_url",
     }
     source_type = source_type_map.get(task.get("type", ""), "other")
 
@@ -238,7 +239,7 @@ def process_single_task(task, api_key):
 
     try:
         # 步骤 1: 获取音频文件
-        task_type = get_task_type(source)
+        task_type = "rss" if task.get("type") == "rss" else get_task_type(source)
         print(f"[Worker] source={source}, task_type={task_type}, type={type(task_type)}")
         task_queue.update_progress_status(task_id, "正在获取音频...")
 
@@ -258,6 +259,13 @@ def process_single_task(task, api_key):
             # 本地文件
             audio_file_path = source
             title = os.path.splitext(os.path.basename(source))[0]
+        elif task_type == 'rss':
+            result = download_direct_audio(source, TEMP_DIR, title=task.get("name"))
+            if not result["success"]:
+                return False, None, f"下载失败: {result.get('error', '未知错误')}"
+            audio_file_path = result["file_path"]
+            title = result["title"]
+            public_audio_url = result.get("asr_public_url")
         elif task_type in ('xiaoyuzhou', 'bilibili', 'netease', 'ximalaya', 'applepodcasts'):
             # 下载在线音频
             result = route_and_download(source, TEMP_DIR)

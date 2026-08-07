@@ -136,22 +136,60 @@ PodGist 所有功能都围绕时间轴展开：
 
 ### 安装步骤
 
+#### Windows（PowerShell）
+
+```powershell
+# 克隆项目
+git clone https://github.com/TobyKSKGD/PodGist.git
+cd PodGist
+
+# 推荐使用独立虚拟环境
+python -m venv env
+.\env\Scripts\python.exe -m pip install -r requirements.txt
+
+# 安装前端依赖
+npm install --prefix frontend
+
+# 同时启动 FastAPI 与 Vite
+npm run dev
+```
+
+开发启动脚本会依次检查项目的 `env`、`.venv` 和系统 Python，并选择已经安装 FastAPI 与 Uvicorn 的解释器。Windows 前端通过系统命令解释器启动 npm，以兼容不同 Node.js 版本。
+
+#### macOS / Linux
+
 ```bash
 # 克隆项目
 git clone https://github.com/TobyKSKGD/PodGist.git
 cd PodGist
 
-# 安装 Python 依赖
-pip install -r requirements.txt
+# 推荐使用独立虚拟环境
+python3 -m venv env
+env/bin/python3 -m pip install -r requirements.txt
 
 # 安装前端依赖
-cd frontend && npm install && cd ..
+npm install --prefix frontend
 
-# 启动
+# 同时启动 FastAPI 与 Vite
 npm run dev
 ```
 
 访问 `http://localhost:5173`，在偏好设置中配置 DashScope API Key。
+
+也可以分别启动两个服务：
+
+```bash
+npm run dev:backend
+npm run dev:frontend
+```
+
+### 开发启动常见问题
+
+- **端口被占用**：开发模式使用后端 `8000` 和前端 `5173`。启动前请完全退出已安装版 PodGist，避免打包版的 `api-engine` 占用 `8000`。
+- **提示缺少 FastAPI**：确认依赖安装到了启动脚本选中的 Python。推荐直接创建项目根目录的 `env`，并使用该环境的 Python 安装 `requirements.txt`。
+- **Windows 存在多个 Python**：`python` 和 `py` 可能指向不同解释器；启动日志会打印最终选中的 Python 可执行文件和版本。
+- **只启动前端时接口返回 404 或连接失败**：同时运行 `npm run dev:backend`，并确认 `http://localhost:8000` 返回 PodGist 健康检查结果。
+- **FFmpeg 不可用**：确保 `ffmpeg` 和 `ffprobe` 已加入 `PATH`，并在终端运行 `ffmpeg -version`、`ffprobe -version` 验证。
 
 ---
 

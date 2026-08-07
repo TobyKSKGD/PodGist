@@ -3,6 +3,7 @@ import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 import { IconRefresh, IconTrash, IconPlayerPlay, IconPlayerPause, IconAlertCircle, IconCircleCheck, IconClock, IconLoader2, IconX, IconChevronDown, IconChevronUp, IconFileDescription, IconExternalLink } from '@tabler/icons-react';
 import { useToast } from './Toast';
+import { archiveIdFromResultPath } from '../utils/archivePath';
 
 interface Task {
   id: string;
@@ -99,7 +100,7 @@ export default function TaskQueue({
 
     try {
       // 从归档路径提取 archive_id（result_path 是完整路径如 /path/to/archives/xxx）
-      const archiveId = task.result_path?.split('/').pop();
+      const archiveId = archiveIdFromResultPath(task.result_path);
       if (!archiveId) return;
       const res = await api.get(`/api/archives/${encodeURIComponent(archiveId)}`);
       if (res.data.status === 'success') {
@@ -136,7 +137,7 @@ export default function TaskQueue({
         !notifiedCompletions.current.has(task.id)
       ) {
         notifiedCompletions.current.add(task.id);
-        const archiveId = task.result_path.split('/').pop();
+        const archiveId = archiveIdFromResultPath(task.result_path);
         if (archiveId) {
           onTaskComplete(task.name || '未命名任务', archiveId, task.id);
           onRefreshArchives?.();
@@ -439,7 +440,7 @@ export default function TaskQueue({
                             </button>
                             <button
                               onClick={() => {
-                                const archiveId = task.result_path?.split('/').pop();
+                                const archiveId = archiveIdFromResultPath(task.result_path);
                                 if (archiveId) {
                                   navigate(`/episode/${archiveId}`);
                                   if (onViewArchive) onViewArchive(archiveId);

@@ -11,11 +11,9 @@
 
 import { spawn, execSync } from 'child_process';
 import { platform, arch } from 'os';
-import { createRequire } from 'module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const require = createRequire(import.meta.url);
 const isWindows = platform() === 'win32';
 const EOL = isWindows ? '\r\n' : '\n';
 
@@ -94,11 +92,15 @@ async function main() {
 
   // Step 3: Start frontend
   log(CYAN, 'START', '启动前端...');
-  // npm 在 macOS/Linux 直接调用，Windows 用 npm.cmd
-  const npmCmd = isWindows ? 'npm.cmd' : 'npm';
+  // Windows 不能在所有 Node 版本中直接 spawn .cmd 文件；通过系统命令解释器启动。
+  // macOS/Linux 继续直接执行 npm，避免改变原有开发体验。
+  const npmCmd = isWindows ? (process.env.ComSpec || 'cmd.exe') : 'npm';
+  const npmArgs = isWindows
+    ? ['/d', '/s', '/c', 'npm.cmd run dev --prefix frontend']
+    : ['run', 'dev', '--prefix', 'frontend'];
   const frontend = spawn(
     npmCmd,
-    ['run', 'dev', '--prefix', 'frontend'],
+    npmArgs,
     {
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: false,
