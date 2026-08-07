@@ -530,7 +530,7 @@ def download_direct_audio(url, save_dir='temp_audio', title=None, cancellation_c
         }
     os.makedirs(save_dir, exist_ok=True)
     headers = {
-        'User-Agent': 'PodGist/0.2.7',
+        'User-Agent': 'PodGist/0.3.1',
         'Accept': 'audio/*,application/octet-stream;q=0.8,*/*;q=0.2',
     }
     try:

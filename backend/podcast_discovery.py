@@ -20,7 +20,7 @@ APPLE_SEARCH_URL = "https://itunes.apple.com/search"
 APPLE_LOOKUP_URL = "https://itunes.apple.com/lookup"
 PODCAST_INDEX_URL = "https://api.podcastindex.org/api/1.0"
 REQUEST_HEADERS = {
-    "User-Agent": "PodGist/0.2.7 (+https://github.com/TobyKSKGD/PodGist)",
+    "User-Agent": "PodGist/0.3.1 (+https://github.com/TobyKSKGD/PodGist)",
     "Accept": "application/json",
 }
 RSS_REQUEST_HEADERS = {
