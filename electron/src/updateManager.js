@@ -128,7 +128,9 @@ class UpdateManager {
 
   installUpdate() {
     if (this.app.isPackaged && this.status.state === 'downloaded') {
-      autoUpdater.quitAndInstall();
+      // 软件内更新应直接沿用当前用户和安装目录，不再弹出 NSIS 的安装范围页面。
+      // 第二个参数确保静默安装结束后重新启动 PodGist。
+      autoUpdater.quitAndInstall(true, true);
     }
   }
 
