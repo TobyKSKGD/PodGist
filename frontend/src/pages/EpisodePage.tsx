@@ -17,12 +17,13 @@ import {
   IconChevronLeft, IconPlayerPlay, IconClock,
   IconMessageCircle, IconPlayerSkipForward, IconRewindBackward15,
   IconRewindForward30,
-  IconChevronDown, IconExternalLink
+  IconChevronDown, IconExternalLink, IconNotes, IconX
 } from '@tabler/icons-react';
 import { resolveApiAssetUrl, resolveMediaUrl } from '../utils/apiAsset';
 
 const api = axios.create({ baseURL: 'http://localhost:8000' });
 const PROGRESS_KEY = 'podgist_play_progress';
+const SHOWNOTES_WIDTH_KEY = 'podgist_shownotes_width';
 
 // ===== 类型 =====
 
@@ -176,6 +177,35 @@ export default function EpisodePage() {
   // ===== timeline 模式状态 =====
   const [currentNode, setCurrentNode] = useState<TimelineNode | null>(null);
   const [selectedNode, setSelectedNode] = useState<TimelineNode | null>(null);
+  const [showShownotes, setShowShownotes] = useState(false);
+  const [shownotesWidth, setShownotesWidth] = useState(() => {
+    const stored = Number(localStorage.getItem(SHOWNOTES_WIDTH_KEY));
+    return Number.isFinite(stored) && stored >= 260 && stored <= 720 ? stored : 320;
+  });
+
+  const handleShownotesResizeStart = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = shownotesWidth;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    const handleMove = (moveEvent: PointerEvent) => {
+      const maxWidth = Math.max(320, Math.min(720, window.innerWidth * 0.55));
+      setShownotesWidth(Math.round(Math.max(260, Math.min(maxWidth, startWidth + startX - moveEvent.clientX))));
+    };
+    const handleEnd = () => {
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleEnd);
+      setShownotesWidth(current => {
+        localStorage.setItem(SHOWNOTES_WIDTH_KEY, String(current));
+        return current;
+      });
+    };
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleEnd);
+  }, [shownotesWidth]);
 
   // 摘要折叠
   const [summaryCollapsed, setSummaryCollapsed] = useState(true);
@@ -631,6 +661,11 @@ export default function EpisodePage() {
 
   const renderTimelineMode = () => {
     const nodes = archive?.timelineData?.nodes ?? [];
+    const metadata = archive?.metadata ?? {};
+    const shownotes = typeof metadata.description === 'string' ? metadata.description.trim() : '';
+    const showTitle = typeof metadata.show_title === 'string' ? metadata.show_title : '';
+    const publishedAt = typeof metadata.published_at === 'string' ? metadata.published_at : '';
+    const sourceLabel = typeof metadata.discovery_provider === 'string' ? metadata.discovery_provider : '';
     const activeNode = selectedNode ?? currentNode;
 
     // 节点类型 → 配色（品牌色系深浅变化，避免彩虹化）
@@ -965,7 +1000,7 @@ export default function EpisodePage() {
                   )}
 
                 {/* ——— 节点级统一提示（只在有内容时显示）———— */}
-                {(activeNode.entities?.length || activeNode.facts?.length || activeNode.references?.length) && (
+                {Boolean(activeNode.entities?.length || activeNode.facts?.length || activeNode.references?.length) && (
                   <p className="text-xs text-slate-300 leading-relaxed">
                     链接、图片等内容由 AI 辅助收集，请自行判断。
                   </p>
@@ -991,9 +1026,14 @@ export default function EpisodePage() {
           <div className="w-72 shrink-0 flex flex-col overflow-hidden border-l border-slate-200" style={{ background: '#F7F7F5' }}>
             {/* 目录头部 */}
             <div className="px-5 py-4 border-b border-slate-200 shrink-0">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-2">
                 <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-widest">目录</h2>
-                <span className="text-xs text-slate-400 tabular-nums">{nodes.length} 节</span>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => setShowShownotes(value => !value)} className={`flex items-center gap-1 rounded-md px-2 py-1 text-xs transition ${showShownotes ? 'bg-[#00ADA6]/10 text-[#00ADA6]' : 'text-slate-400 hover:bg-white hover:text-[#00ADA6]'}`} title="查看节目原始简介与 Shownotes">
+                    <IconNotes size={14} /> 简介
+                  </button>
+                  <span className="text-xs text-slate-400 tabular-nums">{nodes.length} 节</span>
+                </div>
               </div>
             </div>
 
@@ -1071,6 +1111,32 @@ export default function EpisodePage() {
               )}
             </div>
           </div>
+
+          {showShownotes && (
+            <aside className="relative shrink-0 overflow-y-auto border-l border-slate-200 bg-white" style={{ width: shownotesWidth }}>
+              <div
+                onPointerDown={handleShownotesResizeStart}
+                className="absolute inset-y-0 left-0 z-20 w-2 -translate-x-1/2 cursor-col-resize touch-none transition-colors hover:bg-[#00ADA6]/20 active:bg-[#00ADA6]/30"
+                title="拖拽调整简介栏宽度"
+              />
+              <div className="sticky top-0 flex items-center justify-between border-b border-slate-100 bg-white/95 px-5 py-4 backdrop-blur">
+                <div>
+                  <h2 className="text-sm font-semibold text-slate-800">节目简介与 Shownotes</h2>
+                  <p className="mt-0.5 text-xs text-slate-400">发布者提供的原始内容</p>
+                </div>
+                <button onClick={() => setShowShownotes(false)} className="rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"><IconX size={17} /></button>
+              </div>
+              <div className="p-5">
+                {showTitle && <p className="text-sm font-medium text-[#00ADA6]">{showTitle}</p>}
+                <h3 className="mt-1 text-base font-semibold leading-6 text-slate-800">{archive?.name}</h3>
+                <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-400">
+                  {publishedAt && <span>{new Date(publishedAt).toLocaleDateString('zh-CN')}</span>}
+                  {sourceLabel && <span>来源：{sourceLabel}</span>}
+                </div>
+                {shownotes && <div className="mt-5 whitespace-pre-wrap break-words text-sm leading-7 text-slate-600">{shownotes}</div>}
+              </div>
+            </aside>
+          )}
         </div>
 
         {/* ===== 底部播放器控制条 ===== */}

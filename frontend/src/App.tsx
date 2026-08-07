@@ -59,6 +59,7 @@ function AppContent() {
   const [selectedArchiveId, setSelectedArchiveId] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isBackendReady, setIsBackendReady] = useState(false);
+  const [activeQueueCount, setActiveQueueCount] = useState(0);
   const [, setHasApiKey] = useState(false);
   const [chatSourceNavigation, setChatSourceNavigation] = useState({
     seekToTimestamp: true,
@@ -226,6 +227,27 @@ function AppContent() {
     return () => clearInterval(interval);
   }, [addNotification]);
 
+  // 侧栏任务角标：等待中 + 处理中。独立于任务队列页面，保证全局可见。
+  useEffect(() => {
+    if (!isBackendReady) return;
+    const refreshQueueCount = async () => {
+      try {
+        const res = await api.get('/api/tasks/stats');
+        if (res.data.status === 'success') {
+          const next = Number(res.data.data.pending || 0)
+            + Number(res.data.data.processing || 0)
+            + Number(res.data.data.cancelling || 0);
+          setActiveQueueCount(current => current === next ? current : next);
+        }
+      } catch {
+        // 后端短暂重启时保留上一次数字，避免角标闪烁。
+      }
+    };
+    void refreshQueueCount();
+    const interval = window.setInterval(refreshQueueCount, 3000);
+    return () => window.clearInterval(interval);
+  }, [isBackendReady]);
+
   // 确认删除归档
   const confirmDeleteArchive = async () => {
     const { archiveId } = deleteDialog;
@@ -347,22 +369,6 @@ function AppContent() {
                   <span className="font-medium">内容获取</span>
                 </button>
 
-                {/* 任务队列 */}
-                <button
-                  onClick={() => {
-                    setCurrentView('queue');
-                    navigate('/queue', { replace: true });
-                  }}
-                  className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-md transition-colors ${
-                    currentView === 'queue'
-                      ? 'bg-[#00ADA6]/10 text-[#00ADA6]'
-                      : 'text-slate-500 hover:bg-slate-100 hover:text-[#00ADA6]'
-                  }`}
-                >
-                  <IconListCheck size={18} className="shrink-0" />
-                  <span className="font-medium">任务队列</span>
-                </button>
-
                 {/* 智能对话 */}
                 <button
                   onClick={() => {
@@ -377,6 +383,23 @@ function AppContent() {
                 >
                   <IconBrain size={18} className="shrink-0" />
                   <span className="font-medium">智能对话</span>
+                </button>
+
+                {/* 任务队列 */}
+                <button
+                  onClick={() => {
+                    setCurrentView('queue');
+                    navigate('/queue', { replace: true });
+                  }}
+                  className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-sm rounded-md transition-colors ${
+                    currentView === 'queue'
+                      ? 'bg-[#00ADA6]/10 text-[#00ADA6]'
+                      : 'text-slate-500 hover:bg-slate-100 hover:text-[#00ADA6]'
+                  }`}
+                >
+                  <IconListCheck size={18} className="shrink-0" />
+                  <span className="font-medium">任务队列</span>
+                  {activeQueueCount > 0 && <span className="ml-auto min-w-5 rounded-full bg-[#00ADA6] px-1.5 py-0.5 text-center text-[11px] font-semibold leading-4 text-white">{activeQueueCount > 99 ? '99+' : activeQueueCount}</span>}
                 </button>
               </div>
             </nav>
@@ -418,18 +441,19 @@ function AppContent() {
               <IconLayoutList size={18} />
             </button>
             <button
-              onClick={() => { navigate('/queue', { replace: true }); setCurrentView('queue'); }}
-              className={`p-2.5 rounded-lg transition-colors ${currentView === 'queue' ? 'bg-[#00ADA6]/10 text-[#00ADA6]' : 'text-slate-400 hover:bg-slate-200 hover:text-[#00ADA6]'}`}
-              title="任务队列"
-            >
-              <IconListCheck size={18} />
-            </button>
-            <button
               onClick={() => { navigate('/chat', { replace: true }); setCurrentView('chat'); }}
               className={`p-2.5 rounded-lg transition-colors ${currentView === 'chat' ? 'bg-[#00ADA6]/10 text-[#00ADA6]' : 'text-slate-400 hover:bg-slate-200 hover:text-[#00ADA6]'}`}
               title="智能对话"
             >
               <IconBrain size={18} />
+            </button>
+            <button
+              onClick={() => { navigate('/queue', { replace: true }); setCurrentView('queue'); }}
+              className={`relative p-2.5 rounded-lg transition-colors ${currentView === 'queue' ? 'bg-[#00ADA6]/10 text-[#00ADA6]' : 'text-slate-400 hover:bg-slate-200 hover:text-[#00ADA6]'}`}
+              title={`任务队列${activeQueueCount > 0 ? `（${activeQueueCount}）` : ''}`}
+            >
+              <IconListCheck size={18} />
+              {activeQueueCount > 0 && <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-[#00ADA6] px-1 text-center text-[10px] font-semibold leading-4 text-white">{activeQueueCount > 99 ? '99+' : activeQueueCount}</span>}
             </button>
             <button
               onClick={() => setIsIconSettingsOpen(true)}

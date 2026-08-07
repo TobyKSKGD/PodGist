@@ -155,6 +155,8 @@ def _notify_asr_stage(stage_callback: Optional[Callable[[str], None]], message: 
         try:
             stage_callback(message)
         except Exception as exc:
+            if getattr(exc, "is_task_cancellation", False):
+                raise
             print(f"[DashScope ASR] 进度回调失败: {type(exc).__name__}")
 
 
@@ -354,6 +356,8 @@ def _transcribe_parallel_chunks(
         _record_duration(metrics, "parallel_cloud_asr", started_at)
         return merged
     except Exception as exc:
+        if getattr(exc, "is_task_cancellation", False):
+            raise
         print(f"[DashScope ASR] 并发转录失败，回退单任务转录: {type(exc).__name__}: {exc}")
         return None
 
@@ -634,6 +638,8 @@ def _call_paraformer_transcription(
         return {"error": "Timeout waiting for transcription"}
 
     except Exception as e:
+        if getattr(e, "is_task_cancellation", False):
+            raise
         print(f"[DashScope ASR] {model} 异常: {type(e).__name__}: {e}")
         return {"error": f"{type(e).__name__}: {e}"}
     finally:
@@ -679,6 +685,8 @@ def _upload_to_dashscope(
         return url
 
     except Exception as e:
+        if getattr(e, "is_task_cancellation", False):
+            raise
         print(f"[DashScope ASR] Upload error: {e}")
         return None
     finally:

@@ -9,7 +9,7 @@
  * Ctrl+C / SIGINT / SIGTERM 时正确关闭两个子进程。
  */
 
-import { spawn, execSync } from 'child_process';
+import { spawn, execFileSync, execSync } from 'child_process';
 import { platform, arch } from 'os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -39,7 +39,18 @@ function killPort(port) {
         const pid = parts[parts.length - 1];
         if (pid && /^\d+$/.test(pid)) {
           try {
-            execSync(`taskkill /PID ${pid} /F`, { stdio: 'ignore' });
+            execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore' });
+          } catch {}
+          // uvicorn --reload 在 Windows 使用 multiprocessing。父进程异常退出后，
+          // Worker 可能继续持有继承的监听 socket，但 netstat 仍把端口记在已消失的父 PID 上。
+          // 此时 taskkill 找不到父进程，需要按 spawn_main 的 parent_pid 精确清理孤儿 Worker。
+          try {
+            execFileSync('powershell.exe', [
+              '-NoProfile',
+              '-NonInteractive',
+              '-Command',
+              `$parentPid = ${pid}; Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match ('parent_pid=' + $parentPid + '(?:,|\\))') } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`,
+            ], { stdio: 'ignore' });
           } catch {}
         }
       }

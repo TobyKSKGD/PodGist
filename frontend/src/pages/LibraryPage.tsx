@@ -9,6 +9,8 @@ import {
   IconTrash,
   IconChartBar,
   IconTimelineEvent,
+  IconShieldCheck,
+  IconLoader2,
 } from '@tabler/icons-react';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { useToast } from '../components/Toast';
@@ -100,6 +102,7 @@ export default function LibraryPage() {
 
   // 迁移归档
   const [migratingId, setMigratingId] = useState<string | null>(null);
+  const [checkingId, setCheckingId] = useState<string | null>(null);
 
   // 搜索与筛选
   const [search, setSearch] = useState('');
@@ -160,6 +163,23 @@ export default function LibraryPage() {
         showToast('error', '迁移失败，请重试');
       })
       .finally(() => setMigratingId(null));
+  };
+
+  const handleIntegrityCheck = (archive: ArchiveItem) => {
+    setCheckingId(archive.id);
+    api.post(`/api/archives/${encodeURIComponent(archive.id)}/integrity`)
+      .then(res => {
+        const repaired = (res.data.repaired || []) as string[];
+        const missing = (res.data.missing || []) as string[];
+        if (res.data.complete) {
+          showToast('success', repaired.length ? `已补全：${repaired.join('、')}` : '节目内容完整，无需修复');
+        } else {
+          showToast('info', `检查完成，仍缺少：${missing.join('、')}`);
+        }
+        refreshArchives();
+      })
+      .catch(() => showToast('error', '完整性检查失败，请稍后重试'))
+      .finally(() => setCheckingId(null));
   };
 
   // 计算继续收听
@@ -472,6 +492,14 @@ export default function LibraryPage() {
                   </button>
 
                   {/* 进入箭头 */}
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleIntegrityCheck(item); }}
+                    disabled={checkingId === item.id}
+                    className="rounded-md p-1.5 text-slate-300 transition-colors hover:bg-[#00ADA6]/10 hover:text-[#00ADA6] disabled:opacity-60"
+                    title="检查并补全封面、简介和时间轴"
+                  >
+                    {checkingId === item.id ? <IconLoader2 size={14} className="animate-spin" /> : <IconShieldCheck size={14} />}
+                  </button>
                   <IconPlayerPlay size={12} className="text-slate-200 group-hover:text-[#00ADA6] transition-colors shrink-0" />
                 </div>
               ))

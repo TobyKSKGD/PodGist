@@ -520,7 +520,7 @@ def detect_platform(url):
         return 'unknown'
 
 
-def download_direct_audio(url, save_dir='temp_audio', title=None):
+def download_direct_audio(url, save_dir='temp_audio', title=None, cancellation_callback=None):
     """下载公开 RSS enclosure 音频；只供已经过内容发现接口确认的单集使用。"""
     from backend.podcast_discovery import is_safe_public_url
     if not is_safe_public_url(url):
@@ -534,6 +534,8 @@ def download_direct_audio(url, save_dir='temp_audio', title=None):
         'Accept': 'audio/*,application/octet-stream;q=0.8,*/*;q=0.2',
     }
     try:
+        if cancellation_callback:
+            cancellation_callback()
         with requests.get(url, headers=headers, stream=True, timeout=(10, 300), allow_redirects=True) as response:
             response.raise_for_status()
             if not is_safe_public_url(response.url):
@@ -557,6 +559,8 @@ def download_direct_audio(url, save_dir='temp_audio', title=None):
             destination = os.path.join(save_dir, f'{safe_title}_{uuid.uuid4().hex[:8]}{ext}')
             with open(destination, 'wb') as output:
                 for chunk in response.iter_content(chunk_size=1024 * 256):
+                    if cancellation_callback:
+                        cancellation_callback()
                     if chunk:
                         output.write(chunk)
         if not os.path.exists(destination) or os.path.getsize(destination) == 0:
@@ -566,6 +570,13 @@ def download_direct_audio(url, save_dir='temp_audio', title=None):
             'error': None, 'platform': 'rss', 'asr_public_url': url,
         }
     except Exception as exc:
+        if 'destination' in locals() and os.path.isfile(destination):
+            try:
+                os.remove(destination)
+            except OSError:
+                pass
+        if getattr(exc, "is_task_cancellation", False):
+            raise
         return {
             'success': False, 'file_path': None, 'title': title,
             'error': f'公开音频下载失败: {exc}', 'platform': 'rss',

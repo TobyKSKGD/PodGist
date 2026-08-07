@@ -101,12 +101,41 @@ def init_db():
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS podcast_subscriptions (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            author TEXT,
+            description TEXT,
+            feed_url TEXT NOT NULL,
+            page_url TEXT,
+            cover_url TEXT,
+            provider TEXT,
+            subscribed_at TEXT NOT NULL
+        )
+    """)
+
     # 给既有缓存补充图片来源元数据；不删除或重写任何用户已有任务数据。
     cache_columns = {row[1] for row in cursor.execute("PRAGMA table_info(entity_enrichment_cache)")}
     if "image_source_url" not in cache_columns:
         cursor.execute("ALTER TABLE entity_enrichment_cache ADD COLUMN image_source_url TEXT")
     if "image_source_region" not in cache_columns:
         cursor.execute("ALTER TABLE entity_enrichment_cache ADD COLUMN image_source_region TEXT")
+
+    # 内容获取任务需要把目录元数据一路带到归档；使用可空列保持旧任务兼容。
+    task_columns = {row[1] for row in cursor.execute("PRAGMA table_info(tasks)")}
+    for column in (
+        "cover_url", "source_page_url", "feed_url", "show_title", "discovery_provider",
+        "description", "published_at",
+    ):
+        if column not in task_columns:
+            cursor.execute(f"ALTER TABLE tasks ADD COLUMN {column} TEXT")
+    if "duration_seconds" not in task_columns:
+        cursor.execute("ALTER TABLE tasks ADD COLUMN duration_seconds INTEGER")
+    if "cancel_requested" not in task_columns:
+        cursor.execute("ALTER TABLE tasks ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0")
+    if "cancel_time" not in task_columns:
+        cursor.execute("ALTER TABLE tasks ADD COLUMN cancel_time TEXT")
 
     # 检查 name 字段是否存在，不存在则添加
     try:
@@ -130,7 +159,55 @@ def init_db():
     conn.close()
 
 
-def add_task(source, task_type, engine="sensevoice", max_timeline_items=15, name=None, mode="summary"):
+def list_podcast_subscriptions():
+    conn = get_db_connection()
+    rows = conn.execute("SELECT * FROM podcast_subscriptions ORDER BY subscribed_at DESC").fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def save_podcast_subscription(subscription: dict):
+    conn = get_db_connection()
+    conn.execute("""
+        INSERT INTO podcast_subscriptions
+            (id, title, author, description, feed_url, page_url, cover_url, provider, subscribed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            title=excluded.title, author=excluded.author, description=excluded.description,
+            feed_url=excluded.feed_url, page_url=excluded.page_url,
+            cover_url=excluded.cover_url, provider=excluded.provider
+    """, (
+        subscription["id"], subscription["title"], subscription.get("author"),
+        subscription.get("description"), subscription["feed_url"], subscription.get("page_url"),
+        subscription.get("cover_url"), subscription.get("provider", "rss"), datetime.now().isoformat(),
+    ))
+    conn.commit()
+    conn.close()
+
+
+def delete_podcast_subscription(subscription_id: str):
+    conn = get_db_connection()
+    conn.execute("DELETE FROM podcast_subscriptions WHERE id = ?", (subscription_id,))
+    conn.commit()
+    conn.close()
+
+
+def add_task(
+    source,
+    task_type,
+    engine="sensevoice",
+    max_timeline_items=15,
+    name=None,
+    mode="summary",
+    cover_url=None,
+    source_page_url=None,
+    feed_url=None,
+    show_title=None,
+    discovery_provider=None,
+    description=None,
+    published_at=None,
+    duration_seconds=None,
+):
     """
     添加新任务到队列。
 
@@ -182,9 +259,17 @@ def add_task(source, task_type, engine="sensevoice", max_timeline_items=15, name
     cursor = conn.cursor()
 
     cursor.execute("""
-        INSERT INTO tasks (id, source, name, type, status, engine, max_timeline_items, create_time, mode)
-        VALUES (?, ?, ?, ?, 'PENDING', ?, ?, ?, ?)
-    """, (task_id, source, name, task_type, engine, max_timeline_items, create_time, mode))
+        INSERT INTO tasks (
+            id, source, name, type, status, engine, max_timeline_items, create_time, mode,
+            cover_url, source_page_url, feed_url, show_title, discovery_provider,
+            description, published_at, duration_seconds
+        )
+        VALUES (?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        task_id, source, name, task_type, engine, max_timeline_items, create_time, mode,
+        cover_url, source_page_url, feed_url, show_title, discovery_provider,
+        description, published_at, duration_seconds,
+    ))
 
     conn.commit()
     conn.close()
@@ -403,6 +488,33 @@ def mark_failed(task_id, error_msg):
     update_task_status(task_id, "FAILED", error_msg=error_msg)
 
 
+def request_task_cancellation(task_id: str) -> bool:
+    """持久化取消请求；处理中任务保留记录直到 Worker 完成清理。"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE tasks
+        SET cancel_requested = 1, cancel_time = ?, status = 'CANCEL_REQUESTED',
+            progress_status = '正在取消并清理本地文件...'
+        WHERE id = ? AND status IN ('PENDING', 'PROCESSING', 'CANCEL_REQUESTED')
+    """, (datetime.now().isoformat(), task_id))
+    changed = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return changed
+
+
+def is_task_cancellation_requested(task_id: str) -> bool:
+    conn = get_db_connection()
+    row = conn.execute("SELECT cancel_requested, status FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    conn.close()
+    return bool(row and (row["cancel_requested"] or row["status"] == "CANCEL_REQUESTED"))
+
+
+def get_cancellation_requested_tasks():
+    return get_all_tasks(status="CANCEL_REQUESTED", order_by="cancel_time ASC")
+
+
 def reset_processing_to_pending():
     """
     重置所有 PROCESSING 状态的任务为 PENDING（用于启动时的灾难恢复）。
@@ -464,13 +576,23 @@ def get_queue_stats():
     cursor = conn.cursor()
 
     stats = {}
-    for status in ("PENDING", "PROCESSING", "COMPLETED", "FAILED"):
+    for status in ("PENDING", "PROCESSING", "CANCEL_REQUESTED", "COMPLETED", "FAILED"):
         cursor.execute("SELECT COUNT(*) FROM tasks WHERE status = ?", (status,))
         stats[status] = cursor.fetchone()[0]
 
     conn.close()
 
     return stats
+
+
+def delete_enrichment_jobs(archive_id):
+    """删除归档富化任务，供取消流水线时做归属明确的清理。"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM timeline_node_enrichment_jobs WHERE archive_id = ?", (archive_id,))
+    cursor.execute("DELETE FROM timeline_enrichment_jobs WHERE archive_id = ?", (archive_id,))
+    conn.commit()
+    conn.close()
 
 
 def create_enrichment_job(archive_id):

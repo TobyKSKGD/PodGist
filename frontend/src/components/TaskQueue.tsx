@@ -3,6 +3,7 @@ import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 import { IconRefresh, IconTrash, IconPlayerPlay, IconPlayerPause, IconAlertCircle, IconCircleCheck, IconClock, IconLoader2, IconX, IconChevronDown, IconChevronUp, IconFileDescription, IconExternalLink } from '@tabler/icons-react';
 import { useToast } from './Toast';
+import ConfirmDialog from './ConfirmDialog';
 import { archiveIdFromResultPath } from '../utils/archivePath';
 
 interface Task {
@@ -10,7 +11,7 @@ interface Task {
   source: string;
   name: string;
   type: string;
-  status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+  status: 'PENDING' | 'PROCESSING' | 'CANCEL_REQUESTED' | 'COMPLETED' | 'FAILED';
   engine: string;
   progress_status: string;
   create_time: string;
@@ -22,6 +23,7 @@ interface Task {
 interface QueueStats {
   pending: number;
   processing: number;
+  cancelling: number;
   completed: number;
   failed: number;
   worker_running: boolean;
@@ -49,6 +51,7 @@ export default function TaskQueue({
   const [activeTab, setActiveTab] = useState<'all' | 'pending' | 'processing' | 'completed' | 'failed'>('all');
   const [expandedTasks, setExpandedTasks] = useState<Record<string, string>>({});
   const [previewLoading, setPreviewLoading] = useState<Record<string, boolean>>({});
+  const [deleteTarget, setDeleteTarget] = useState<Task | null>(null);
 
   // 从 localStorage 加载已通知的任务 ID，避免重复通知
   const loadNotifiedIds = (): Set<string> => {
@@ -154,7 +157,7 @@ export default function TaskQueue({
         showToast('success', '队列已恢复');
       } else {
         await api.post('/api/tasks/pause');
-        showToast('info', '队列已暂停');
+        showToast('info', '已暂停领取新任务；当前任务会继续执行');
       }
       fetchStats();
     } catch {
@@ -190,10 +193,11 @@ export default function TaskQueue({
     }
   };
 
-  const handleDeleteTask = async (taskId: string) => {
+  const handleDeleteTask = async (task: Task) => {
     try {
-      await api.delete(`/api/tasks/${taskId}`);
-      showToast('success', '任务已删除');
+      const res = await api.delete(`/api/tasks/${task.id}`);
+      const cancelling = res.data.action === 'cancelling';
+      showToast(cancelling ? 'info' : 'success', res.data.message || (cancelling ? '正在取消任务' : '任务记录已删除'));
       fetchTasks();
       fetchStats();
     } catch {
@@ -222,6 +226,8 @@ export default function TaskQueue({
         return <IconClock size={16} className="text-[#0891B2]" />;
       case 'PROCESSING':
         return <IconLoader2 size={16} className="text-[#00ADA6] animate-spin" />;
+      case 'CANCEL_REQUESTED':
+        return <IconLoader2 size={16} className="text-[#E11D48] animate-spin" />;
       case 'COMPLETED':
         return <IconCircleCheck size={16} className="text-[#10B981]" />;
       case 'FAILED':
@@ -235,12 +241,14 @@ export default function TaskQueue({
     const classes = {
       PENDING: 'bg-[#E1F5FE] text-[#009A94]',
       PROCESSING: 'bg-[#D1FAF5] text-[#00ADA6]',
+      CANCEL_REQUESTED: 'bg-[#FFF1F3] text-[#E11D48]',
       COMPLETED: 'bg-[#D1FAF5] text-[#10B981]',
       FAILED: 'bg-[#FFF1F3] text-[#E11D48]'
     };
     const labels = {
       PENDING: '等待中',
       PROCESSING: '处理中',
+      CANCEL_REQUESTED: '正在取消',
       COMPLETED: '已完成',
       FAILED: '失败'
     };
@@ -251,7 +259,7 @@ export default function TaskQueue({
     );
   };
 
-  const getTypeBadge = (type: string) => {
+  const getTypeBadge = (type: string, source = '') => {
     const typeMap: Record<string, { label: string; className: string }> = {
       xiaoyuzhou: { label: '播客', className: 'bg-[#E1F5FE] text-[#009A94]' },
       bilibili: { label: '视频', className: 'bg-[#E1F5FE] text-[#009A94]' },
@@ -261,7 +269,20 @@ export default function TaskQueue({
       apple: { label: '苹果播客', className: 'bg-[#E1F5FE] text-[#009A94]' },
       local: { label: '本地', className: 'bg-[#E1F5FE] text-[#009A94]' },
     };
-    const info = typeMap[type] || { label: '未知', className: 'bg-slate-100 text-slate-500' };
+    let info = typeMap[type];
+    if (type === 'rss') {
+      const normalizedSource = source.toLowerCase();
+      if (normalizedSource.includes('ximalaya.com') || normalizedSource.includes('xmcdn.com') || normalizedSource.includes('xima.tv')) {
+        info = { label: '喜马拉雅', className: 'bg-[#E1F5FE] text-[#009A94]' };
+      } else if (normalizedSource.includes('xiaoyuzhoufm.com') || normalizedSource.includes('xyzcdn.net') || normalizedSource.includes('xyzfm.space')) {
+        info = { label: '小宇宙', className: 'bg-[#E1F5FE] text-[#009A94]' };
+      } else if (normalizedSource.includes('music.163.com') || normalizedSource.includes('163cn.tv')) {
+        info = { label: '网易云', className: 'bg-[#E1F5FE] text-[#009A94]' };
+      } else {
+        info = { label: '播客 RSS', className: 'bg-[#E1F5FE] text-[#009A94]' };
+      }
+    }
+    info ||= { label: '未知', className: 'bg-slate-100 text-slate-500' };
     return (
       <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${info.className}`}>
         {info.label}
@@ -271,6 +292,9 @@ export default function TaskQueue({
 
   const filteredTasks = tasks.filter(task => {
     if (activeTab === 'all') return true;
+    if (activeTab === 'processing') {
+      return task.status === 'PROCESSING' || task.status === 'CANCEL_REQUESTED';
+    }
     return task.status === activeTab.toUpperCase();
   });
 
@@ -296,7 +320,7 @@ export default function TaskQueue({
               }`}
             >
               {stats?.paused ? <IconPlayerPlay size={14} /> : <IconPlayerPause size={14} />}
-              {stats?.paused ? '恢复' : '暂停'}
+              {stats?.paused ? '恢复队列' : '暂停新任务'}
             </button>
             <button
               onClick={() => { fetchTasks(); fetchStats(); }}
@@ -314,7 +338,7 @@ export default function TaskQueue({
             <div className="text-xs text-[#009A94]">等待中</div>
           </div>
           <div className="bg-[#E1F5FE] rounded-lg p-3 border border-[#0891B2]">
-            <div className="text-2xl font-bold text-[#009A94] w-8">{stats?.processing || 0}</div>
+            <div className="text-2xl font-bold text-[#009A94] w-8">{(stats?.processing || 0) + (stats?.cancelling || 0)}</div>
             <div className="text-xs text-[#009A94]">处理中</div>
           </div>
           <div className="bg-[#E1F5FE] rounded-lg p-3 border border-[#0891B2]">
@@ -332,7 +356,7 @@ export default function TaskQueue({
           <span className={`w-2 h-2 rounded-full ${stats?.worker_running ? 'bg-[#10B981]' : 'bg-slate-300'}`}></span>
           <span className="text-slate-600">
             Worker {stats?.worker_running ? '运行中' : '未运行'}
-            {stats?.paused && ' (已暂停)'}
+            {stats?.paused && '（已暂停领取新任务）'}
           </span>
         </div>
       </div>
@@ -353,7 +377,7 @@ export default function TaskQueue({
               {tab === 'all' ? '全部' : tab === 'pending' ? '等待' : tab === 'processing' ? '处理中' : tab === 'completed' ? '完成' : '失败'}
               {tab !== 'all' && (
                 <span className="ml-1.5 text-xs">
-                  ({tab === 'pending' ? stats?.pending : tab === 'processing' ? stats?.processing : tab === 'completed' ? stats?.completed : stats?.failed})
+                  ({tab === 'pending' ? stats?.pending : tab === 'processing' ? (stats?.processing || 0) + (stats?.cancelling || 0) : tab === 'completed' ? stats?.completed : stats?.failed})
                 </span>
               )}
             </button>
@@ -402,7 +426,7 @@ export default function TaskQueue({
                           {task.name || '未命名任务'}
                         </span>
                         {getStatusBadge(task.status)}
-                        {getTypeBadge(task.type)}
+                        {getTypeBadge(task.type, task.source)}
                       </div>
                       <div className="text-xs text-slate-500 mb-1 truncate max-w-full">
                         {task.source}
@@ -478,10 +502,14 @@ export default function TaskQueue({
                     </button>
                   )}
                   <button
-                    onClick={() => handleDeleteTask(task.id)}
+                    onClick={() => setDeleteTarget(task)}
+                    disabled={task.status === 'CANCEL_REQUESTED'}
                     className="p-1.5 text-slate-400 hover:text-[#E11D48] hover:bg-[#FFF1F3] rounded transition-colors shrink-0"
+                    title={task.status === 'PENDING' || task.status === 'PROCESSING' ? '取消任务' : '删除任务记录'}
                   >
-                    <IconX size={16} />
+                    {task.status === 'CANCEL_REQUESTED'
+                      ? <IconLoader2 size={16} className="animate-spin" />
+                      : <IconX size={16} />}
                   </button>
                 </div>
               </div>
@@ -489,6 +517,21 @@ export default function TaskQueue({
           </div>
         )}
       </div>
+      <ConfirmDialog
+        isOpen={Boolean(deleteTarget)}
+        title={deleteTarget?.status === 'PENDING' || deleteTarget?.status === 'PROCESSING' ? '取消这个任务？' : '删除任务记录？'}
+        message={deleteTarget?.status === 'PENDING' || deleteTarget?.status === 'PROCESSING'
+          ? '系统会停止后续处理，并清理该任务的临时音频和未完成归档。已经提交给云端的单次请求可能需要等待返回后才能完全停止。'
+          : '这里只删除队列中的任务记录，不会删除已经生成的归档。'}
+        confirmText={deleteTarget?.status === 'PENDING' || deleteTarget?.status === 'PROCESSING' ? '取消任务' : '删除记录'}
+        onConfirm={() => {
+          const task = deleteTarget;
+          setDeleteTarget(null);
+          if (task) void handleDeleteTask(task);
+        }}
+        onCancel={() => setDeleteTarget(null)}
+        danger
+      />
     </div>
   );
 }

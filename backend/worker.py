@@ -44,6 +44,51 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 
 # Worker 停止标志
 _worker_stop_flag = False
+_task_cancel_events: dict[str, threading.Event] = {}
+_task_cancel_lock = threading.Lock()
+
+
+class TaskCancelled(Exception):
+    """用户主动取消任务；与处理失败分开记录。"""
+    is_task_cancellation = True
+
+
+def request_task_cancellation(task_id: str) -> bool:
+    """向当前 Worker 发出即时信号，并把请求写入数据库用于重启恢复。"""
+    with _task_cancel_lock:
+        _task_cancel_events.setdefault(task_id, threading.Event()).set()
+    return task_queue.request_task_cancellation(task_id)
+
+
+def _clear_task_cancel_event(task_id: str) -> None:
+    with _task_cancel_lock:
+        _task_cancel_events.pop(task_id, None)
+
+
+def _is_task_cancelled(task_id: str) -> bool:
+    with _task_cancel_lock:
+        event = _task_cancel_events.get(task_id)
+        if event and event.is_set():
+            return True
+    return task_queue.is_task_cancellation_requested(task_id)
+
+
+def _raise_if_task_cancelled(task_id: str) -> None:
+    if _is_task_cancelled(task_id):
+        raise TaskCancelled(f"任务 {task_id} 已取消")
+
+
+def _remove_task_partial_files(task_id: str, archive_path: str | None = None) -> None:
+    """只清理该任务明确拥有的暂存目录，绝不扫描或删除其他任务文件。"""
+    staging_root = os.path.abspath(os.path.join(TEMP_DIR, "incomplete_archives"))
+    targets = [(os.path.abspath(os.path.join(staging_root, task_id)), staging_root)]
+    if archive_path:
+        targets.append((os.path.abspath(archive_path), os.path.abspath(ARCHIVE_DIR)))
+    for target, allowed_root in targets:
+        if target == allowed_root or os.path.commonpath([target, allowed_root]) != allowed_root:
+            continue
+        if os.path.isdir(target):
+            shutil.rmtree(target, ignore_errors=True)
 
 
 def is_worker_running():
@@ -236,8 +281,12 @@ def process_single_task(task, api_key):
     # 初始化音频文件路径（用于后续清理）
     audio_file_path = None
     public_audio_url = None
+    archive_path = None
+    final_archive_path = None
+    archive_published = False
 
     try:
+        _raise_if_task_cancelled(task_id)
         # 步骤 1: 获取音频文件
         task_type = "rss" if task.get("type") == "rss" else get_task_type(source)
         print(f"[Worker] source={source}, task_type={task_type}, type={type(task_type)}")
@@ -260,7 +309,12 @@ def process_single_task(task, api_key):
             audio_file_path = source
             title = os.path.splitext(os.path.basename(source))[0]
         elif task_type == 'rss':
-            result = download_direct_audio(source, TEMP_DIR, title=task.get("name"))
+            result = download_direct_audio(
+                source,
+                TEMP_DIR,
+                title=task.get("name"),
+                cancellation_callback=lambda: _raise_if_task_cancelled(task_id),
+            )
             if not result["success"]:
                 return False, None, f"下载失败: {result.get('error', '未知错误')}"
             audio_file_path = result["file_path"]
@@ -277,6 +331,8 @@ def process_single_task(task, api_key):
         else:
             return False, None, f"不支持的任务类型: {task_type}"
 
+        _raise_if_task_cancelled(task_id)
+
         # 更新任务名称（从下载结果获取真实标题）
         task_queue.update_task_name(task_id, title)
         task_queue.update_progress_status(task_id, "音频获取成功")
@@ -291,8 +347,12 @@ def process_single_task(task, api_key):
             api_key,
             public_audio_url=public_audio_url,
             metrics=asr_metrics,
-            stage_callback=lambda status: task_queue.update_progress_status(task_id, status),
+            stage_callback=lambda status: (
+                _raise_if_task_cancelled(task_id),
+                task_queue.update_progress_status(task_id, status),
+            )[-1],
         )
+        _raise_if_task_cancelled(task_id)
         if asr_metrics:
             timing_text = ", ".join(
                 f"{name}={seconds:.1f}{'MB' if name.endswith('_mb') else 's'}" for name, seconds in asr_metrics.items()
@@ -306,7 +366,15 @@ def process_single_task(task, api_key):
         date_str = datetime.now().strftime("%Y%m%d_%H%M")
         safe_title = re.sub(r'[\\/*?:"<>|]', "", title).strip()[:50]
         archive_name = f"{safe_title}_{date_str}"
-        archive_path = os.path.join(ARCHIVE_DIR, archive_name)
+        final_archive_path = os.path.join(ARCHIVE_DIR, archive_name)
+        suffix = 2
+        while os.path.exists(final_archive_path):
+            final_archive_path = os.path.join(ARCHIVE_DIR, f"{archive_name}_{suffix}")
+            suffix += 1
+        archive_name = os.path.basename(final_archive_path)
+        archive_path = os.path.join(TEMP_DIR, "incomplete_archives", task_id)
+        if os.path.isdir(archive_path):
+            shutil.rmtree(archive_path, ignore_errors=True)
         os.makedirs(archive_path, exist_ok=True)
 
         # 保存音频副本（保留原始扩展名）
@@ -320,26 +388,33 @@ def process_single_task(task, api_key):
             audio_saved = True
             print(f"[Worker] 音频已保存到归档: {audio_dest}")
 
-        # 封面抓取（不阻塞主流程）
+        # 封面抓取（不阻塞主流程）。内容获取任务优先使用目录已经提供的封面，
+        # 其他任务继续从原始页面发现封面。
         cover_saved = False
         cover_filename = None
         cover_source_url = None
         cover_type = None
         if source_type != "local_file" and source.startswith("http"):
             try:
-                cover_url, cover_type = fetch_cover(source, source_type)
+                cover_url = (task.get("cover_url") or "").strip()
+                source_page_url = (task.get("source_page_url") or "").strip()
                 if cover_url:
-                    tmp_cover = os.path.join(archive_path, "cover.tmp")
-                    if download_cover_image(cover_url, tmp_cover):
-                        actual_ext = os.path.splitext(tmp_cover)[1]
-                        cover_filename = "cover" + actual_ext
-                        cover_dest = os.path.join(archive_path, cover_filename)
-                        os.rename(tmp_cover, cover_dest)
+                    cover_type = "episode"
+                else:
+                    cover_url, cover_type = fetch_cover(source_page_url or source, source_type)
+                if cover_url:
+                    cover_base = os.path.join(archive_path, "cover")
+                    if download_cover_image(cover_url, cover_base, referer=source_page_url):
+                        cover_files = [
+                            filename for filename in os.listdir(archive_path)
+                            if filename.startswith("cover.") and filename != "cover.tmp"
+                        ]
+                        cover_filename = cover_files[0] if cover_files else None
+                        if not cover_filename:
+                            raise RuntimeError("封面下载成功但未找到输出文件")
                         cover_saved = True
                         cover_source_url = cover_url
                         print(f"[Worker] 封面已保存: {cover_filename}")
-                    elif os.path.exists(tmp_cover):
-                        os.remove(tmp_cover)
             except Exception as e:
                 print(f"[Worker] 封面抓取失败（不阻塞）: {e}")
 
@@ -351,7 +426,14 @@ def process_single_task(task, api_key):
             "title": safe_title,
             "mode": mode,
             "source_type": source_type,
-            "source_url": source,
+            "source_url": task.get("source_page_url") or source,
+            "audio_source_url": source,
+            "feed_url": task.get("feed_url") or None,
+            "show_title": task.get("show_title") or None,
+            "discovery_provider": task.get("discovery_provider") or None,
+            "description": task.get("description") or "",
+            "published_at": task.get("published_at") or None,
+            "duration_seconds": task.get("duration_seconds") or None,
             "audio_saved": audio_saved,
             "audio_filename": audio_filename,
             "can_redownload": source.startswith("http") or source.startswith("www"),
@@ -363,6 +445,8 @@ def process_single_task(task, api_key):
         }
         with open(os.path.join(archive_path, "metadata.json"), "w", encoding="utf-8") as f:
             json.dump(metadata, f, ensure_ascii=False, indent=2)
+
+        _raise_if_task_cancelled(task_id)
 
         # 步骤 4: 清理音频文件（下载的临时文件此时被删除，归档已有副本）
         if os.path.exists(audio_file_path) and task_type != "local":
@@ -380,6 +464,8 @@ def process_single_task(task, api_key):
                 podcast_text,
                 transcript_segments,
                 title=safe_title,
+                source_description=task.get("description") or "",
+                cancellation_callback=lambda: _raise_if_task_cancelled(task_id),
                 progress_callback=lambda done, total: task_queue.update_progress_status(
                     task_id, f"正在生成时间轴节点（{done}/{total}）..."
                 ),
@@ -390,6 +476,8 @@ def process_single_task(task, api_key):
             raw_summary = get_podcast_summary_robust(api_key, podcast_text)
             lines = raw_summary.strip().split('\n')
             ai_title = lines[0] if lines else title
+
+        _raise_if_task_cancelled(task_id)
 
         task_queue.update_progress_status(task_id, "内容生成完成")
 
@@ -418,6 +506,10 @@ def process_single_task(task, api_key):
             node_count = len(timeline_data.get("nodes", []))
             with open(summary_path, "w", encoding="utf-8") as f:
                 f.write(f"# {ai_title}\n\n[时间轴模式] 共 {node_count} 个节点\n")
+            _raise_if_task_cancelled(task_id)
+            os.replace(archive_path, final_archive_path)
+            archive_path = final_archive_path
+            archive_published = True
             # 首屏最多为两张远程图片等待十秒；其余资料由独立、可恢复的后台任务补齐。
             node_ids = [node.get("id", "") for node in timeline_data.get("nodes", []) if node.get("id")]
             warmed_node_ids = []
@@ -439,7 +531,12 @@ def process_single_task(task, api_key):
             summary_path = os.path.join(archive_path, "summary.md")
             with open(summary_path, "w", encoding="utf-8") as f:
                 f.write(raw_summary)
+            _raise_if_task_cancelled(task_id)
+            os.replace(archive_path, final_archive_path)
+            archive_path = final_archive_path
+            archive_published = True
 
+        _raise_if_task_cancelled(task_id)
         task_queue.update_progress_status(task_id, "归档完成")
 
         print(f"[Worker] 任务完成: {title}")
@@ -448,6 +545,18 @@ def process_single_task(task, api_key):
         cleanup_temp_audio_file(audio_file_path)
 
         return True, archive_path, None
+
+    except TaskCancelled:
+        print(f"[Worker] 任务已取消，开始清理: {task_id}")
+        cleanup_temp_audio_file(audio_file_path)
+        _remove_task_partial_files(task_id, archive_path if not archive_published else None)
+        if archive_published and final_archive_path:
+            resolved_final = os.path.abspath(final_archive_path)
+            resolved_root = os.path.abspath(ARCHIVE_DIR)
+            if os.path.commonpath([resolved_final, resolved_root]) == resolved_root and os.path.isdir(resolved_final):
+                shutil.rmtree(resolved_final, ignore_errors=True)
+            task_queue.delete_enrichment_jobs(os.path.basename(resolved_final))
+        return False, None, "[已取消]"
 
     except Exception as e:
         error_msg = f"{str(e)}\n{traceback.format_exc()}"
@@ -471,6 +580,8 @@ def process_single_task(task, api_key):
 
         # 清理临时音频文件（即使失败也清理）
         cleanup_temp_audio_file(audio_file_path)
+        if archive_path and not archive_published:
+            _remove_task_partial_files(task_id, archive_path)
 
         return False, None, error_msg
 
@@ -502,6 +613,12 @@ def worker_loop():
     stop_file = os.path.join(TEMP_DIR, ".worker_stop_flag")
     if os.path.exists(stop_file):
         os.remove(stop_file)
+
+    # 已持久化的取消请求不能在进程重启后被恢复成待处理任务。
+    for cancelled_task in task_queue.get_cancellation_requested_tasks():
+        cancelled_id = cancelled_task["id"]
+        _remove_task_partial_files(cancelled_id)
+        task_queue.delete_task(cancelled_id)
 
     # 恢复之前卡在 PROCESSING 状态的任务到 PENDING
     reset_count = task_queue.reset_processing_to_pending()
@@ -547,6 +664,13 @@ def worker_loop():
             task = pending_tasks[0]
             task_id = task["id"]
 
+            # 消除“Worker 刚取出任务、用户同时点击取消”的竞态窗口。
+            if _is_task_cancelled(task_id):
+                _remove_task_partial_files(task_id)
+                task_queue.delete_task(task_id)
+                _clear_task_cancel_event(task_id)
+                continue
+
             # 清理 temp_audio 中的旧临时文件（只清理音频文件，不清理标志文件）
             try:
                 for f in os.listdir(TEMP_DIR):
@@ -564,16 +688,23 @@ def worker_loop():
             task_queue.mark_processing(task_id)
             print(f"[Worker] 开始处理任务 {task_id[:8]}...")
 
-            # 处理任务
-            success, result_path, error_msg = process_single_task(task, api_key)
-
-            # 更新任务状态
-            if success:
-                task_queue.mark_completed(task_id, result_path)
-                print(f"[Worker] 任务 {task_id[:8]} 完成")
-            else:
-                task_queue.mark_failed(task_id, error_msg)
-                print(f"[Worker] 任务 {task_id[:8]} 失败: {error_msg[:100]}")
+            # 处理任务；只有清理结束后，取消中的任务才从队列消失。
+            try:
+                success, result_path, error_msg = process_single_task(task, api_key)
+                if error_msg == "[已取消]" or _is_task_cancelled(task_id):
+                    _remove_task_partial_files(task_id, result_path if success else None)
+                    if result_path:
+                        task_queue.delete_enrichment_jobs(os.path.basename(result_path))
+                    task_queue.delete_task(task_id)
+                    print(f"[Worker] 任务 {task_id[:8]} 已取消并清理")
+                elif success:
+                    task_queue.mark_completed(task_id, result_path)
+                    print(f"[Worker] 任务 {task_id[:8]} 完成")
+                else:
+                    task_queue.mark_failed(task_id, error_msg)
+                    print(f"[Worker] 任务 {task_id[:8]} 失败: {error_msg[:100]}")
+            finally:
+                _clear_task_cancel_event(task_id)
 
             # 显存清理（DashScope 模式无需 GPU 显存管理）
             gc.collect()

@@ -10,14 +10,15 @@ import argparse
 import stat
 import platform
 import mimetypes
+import hashlib
 from datetime import datetime
 from backend.diagnostics import run_all_diagnostics
 from backend.transcriber import transcribe_with_dashscope_and_segments, get_available_devices
 from backend.llm_agent import get_podcast_summary_robust, search_in_podcast
-from backend.timeline_agent import generate_timeline_json, warmup_timeline_nodes
+from backend.timeline_agent import generate_timeline_json, sanitize_timeline_entities, warmup_timeline_nodes
 from backend.downloader import route_and_download, detect_platform, AudioDownloader
-from backend.task_queue import add_task, complete_node_enrichment_job, create_node_enrichment_jobs, get_archive_enrichment_status, get_task, get_all_tasks, get_queue_stats, prioritize_node_enrichment, update_task_status, delete_task, clear_completed
-from backend.worker import start_enrichment_worker, start_worker, is_worker_running, pause_worker, resume_worker, is_paused, stop_worker, retry_failed_tasks
+from backend.task_queue import add_task, complete_node_enrichment_job, create_node_enrichment_jobs, delete_podcast_subscription, get_archive_enrichment_status, get_task, get_all_tasks, get_queue_stats, list_podcast_subscriptions, prioritize_node_enrichment, save_podcast_subscription, update_task_status, delete_task, clear_completed
+from backend.worker import start_enrichment_worker, start_worker, is_worker_running, pause_worker, resume_worker, is_paused, stop_worker, retry_failed_tasks, request_task_cancellation
 from backend.rag_db import (
     create_tag, get_all_tags, delete_tag, set_archive_tags, get_archive_tags,
     create_chat_session, get_chat_sessions, get_chat_session, update_chat_session_title, delete_chat_session,
@@ -26,7 +27,7 @@ from backend.rag_db import (
 )
 from backend.rag_retriever import generate_chat_response
 from backend.fetch_cover import fetch_cover, download_cover_image
-from backend.podcast_discovery import is_safe_public_url, search_podcast_episodes
+from backend.podcast_discovery import fetch_apple_show, fetch_podcast_show, is_safe_public_url, recover_episode_metadata, search_podcast_episodes, search_podcast_shows
 from sse_starlette.sse import EventSourceResponse
 import asyncio
 
@@ -593,6 +594,100 @@ def get_archives():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/archives/{archive_id}/integrity")
+def repair_archive_integrity(archive_id: str):
+    """检查归档的封面、原始简介与时间轴，并尽量使用已保存来源补全。"""
+    archive_path = os.path.abspath(os.path.join(ARCHIVE_DIR, archive_id))
+    if os.path.commonpath((archive_path, os.path.abspath(ARCHIVE_DIR))) != os.path.abspath(ARCHIVE_DIR):
+        raise HTTPException(status_code=400, detail="无效的归档名")
+    if not os.path.isdir(archive_path):
+        raise HTTPException(status_code=404, detail="归档不存在")
+
+    metadata_path = os.path.join(archive_path, "metadata.json")
+    try:
+        with open(metadata_path, "r", encoding="utf-8") as file:
+            metadata = json.load(file)
+    except (FileNotFoundError, json.JSONDecodeError):
+        metadata = {"id": archive_id, "title": archive_id}
+
+    repaired: list[str] = []
+    errors: list[str] = []
+    rss_metadata = {}
+    feed_url = str(metadata.get("feed_url") or "")
+    if feed_url and (not metadata.get("description") or not metadata.get("cover_source_url")):
+        try:
+            rss_metadata = recover_episode_metadata(
+                feed_url,
+                str(metadata.get("audio_source_url") or ""),
+                str(metadata.get("title") or archive_id),
+            )
+        except Exception as exc:
+            errors.append(f"RSS 元数据恢复失败：{type(exc).__name__}")
+
+    if not str(metadata.get("description") or "").strip() and rss_metadata.get("description"):
+        metadata["description"] = rss_metadata["description"]
+        repaired.append("shownotes")
+
+    cover_files = [name for name in os.listdir(archive_path) if name.startswith("cover.") and name != "cover.tmp"]
+    if not cover_files:
+        cover_url = str(metadata.get("cover_source_url") or rss_metadata.get("cover_url") or "")
+        if not cover_url:
+            try:
+                cover_url, _ = fetch_cover(str(metadata.get("source_url") or ""), str(metadata.get("source_type") or "podcast_url"))
+            except Exception as exc:
+                errors.append(f"封面发现失败：{type(exc).__name__}")
+                cover_url = ""
+        if cover_url and is_safe_public_url(cover_url):
+            if download_cover_image(cover_url, os.path.join(archive_path, "cover"), referer=str(metadata.get("source_url") or "")):
+                cover_files = [name for name in os.listdir(archive_path) if name.startswith("cover.") and name != "cover.tmp"]
+                if cover_files:
+                    metadata.update({"cover_saved": True, "cover_filename": cover_files[0], "cover_source_url": cover_url})
+                    repaired.append("cover")
+
+    timeline_path = os.path.join(archive_path, "timeline.json")
+    timeline_ok = False
+    if os.path.isfile(timeline_path):
+        try:
+            with open(timeline_path, "r", encoding="utf-8") as file:
+                timeline_ok = bool(json.load(file).get("nodes"))
+        except (json.JSONDecodeError, AttributeError):
+            timeline_ok = False
+    if metadata.get("mode") == "timeline" and not timeline_ok:
+        raw_path = os.path.join(archive_path, "raw.txt")
+        segments_path = os.path.join(archive_path, "segments.json")
+        api_key = load_api_key()
+        if api_key and os.path.isfile(raw_path) and os.path.isfile(segments_path):
+            try:
+                with open(raw_path, "r", encoding="utf-8") as file:
+                    raw_text = file.read()
+                with open(segments_path, "r", encoding="utf-8") as file:
+                    segments = json.load(file)
+                timeline_data = generate_timeline_json(
+                    api_key, raw_text, segments, title=str(metadata.get("title") or archive_id),
+                    source_description=str(metadata.get("description") or ""),
+                )
+                with open(timeline_path, "w", encoding="utf-8") as file:
+                    json.dump(timeline_data, file, ensure_ascii=False, indent=2)
+                timeline_ok = bool(timeline_data.get("nodes"))
+                if timeline_ok:
+                    repaired.append("timeline")
+                    prepare_timeline_enrichment(archive_id, archive_path, timeline_data)
+            except Exception as exc:
+                errors.append(f"时间轴修复失败：{type(exc).__name__}")
+
+    with open(metadata_path, "w", encoding="utf-8") as file:
+        json.dump(metadata, file, ensure_ascii=False, indent=2)
+    checks = {
+        "cover": bool(cover_files),
+        "shownotes": bool(str(metadata.get("description") or "").strip()),
+        "timeline": timeline_ok if metadata.get("mode") == "timeline" else True,
+    }
+    return {
+        "status": "success", "complete": all(checks.values()), "checks": checks,
+        "repaired": repaired, "missing": [key for key, value in checks.items() if not value], "errors": errors,
+    }
+
+
 # 3.2 迁移归档为 timeline 模式
 @app.post("/api/archives/{archive_id}/migrate")
 def migrate_archive_to_timeline(archive_id: str):
@@ -626,15 +721,18 @@ def migrate_archive_to_timeline(archive_id: str):
         if not api_key:
             raise HTTPException(status_code=400, detail="请先配置 DashScope API Key")
 
-        # 生成 timeline
-        timeline_data = generate_timeline_json(api_key, podcast_text, transcript_segments, title=archive_id)
-
         # 读取原 metadata
         metadata_path = os.path.join(archive_path, "metadata.json")
         original_meta = {}
         if os.path.exists(metadata_path):
             with open(metadata_path, "r", encoding="utf-8") as f:
                 original_meta = json.load(f)
+
+        # 生成 timeline；旧归档若保存了 shownotes，也用于专有名词消歧。
+        timeline_data = generate_timeline_json(
+            api_key, podcast_text, transcript_segments, title=archive_id,
+            source_description=str(original_meta.get("description") or ""),
+        )
 
         # 新建 timeline 归档（在原名后加 _tl 后缀）
         tl_archive_name = f"{archive_id}_tl"
@@ -674,6 +772,12 @@ def migrate_archive_to_timeline(archive_id: str):
             "audio_filename": original_meta.get("audio_filename"),
             "can_redownload": original_meta.get("can_redownload", False),
             "created_at": datetime.now().isoformat(),
+            "description": original_meta.get("description", ""),
+            "published_at": original_meta.get("published_at"),
+            "duration_seconds": original_meta.get("duration_seconds"),
+            "feed_url": original_meta.get("feed_url"),
+            "show_title": original_meta.get("show_title"),
+            "cover_source_url": original_meta.get("cover_source_url"),
         }
         with open(os.path.join(tl_archive_path, "metadata.json"), "w", encoding="utf-8") as f:
             json.dump(tl_meta, f, ensure_ascii=False, indent=2)
@@ -1118,6 +1222,8 @@ def get_archive_detail(archive_id: str):
             import json
             with open(tl_path, "r", encoding="utf-8") as f:
                 timeline_data = json.load(f)
+            # 历史归档也应用当前的实体安全规则，避免旧的主持人/嘉宾误匹配继续展示。
+            sanitize_timeline_entities(timeline_data)
 
         # 解析封面 URL（容错：metadata 可能有误，以磁盘实际文件为准）
         cover_url = None
@@ -1507,18 +1613,112 @@ async def discover_podcasts(q: str, limit: int = 24):
     query = q.strip()
     if len(query) < 2:
         raise HTTPException(status_code=400, detail="请输入至少两个字符")
-    result = await asyncio.to_thread(search_podcast_episodes, query, min(max(limit, 1), 50))
-    return {"status": "success", **result}
+    episode_limit = min(max(limit, 1), 50)
+    episode_result, shows = await asyncio.gather(
+        asyncio.to_thread(search_podcast_episodes, query, episode_limit),
+        asyncio.to_thread(search_podcast_shows, query, 12),
+        return_exceptions=True,
+    )
+    if isinstance(episode_result, Exception):
+        raise HTTPException(status_code=502, detail="播客单集搜索暂时不可用")
+    if isinstance(shows, Exception):
+        shows = []
+    return {"status": "success", **episode_result, "shows": shows}
+
+
+@app.get("/api/discovery/show")
+async def get_discovered_show(feed_url: str, page_url: str = "", apple_id: str = "", page: int = 1, page_size: int = 30, q: str = ""):
+    """返回节目资料及 RSS 中的历史单集，支持分页和节目内标题搜索。"""
+    try:
+        show = await asyncio.to_thread(fetch_podcast_show, feed_url, page_url)
+    except Exception as rss_error:
+        if not apple_id.isdigit():
+            raise HTTPException(status_code=502, detail=f"RSS 暂时不可用：{type(rss_error).__name__}")
+        try:
+            show = await asyncio.to_thread(fetch_apple_show, apple_id, feed_url, page_url)
+            show["fallback_source"] = "apple"
+        except Exception as apple_error:
+            raise HTTPException(status_code=502, detail=f"RSS 与 Apple 目录均不可用：{type(apple_error).__name__}")
+    episodes = show.pop("episodes")
+    query = q.strip().casefold()
+    if query:
+        episodes = [episode for episode in episodes if query in episode["title"].casefold()]
+    page = max(page, 1)
+    page_size = min(max(page_size, 1), 50)
+    start = (page - 1) * page_size
+    show["episodes"] = episodes[start:start + page_size]
+    show["total_episodes"] = len(episodes)
+    show["has_more"] = start + page_size < len(episodes)
+    return {"status": "success", "show": show}
+
+
+@app.get("/api/discovery/subscriptions")
+def get_discovery_subscriptions():
+    return {"status": "success", "subscriptions": list_podcast_subscriptions()}
+
+
+@app.post("/api/discovery/subscriptions")
+def subscribe_to_podcast(request: dict):
+    feed_url = str(request.get("feed_url") or "").strip()
+    title = str(request.get("title") or "").strip()
+    if not title or not is_safe_public_url(feed_url):
+        raise HTTPException(status_code=400, detail="节目资料不完整")
+    subscription = {
+        "id": str(request.get("id") or hashlib.sha1(feed_url.encode()).hexdigest()),
+        "title": title,
+        "author": str(request.get("author") or ""),
+        "description": str(request.get("description") or ""),
+        "feed_url": feed_url,
+        "page_url": str(request.get("page_url") or ""),
+        "cover_url": str(request.get("cover_url") or ""),
+        "provider": str(request.get("provider") or "rss"),
+    }
+    save_podcast_subscription(subscription)
+    return {"status": "success", "subscription": subscription}
+
+
+@app.delete("/api/discovery/subscriptions/{subscription_id}")
+def unsubscribe_from_podcast(subscription_id: str):
+    delete_podcast_subscription(subscription_id)
+    return {"status": "success"}
+
+
+@app.get("/api/discovery/home")
+async def get_discovery_home(limit: int = 30):
+    subscriptions = list_podcast_subscriptions()
+    if not subscriptions:
+        return {"status": "success", "subscriptions": [], "episodes": [], "errors": []}
+    results = await asyncio.gather(*[
+        asyncio.to_thread(fetch_podcast_show, item["feed_url"], item.get("page_url") or "")
+        for item in subscriptions
+    ], return_exceptions=True)
+    episodes = []
+    errors = []
+    for subscription, result in zip(subscriptions, results):
+        if isinstance(result, Exception):
+            errors.append({"id": subscription["id"], "message": type(result).__name__})
+            continue
+        episodes.extend(result.get("episodes", [])[:6])
+    episodes.sort(key=lambda episode: episode.get("published_at", ""), reverse=True)
+    return {"status": "success", "subscriptions": subscriptions, "episodes": episodes[:min(max(limit, 1), 60)], "errors": errors}
 
 
 @app.post("/api/discovery/enqueue")
 async def enqueue_discovered_episode(request: dict):
     """将内容发现结果使用公开音频直链送入现有任务队列。"""
     audio_url = str(request.get("audio_url") or "").strip()
+    cover_url = str(request.get("cover_url") or "").strip()
+    source_page_url = str(request.get("page_url") or "").strip()
+    feed_url = str(request.get("feed_url") or "").strip()
     title = str(request.get("title") or "").strip()
+    description = str(request.get("description") or "").strip()
+    published_at = str(request.get("published_at") or "").strip()
     mode = str(request.get("mode") or "timeline")
     if not is_safe_public_url(audio_url):
         raise HTTPException(status_code=400, detail="无效的音频地址")
+    cover_url = cover_url if cover_url and is_safe_public_url(cover_url) else None
+    source_page_url = source_page_url if source_page_url and is_safe_public_url(source_page_url) else None
+    feed_url = feed_url if feed_url and is_safe_public_url(feed_url) else None
     if mode not in ("summary", "timeline"):
         raise HTTPException(status_code=400, detail="无效的处理模式")
     if not is_worker_running():
@@ -1530,6 +1730,14 @@ async def enqueue_discovered_episode(request: dict):
         max_timeline_items=int(request.get("max_timeline_items") or 15),
         name=title or None,
         mode=mode,
+        cover_url=cover_url,
+        source_page_url=source_page_url,
+        feed_url=feed_url,
+        show_title=str(request.get("show_title") or "").strip() or None,
+        discovery_provider=str(request.get("provider") or "").strip() or None,
+        description=description or None,
+        published_at=published_at or None,
+        duration_seconds=max(0, int(request.get("duration_seconds") or 0)) or None,
     )
     return {"status": "success", "task_id": task_id, "message": "已加入任务队列"}
 
@@ -1546,6 +1754,7 @@ def get_tasks_stats():
             "data": {
                 "pending": stats.get("PENDING", 0),
                 "processing": stats.get("PROCESSING", 0),
+                "cancelling": stats.get("CANCEL_REQUESTED", 0),
                 "completed": stats.get("COMPLETED", 0),
                 "failed": stats.get("FAILED", 0),
                 "worker_running": worker_running,
@@ -1626,13 +1835,25 @@ async def create_task(
 # 12. 删除任务
 @app.delete("/api/tasks/{task_id}")
 def remove_task(task_id: str):
-    """删除指定任务"""
+    """取消活动任务，或删除已经终止的任务记录。"""
     try:
         task = get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="任务不存在")
+        task_status = task.get("status")
+        if task_status in {"PENDING", "PROCESSING", "CANCEL_REQUESTED"}:
+            request_task_cancellation(task_id)
+            if task_status == "PENDING":
+                # 事件仍保留在 Worker 内，可覆盖“刚被取走但尚未标记”的竞态。
+                delete_task(task_id)
+                return {"status": "success", "action": "deleted", "message": "等待任务已取消"}
+            return {
+                "status": "success",
+                "action": "cancelling",
+                "message": "正在停止任务并清理临时文件",
+            }
         delete_task(task_id)
-        return {"status": "success", "message": "任务已删除"}
+        return {"status": "success", "action": "deleted", "message": "任务记录已删除，归档文件未受影响"}
     except HTTPException:
         raise
     except Exception as e:
@@ -1670,10 +1891,10 @@ def retry_tasks():
 # 15. 暂停/恢复 Worker
 @app.post("/api/tasks/pause")
 def pause_queue():
-    """暂停任务队列处理"""
+    """暂停领取下一项；当前运行任务继续执行。"""
     try:
         pause_worker()
-        return {"status": "success", "message": "队列已暂停"}
+        return {"status": "success", "message": "已暂停领取新任务，当前任务会继续执行"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
